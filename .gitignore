@@ -1,0 +1,13 @@
+/.dart_tool/
+/build/
+/pubspec.lock
+/.idea/
+.vscode/
+**/GeneratedPluginRegistrant.*
+/.flutter-plugins-dependencies
+
+# macOS
+*.DS_Store
+
+# Node
+node_modules/
