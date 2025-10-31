@@ -1,6 +1,20 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'models/event.dart';
+import 'services/local_storage_service.dart';
+import 'services/firebase_service.dart';
+import 'package:firebase_core/firebase_core.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Try to initialize Firebase if web config is present - if not, continue without failing.
+  try {
+    await Firebase.initializeApp();
+  } catch (e) {
+    // Firebase not configured yet - continue in local-only mode.
+    debugPrint('Firebase init skipped or failed: $e');
+  }
+
   runApp(const HarmonyAdminApp());
 }
 
@@ -12,7 +26,7 @@ class HarmonyAdminApp extends StatelessWidget {
     return MaterialApp(
       title: 'Harmony Admin',
       theme: ThemeData(
-        primarySwatch: Colors.blue,
+        primarySwatch: Colors.indigo,
         scaffoldBackgroundColor: const Color(0xFFF5F7FA),
       ),
       home: const AdminHomePage(),
@@ -28,9 +42,38 @@ class AdminHomePage extends StatefulWidget {
   State<AdminHomePage> createState() => _AdminHomePageState();
 }
 
-class _AdminHomePageState extends State<AdminHomePage> {
-  String selectedEvent = 'Sample Event';
-  String intentText = 'Enter intent description here...';
+class _AdminHomePageState extends State<AdminHomePage> with SingleTickerProviderStateMixin {
+  late TabController _tabController;
+  List<Event> events = [];
+  final LocalStorageService _local = LocalStorageService();
+  final FirebaseService _firebase = FirebaseService();
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 7, vsync: this);
+    _loadEvents();
+  }
+
+  Future<void> _loadEvents() async {
+    final saved = await _local.loadEvents();
+    setState(() {
+      events = saved;
+    });
+  }
+
+  Future<void> _saveEvent(Event e, {bool publish = false}) async {
+    setState(() => events.insert(0, e));
+    await _local.saveEvents(events);
+    if (publish) {
+      try {
+        await _firebase.publishEvent(e);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Published to Firestore (if configured)')));
+      } catch (err) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Publish failed (no Firebase configured)')));
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -38,130 +81,212 @@ class _AdminHomePageState extends State<AdminHomePage> {
       appBar: AppBar(
         title: const Text('Harmony by Intent — Admin'),
         centerTitle: true,
+        bottom: TabBar(
+          controller: _tabController,
+          isScrollable: true,
+          tabs: const [
+            Tab(text: 'Dashboard'),
+            Tab(text: 'Event Creator'),
+            Tab(text: 'Content Editor'),
+            Tab(text: 'Media Library'),
+            Tab(text: 'Preview'),
+            Tab(text: 'Scheduler'),
+            Tab(text: 'Users'),
+          ],
+        ),
       ),
-      body: Row(
+      body: TabBarView(
+        controller: _tabController,
         children: [
-          // Left panel: Event list / upload
-          Flexible(
-            flex: 2,
-            child: Container(
-              color: Colors.white,
-              child: Column(
-                children: [
-                  const Padding(
-                    padding: EdgeInsets.all(12.0),
-                    child: Text('Events', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                  ),
-                  Expanded(
-                    child: ListView(
-                      children: [
-                        ListTile(
-                          title: const Text('Sample Event'),
-                          subtitle: const Text('Saved reusable event'),
-                          selected: selectedEvent == 'Sample Event',
-                          onTap: () => setState(() => selectedEvent = 'Sample Event'),
-                        ),
-                        ListTile(
-                          title: const Text('Event 2'),
-                          subtitle: const Text('Another saved event'),
-                          selected: selectedEvent == 'Event 2',
-                          onTap: () => setState(() => selectedEvent = 'Event 2'),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.all(12.0),
-                    child: ElevatedButton.icon(
-                      icon: const Icon(Icons.upload_file),
-                      label: const Text('Upload Event (placeholder)'),
-                      onPressed: () {
-                        // Placeholder - user will implement upload
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Upload placeholder')));
-                      },
-                    ),
-                  )
-                ],
-              ),
-            ),
-          ),
-
-          // Center panel: Content editor
-          Flexible(
-            flex: 4,
-            child: Container(
-              color: const Color(0xFFF8FAFC),
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Content Editor', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 8),
-                  TextField(
-                    maxLines: 6,
-                    decoration: const InputDecoration(border: OutlineInputBorder(), hintText: 'Intent description...'),
-                    controller: TextEditingController(text: intentText),
-                    onChanged: (v) => setState(() => intentText = v),
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      ElevatedButton(
-                        onPressed: () {
-                          // Placeholder save
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Save placeholder')));
-                        },
-                        child: const Text('Save Event Card'),
-                      ),
-                      const SizedBox(width: 12),
-                      OutlinedButton(
-                        onPressed: () => setState(() => intentText = 'Enter intent description here...'),
-                        child: const Text('Reset'),
-                      )
-                    ],
-                  )
-                ],
-              ),
-            ),
-          ),
-
-          // Right panel: Integrated preview
-          Flexible(
-            flex: 3,
-            child: Container(
-              color: Colors.white,
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const Text('Integrated Preview', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 12),
-                  Card(
-                    elevation: 2,
-                    child: Padding(
-                      padding: const EdgeInsets.all(12.0),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(selectedEvent, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                          const SizedBox(height: 8),
-                          Text(intentText, style: const TextStyle(fontSize: 14)),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Expanded(
-                    child: Container(
-                      decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade300)),
-                      child: const Center(child: Text('Preview of the three-card layout would render here')),
-                    ),
-                  )
-                ],
-              ),
-            ),
-          ),
+          _buildDashboard(),
+          EventCreatorPanel(onSave: _saveEvent, initialEvents: events),
+          const Center(child: Text('Content Editor - coming soon')),
+          const Center(child: Text('Media Library - coming soon')),
+          _buildPreview(),
+          const Center(child: Text('Scheduler - coming soon')),
+          const Center(child: Text('Users - coming soon')),
         ],
+      ),
+    );
+  }
+
+  Widget _buildDashboard() {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Dashboard', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 12),
+          Text('Events saved locally: ${events.length}'),
+          const SizedBox(height: 12),
+          Expanded(
+            child: ListView.builder(
+              itemCount: events.length,
+              itemBuilder: (context, i) {
+                final e = events[i];
+                return ListTile(
+                  title: Text(e.title),
+                  subtitle: Text(e.intent ?? ''),
+                  trailing: Text(e.startTimeUTC ?? ''),
+                );
+              },
+            ),
+          )
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPreview() {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Integrated Preview', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 12),
+          Expanded(
+            child: events.isEmpty
+                ? const Center(child: Text('No events saved yet'))
+                : ListView.builder(
+                    itemCount: events.length,
+                    itemBuilder: (context, i) {
+                      final e = events[i];
+                      return Card(
+                        margin: const EdgeInsets.only(bottom: 12.0),
+                        child: Padding(
+                          padding: const EdgeInsets.all(12.0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(e.title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                              const SizedBox(height: 8),
+                              Text(e.intent ?? ''),
+                              const SizedBox(height: 8),
+                              Text('Start (UTC): ${e.startTimeUTC ?? 'not set'}'),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          )
+        ],
+      ),
+    );
+  }
+}
+
+class EventCreatorPanel extends StatefulWidget {
+  final Function(Event e, {bool publish}) onSave;
+  final List<Event> initialEvents;
+
+  const EventCreatorPanel({required this.onSave, required this.initialEvents, super.key});
+
+  @override
+  State<EventCreatorPanel> createState() => _EventCreatorPanelState();
+}
+
+class _EventCreatorPanelState extends State<EventCreatorPanel> {
+  final _title = TextEditingController();
+  final _intent = TextEditingController();
+  DateTime? _referenceLocal;
+  String _timezone = 'UTC';
+  String? _startUTCPreview;
+  bool _publish = false;
+
+  void _computeStartUTC() {
+    if (_referenceLocal == null) return;
+    // For now, treat referenceLocal as already in UTC or convert via timezone placeholder.
+    final utc = _referenceLocal!.toUtc();
+    setState(() {
+      _startUTCPreview = utc.toIso8601String();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Event Creator', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            TextField(controller: _title, decoration: const InputDecoration(labelText: 'Title')),
+            const SizedBox(height: 8),
+            TextField(controller: _intent, maxLines: 4, decoration: const InputDecoration(labelText: 'Intent Description')),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.access_time),
+                  label: const Text('Pick Reference Time'),
+                  onPressed: () async {
+                    final now = DateTime.now();
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: now,
+                      firstDate: DateTime(now.year - 1),
+                      lastDate: DateTime(now.year + 5),
+                    );
+                    if (picked != null) {
+                      final time = await showTimePicker(context: context, initialTime: TimeOfDay.now());
+                      if (time != null) {
+                        setState(() {
+                          _referenceLocal = DateTime(picked.year, picked.month, picked.day, time.hour, time.minute);
+                        });
+                        _computeStartUTC();
+                      }
+                    }
+                  },
+                ),
+                const SizedBox(width: 12),
+                Text(_referenceLocal == null ? 'No time chosen' : _referenceLocal!.toLocal().toString()),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(children: [
+              const Text('Timezone:'),
+              const SizedBox(width: 8),
+              DropdownButton<String>(
+                value: _timezone,
+                items: const [
+                  DropdownMenuItem(value: 'UTC', child: Text('UTC')),
+                  DropdownMenuItem(value: 'Local', child: Text('Local')),
+                ],
+                onChanged: (v) => setState(() => _timezone = v ?? 'UTC'),
+              )
+            ]),
+            const SizedBox(height: 8),
+            Row(children: [
+              Checkbox(value: _publish, onChanged: (v) => setState(() => _publish = v ?? false)),
+              const Text('Publish to Firestore (if configured)')
+            ]),
+            const SizedBox(height: 8),
+            Text('StartTimeUTC Preview: ${_startUTCPreview ?? 'N/A'}'),
+            const SizedBox(height: 12),
+            Row(children: [
+              ElevatedButton(
+                onPressed: () {
+                  final e = Event(
+                    id: DateTime.now().millisecondsSinceEpoch.toString(),
+                    title: _title.text,
+                    intent: _intent.text,
+                    startTimeUTC: _startUTCPreview,
+                  );
+                  widget.onSave(e, publish: _publish);
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Event saved locally')));
+                },
+                child: const Text('Save Event'),
+              ),
+              const SizedBox(width: 12),
+              OutlinedButton(onPressed: () => setState(() { _title.clear(); _intent.clear(); _referenceLocal = null; _startUTCPreview = null; _publish = false;}), child: const Text('Reset'))
+            ])
+          ],
+        ),
       ),
     );
   }
