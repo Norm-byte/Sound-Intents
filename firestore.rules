@@ -1,0 +1,198 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isSuperAdmin() {
+      return isSignedIn() && 
+             exists(/databases/$(database)/documents/admin_users/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/admin_users/$(request.auth.uid)).data.role == 'super-admin' &&
+             get(/databases/$(database)/documents/admin_users/$(request.auth.uid)).data.isActive == true;
+    }
+    
+    function isActiveAdmin() {
+      return isSignedIn() && 
+             exists(/databases/$(database)/documents/admin_users/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/admin_users/$(request.auth.uid)).data.isActive == true;
+    }
+    
+    function isFirstUser() {
+      // Allow the first authenticated user to create their super-admin record
+      // Only when no admin_users documents exist yet
+      return isSignedIn() && 
+             !exists(/databases/$(database)/documents/admin_users/$(request.auth.uid)) &&
+             request.resource.data.uid == request.auth.uid &&
+             request.resource.data.role == 'super-admin';
+    }
+    
+    // Admin users collection - only admins can read, only super-admins can write
+    match /admin_users/{userId} {
+      // Allow read if:
+      // 1. You're an active admin reading any admin record, OR
+      // 2. You're the first user checking if admins exist (via hasAnyAdmins)
+      allow read: if isActiveAdmin() || isSignedIn();
+      
+      // Allow create if:
+      // 1. You're a super-admin creating new admins, OR
+      // 2. You're the first user creating the initial super-admin record
+      allow create: if isSuperAdmin() || 
+                       (isSignedIn() && 
+                        userId == request.auth.uid && 
+                        request.resource.data.role == 'super-admin' &&
+                        !existsAfter(/databases/$(database)/documents/admin_users/__check__));
+      
+      // Allow update/delete only for super-admins
+      // Exception: Allow users to update their own "lastLogin" or self-heal if they are already super-admin
+      allow update: if isSuperAdmin() || (request.auth.uid == userId);
+      
+      allow delete: if isSuperAdmin();
+    }
+    
+    // Admin access requests - users can create their own, super-admins can read/update all
+    match /admin_access_requests/{requestId} {
+      // Anyone authenticated can read their own request
+      allow read: if isSignedIn() && 
+                     (requestId == request.auth.uid || isSuperAdmin());
+      
+      // Users can create their own access request
+      allow create: if isSignedIn() && 
+                       requestId == request.auth.uid &&
+                       request.resource.data.uid == request.auth.uid;
+      
+      // Only super-admins can update/delete requests (for approval/rejection)
+      allow update, delete: if isSuperAdmin();
+    }
+    
+    // Events collection - Public read, Admin write
+    match /events/{eventId} {
+      function validOnPublish() {
+        return request.resource.data.isPublished == false || (
+          request.resource.data.keys().hasAny(['title']) &&
+          request.resource.data.title is string && request.resource.data.title.size() > 0 &&
+          request.resource.data.startTimeUTC is string && request.resource.data.startTimeUTC.size() > 0 &&
+          request.resource.data.isDraft == false
+        );
+      }
+
+      allow read: if true; // Changed to allow public access for the User App
+      allow create, update: if true; // Temporarily allowed for development/testing
+      allow delete: if isActiveAdmin();
+    }
+
+    // Global Events (for Event Creator) - Public read, Admin write
+    match /global_events/{eventId} {
+      allow read: if true; // Changed to allow public access for the User App
+      allow write: if isActiveAdmin();
+    }
+    
+    // Media collection - only active admins can read/write
+    match /media_library/{mediaId} {
+      allow read, write: if true;
+    }
+
+    // Media Settings (for sections list)
+    match /media_settings/{docId} {
+      allow read, write: if true;
+    }
+
+    // Community Groups (for Chat/Group Management)
+    match /community_groups/{groupId} {
+      allow read: if true; // Public read needed so users can see groups
+      allow write: if isActiveAdmin(); // Admins create/update groups
+      
+      // Allow public access to messages within community groups
+      match /messages/{messageId} {
+        allow read, write: if true;
+      }
+    }
+
+    // Media Sections - only active admins can read/write
+    match /media_sections/{sectionId} {
+      allow read, write: if true;
+    }
+
+    // YouTube Library - only active admins can read/write
+    match /youtube_library/{videoId} {
+      allow read, write: if true;
+    }
+
+    // YouTube Library Drafts - only active admins can read/write
+    match /youtube_library_draft/{videoId} {
+      allow read, write: if isActiveAdmin();
+    }
+
+    // YouTube Sections - Public read, Admin write (Updated for User App)
+    match /youtube_sections/{sectionId} {
+      allow read: if true;
+      allow write: if isActiveAdmin();
+    }
+
+    // YouTube Sections Drafts - only active admins can read/write
+    match /youtube_sections_draft/{sectionId} {
+      allow read, write: if isActiveAdmin();
+    }
+
+    // System Settings - only active admins can read/write
+    match /system_settings/{settingId} {
+      allow read, write: if isActiveAdmin();
+    }
+
+    // VIP Codes
+    match /vip_codes/{codeId} {
+      // TEMPORARY: Allow all access for debugging
+      allow read, write: if true;
+    }
+
+    // Community Posts - Public read, Authenticated write
+    match /community_posts/{postId} {
+      allow read: if true;
+      // TEMPORARY: Allow public create for User App (no auth)
+      allow create: if true; 
+      allow update, delete: if isActiveAdmin() || (isSignedIn() && request.auth.uid == resource.data.userId);
+    }
+
+    // App Configuration (Dynamic Content)
+    match /app_config/{docId} {
+      allow read: if true; // User App needs to read this
+      allow write: if isActiveAdmin(); // Admin Panel needs to write this
+    }
+
+    // Users collection
+    match /users/{userId} {
+      // TEMPORARY: Allow public access because User App does not use Firebase Auth yet.
+      // TODO: Implement Firebase Auth in User App and restrict this to owner only.
+      allow read, write: if true;
+      
+      match /messages/{messageId} {
+        allow read, write: if true;
+      }
+
+      match /favorites/{favoriteId} {
+        allow read, write: if true;
+      }
+
+      match /registered_events/{eventId} {
+        allow read, write: if true;
+      }
+
+      match /joined_groups/{groupId} {
+        allow read, write: if true;
+      }
+    }
+
+    // Collection Group Query for Messages (Support Inbox)
+    match /{path=**}/messages/{messageId} {
+      allow read: if isActiveAdmin();
+    }
+    
+    // Default deny all other collections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

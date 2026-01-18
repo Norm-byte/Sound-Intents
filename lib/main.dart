@@ -1,18 +1,52 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'models/event.dart';
-import 'services/local_storage_service.dart';
-import 'services/firebase_service.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:async';
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'firebase_options.dart';
+import 'models/event.dart';
+import 'repositories/event_repository.dart';
+// import 'repositories/local_event_repository.dart';
+import 'repositories/firestore_event_repository.dart'; // Using Firestore for real-time
+import 'services/admin_user_service.dart';
+import 'models/admin_user.dart';
+import 'ui/auth/login_screen.dart';
+import 'ui/auth/setup_super_admin_screen.dart';
+import 'ui/auth/access_restricted_screen.dart';
+import 'ui/tabs/dashboard_tab.dart';
+import 'ui/tabs/event_creator_tab.dart';
+import 'ui/tabs/event_scheduler_tab.dart';
+import 'ui/tabs/media_library_tab.dart';
+import 'ui/tabs/youtube_library_tab.dart';
+import 'ui/tabs/system_tab.dart';
+import 'ui/tabs/legal_tab.dart';
+import 'ui/tabs/chat_management_tab.dart';
+import 'ui/tabs/monetization_tab.dart';
+import 'ui/tabs/documentation_tab.dart';
+import 'ui/notifications_screen.dart';
+import 'ui/widgets/locked_tab_wrapper.dart';
+import 'widgets/app_footer.dart';
+import 'build_info.dart';
 
 Future<void> main() async {
+  print("HARMONY_ADMIN_DEBUG: Starting App...");
   WidgetsFlutterBinding.ensureInitialized();
-  // Try to initialize Firebase if web config is present - if not, continue without failing.
+  // Initialize Firebase with the generated options
   try {
-    await Firebase.initializeApp();
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+    
+    // Fix for Web Timeouts: Explicitly disable persistence to avoid cache sync issues
+    FirebaseFirestore.instance.settings = const Settings(
+      persistenceEnabled: false,
+      sslEnabled: true,
+    );
   } catch (e) {
-    // Firebase not configured yet - continue in local-only mode.
-    debugPrint('Firebase init skipped or failed: $e');
+    // Firebase init failed - continue in local-only mode.
+    debugPrint('Firebase init failed: $e');
   }
 
   runApp(const HarmonyAdminApp());
@@ -24,270 +58,722 @@ class HarmonyAdminApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Harmony Admin',
+      title: 'Harmony Admin FIXED',
       theme: ThemeData(
+        useMaterial3: true,
         primarySwatch: Colors.indigo,
         scaffoldBackgroundColor: const Color(0xFFF5F7FA),
       ),
-      home: const AdminHomePage(),
+      home: StreamBuilder<User?>(
+        stream: FirebaseAuth.instance.authStateChanges(),
+        builder: (context, snapshot) {
+          // Show loading while checking auth state
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
+            );
+          }
+
+          // Show login if not authenticated
+          if (!snapshot.hasData || snapshot.data == null) {
+            return const LoginScreen();
+          }
+
+          // If authenticated, gate access by admin status in Firestore
+          return _AdminAccessWrapper(user: snapshot.data!);
+        },
+      ),
       debugShowCheckedModeBanner: false,
     );
   }
 }
 
+class _AdminAccessWrapper extends StatelessWidget {
+  final User user;
+  const _AdminAccessWrapper({required this.user});
+
+  @override
+  Widget build(BuildContext context) {
+    final service = AdminUserService();
+    final adminDocStream = FirebaseFirestore.instance
+        .collection('admin_users')
+        .doc(user.uid)
+        .snapshots()
+        .distinct((prev, next) {
+          // Prevent rebuild loop caused by heartbeat (lastActive updates)
+          if (prev.exists != next.exists) return false;
+          if (!prev.exists) return true; // Both don't exist, no change
+          
+          final d1 = prev.data();
+          final d2 = next.data();
+          
+          if (d1 == null && d2 == null) return true;
+          if (d1 == null || d2 == null) return false;
+
+          // Check critical fields that affect access/permissions
+          if (d1['role'] != d2['role']) return false;
+          if (d1['isActive'] != d2['isActive']) return false;
+          
+          // Check permissions list equality
+          final p1 = d1['permissions'];
+          final p2 = d2['permissions'];
+          
+          // Simple list comparison (assuming List<String> or null)
+          if (p1 == null && p2 == null) return true;
+          if (p1 == null || p2 == null) return false;
+          
+          if (p1 is List && p2 is List) {
+            if (p1.length != p2.length) return false;
+            for (int i = 0; i < p1.length; i++) {
+              if (p1[i] != p2[i]) return false;
+            }
+            return true;
+          }
+          
+          return false; // Different types or something else changed
+        });
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: adminDocStream,
+      builder: (context, adminSnap) {
+        if (adminSnap.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+              body: Center(child: CircularProgressIndicator()));
+        }
+
+        final exists = adminSnap.data?.exists == true;
+        if (exists) {
+          final data = adminSnap.data!.data();
+          if (data == null) {
+            return const AccessRestrictedScreen(
+                reason: 'Invalid admin profile.');
+          }
+          
+          AdminUser admin;
+          try {
+            admin = AdminUser.fromJson(data);
+          } catch (e) {
+            debugPrint('Error parsing admin user: $e');
+            // If parsing fails, show restricted screen so they can use "Fix My Account" to repair the data
+            return const AccessRestrictedScreen(
+              reason: 'Profile data corrupted. Please click "Fix My Account" to repair.',
+            );
+          }
+
+          if (!admin.isActive) {
+            return const AccessRestrictedScreen(
+              reason:
+                  'Your admin account is suspended. Please contact a super-admin.',
+            );
+          }
+          // Optionally update lastLogin (fire and forget) - MOVED to AdminHomePage to prevent build loop
+          // service.updateLastLoginNow();
+          return AdminHomePage(adminUser: admin);
+        } else {
+          // No admin record for this user. Check if any admins exist.
+          return FutureBuilder<bool>(
+            future: service.hasAnyAdmins(),
+            builder: (context, hasAny) {
+              if (hasAny.connectionState == ConnectionState.waiting) {
+                return const Scaffold(
+                    body: Center(child: CircularProgressIndicator()));
+              }
+              if (hasAny.data == true) {
+                return const AccessRestrictedScreen(
+                  reason: 'Your account is not authorized for admin access.',
+                );
+              } else {
+                // First-time setup: let this user become super-admin
+                return const SetupSuperAdminScreen();
+              }
+            },
+          );
+        }
+      },
+    );
+  }
+}
+
 class AdminHomePage extends StatefulWidget {
-  const AdminHomePage({super.key});
+  final AdminUser adminUser;
+  const AdminHomePage({super.key, required this.adminUser});
 
   @override
   State<AdminHomePage> createState() => _AdminHomePageState();
 }
 
-class _AdminHomePageState extends State<AdminHomePage> with SingleTickerProviderStateMixin {
+class _AdminHomePageState extends State<AdminHomePage>
+    with SingleTickerProviderStateMixin {
   late TabController _tabController;
   List<Event> events = [];
-  final LocalStorageService _local = LocalStorageService();
-  final FirebaseService _firebase = FirebaseService();
+  late EventRepository _repository;
+  Stream<List<Event>>? _eventsStream;
+  StreamSubscription<List<Event>>? _eventsSub;
+  StreamSubscription<List<Event>>? _globalEventsSub;
+  Timer? _heartbeatTimer;
+  
+  List<Event> _scheduledEvents = [];
+  List<Event> _globalEvents = [];
 
-  @override
-  void initState() {
-    super.initState();
-    _tabController = TabController(length: 7, vsync: this);
-    _loadEvents();
+  // Use ValueNotifier for robust communication with the Scheduler Tab
+  final ValueNotifier<String?> _schedulerSelectionNotifier = ValueNotifier(null);
+  
+  Event? _eventToEdit;
+
+  late List<Widget> _tabs;
+
+  void _calculateTabs() {
+    _tabs = const [
+      Tab(icon: Icon(Icons.dashboard), text: 'Dashboard'),
+      Tab(icon: Icon(Icons.public), text: 'Worldwide Events'), // Renamed
+      Tab(icon: Icon(Icons.schedule), text: 'National Events'), // Renamed
+      Tab(icon: Icon(Icons.perm_media), text: 'Media Library'),
+      Tab(icon: Icon(Icons.chat), text: 'Chat Rooms'),
+      Tab(icon: Icon(Icons.monetization_on), text: 'Deals/Offers'),
+      Tab(icon: Icon(Icons.lightbulb), text: 'Topics'),
+      Tab(icon: Icon(Icons.settings), text: 'System'),
+      Tab(icon: Icon(Icons.notifications_active), text: 'Notifications'),
+      Tab(icon: Icon(Icons.gavel), text: 'Legal'),
+      Tab(icon: Icon(Icons.library_books), text: 'Docs'),
+    ];
   }
 
-  Future<void> _loadEvents() async {
-    final saved = await _local.loadEvents();
+  bool _hasAccess(String key) {
+    // Documentation is always accessible
+    if (key == 'documentation') return true;
+
+    final permissions = widget.adminUser.permissions;
+    final isSuperAdmin = widget.adminUser.isSuperAdmin;
+    
+    if (isSuperAdmin) return true;
+    if (permissions == null || permissions.isEmpty) return false; // Default to locked if no permissions explicitly granted
+    return permissions.contains(key);
+  }
+
+  List<Widget> _buildTabViews() {
+    // Helper to wrap locked tabs
+    Widget buildTab(String permKey, String title, Widget child) {
+      if (_hasAccess(permKey)) return child;
+      return LockedTabWrapper(title: title, child: child);
+    }
+
+    return [
+      // 1. Dashboard
+      buildTab('dashboard', 'Dashboard', DashboardTab(
+          events: events,
+          onCreateEvent: () {
+            // Animate to Worldwide Events (Index 1)
+            if (_hasAccess('event_creator')) {
+               _tabController.animateTo(1);
+            } else {
+               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Access Denied')));
+            }
+          },
+          onViewSchedule: (date, time) {
+            // Animate to National Events (Index 2)
+            if (_hasAccess('event_scheduler')) {
+              _tabController.animateTo(2);
+              if (time != null) {
+                final slotId = '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+                _schedulerSelectionNotifier.value = slotId;
+              }
+            } else {
+               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Access Denied')));
+            }
+          },
+          onEditEvent: _handleEditEvent,
+          onDeleteEvent: _handleDeleteEvent,
+          onImportEvents: _importEvents,
+          onPublishWeek: _handlePublishWeek,
+          onClearWeek: (offset, minute) => _handleClearWeek(offset, minuteFilter: minute), // Updated Clear Callback
+          onPublishEvent: _handlePublishEvent,
+        ),
+      ),
+      
+      // 2. Event Creator -> Worldwide Events
+      buildTab('event_creator', 'Worldwide Events', EventCreatorTab(
+          eventToEdit: _eventToEdit,
+          onEventUpdated: _handleEventUpdated,
+        ),
+      ),
+
+      // 3. Event Scheduler -> National Events
+      buildTab('event_scheduler', 'National Events', EventSchedulerTab(
+          selectionNotifier: _schedulerSelectionNotifier,
+          liveEvents: events,
+        ),
+      ),
+
+      // 4. Media Library
+      buildTab('media_library', 'Media Library', const MediaLibraryTab()),
+
+      // 5. Chat Rooms
+      buildTab('chat_management', 'Chat Rooms', const ChatManagementTab()),
+
+      // Monetization / Deals
+      buildTab('monetization', 'Deals', const MonetizationTab()),
+
+      // 6. Topics
+      buildTab('topics', 'Topics', const YoutubeLibraryTab()),
+
+      // 7. System
+      buildTab('system', 'System', const SystemTab()),
+
+      // 8. Notifications
+      buildTab('notifications', 'Notifications', const NotificationsScreen()),
+
+      // 9. Legal
+      buildTab('legal', 'Legal', const LegalTab()),
+
+      // 10. Documentation (Always Open)
+      const DocumentationTab(),
+    ];
+  }
+
+  Future<void> _handlePublishEvent(Event event) async {
+    try {
+      final updated = event.copyWith(isPublished: true, isDraft: false);
+      
+      if (updated.type == 'global' || updated.id.startsWith('global_event_')) {
+          if (_repository is FirestoreEventRepository) {
+              await (_repository as FirestoreEventRepository).saveGlobalEvent(updated);
+          } else {
+             // Fallback or error
+             throw Exception("Global events require Firestore repository");
+          }
+      } else {
+          await _repository.saveEvent(updated);
+      }
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Event Published!'), backgroundColor: Colors.green)
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error publishing: $e'), backgroundColor: Colors.red)
+        );
+      }
+    }
+  }
+
+  Future<void> _handlePublishWeek(int weekOffset) async {
+      final now = DateTime.now().toUtc();
+      final today = DateTime.utc(now.year, now.month, now.day);
+      final weekStart = today.add(Duration(days: 7 * weekOffset));
+      final weekEnd = weekStart.add(const Duration(days: 7));
+
+      // Filter events to publish
+      // Removed the 'if (e.isPublished) return false' check to ensure SYNC updates existing events
+      final eventsToPublish = _scheduledEvents.where((e) {
+        if (e.type == 'global') return false; 
+        if (e.startTimeUTC == null) return false;
+        
+        final start = DateTime.parse(e.startTimeUTC!);
+        final inRange = start.isAfter(weekStart.subtract(const Duration(seconds: 1))) && 
+                        start.isBefore(weekEnd);
+        final isRecurring = e.isRecurring == true;
+        return inRange || isRecurring;
+      }).toList();
+
+      if (eventsToPublish.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No events found in this week to sync.'))
+          );
+        }
+        return;
+      }
+
+      int count = 0;
+      for (var e in eventsToPublish) {
+        try {
+          // Always set published=true, regardless of previous state
+          // This forces an update to Firestore which the User App will see
+          final updated = e.copyWith(isPublished: true, isDraft: false);
+          await _repository.saveEvent(updated);
+          count++;
+        } catch (e) {
+          debugPrint('Error publishing event: $e');
+        }
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Published $count events!'), backgroundColor: Colors.green)
+        );
+      }
+  }
+
+  Future<void> _handleClearWeek(int weekOffset, {int? minuteFilter}) async {
+      String msg = 'Are you sure you want to delete ALL events in Week ${weekOffset + 1}';
+      if (minuteFilter != null) {
+        msg += ' for the :${minuteFilter.toString().padLeft(2, '0')} minute slot';
+      }
+      msg += '? This cannot be undone.';
+
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Clear Week Events?'),
+          content: Text(msg),
+          actions: [
+             TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+              child: const Text('Delete', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
+      );
+
+      if (confirm != true) return;
+
+      final now = DateTime.now().toUtc();
+      final todayRaw = DateTime.utc(now.year, now.month, now.day);
+      final daysSinceMonday = todayRaw.weekday - 1;
+      final thisWeekMonday = todayRaw.subtract(Duration(days: daysSinceMonday));
+      
+      final weekStart = thisWeekMonday.add(Duration(days: 7 * weekOffset));
+      final weekEnd = weekStart.add(const Duration(days: 7));
+
+      // Find events to delete
+      final eventsToDelete = _scheduledEvents.where((e) {
+        if (e.type == 'global') return false;
+        if (e.startTimeUTC == null) return false;
+        final start = DateTime.parse(e.startTimeUTC!);
+        bool matchesWeek = start.isAfter(weekStart.subtract(const Duration(seconds: 1))) && 
+               start.isBefore(weekEnd);
+        
+        if (!matchesWeek) return false;
+
+        // Apply Minute Filter if present
+        if (minuteFilter != null) {
+          if (start.minute != minuteFilter) return false;
+        }
+
+        return true;
+      }).toList();
+
+      if (eventsToDelete.isEmpty) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No events to delete.')));
+        return;
+      }
+
+      int deletedCount = 0;
+      for (var e in eventsToDelete) {
+         await _repository.deleteEvent(e.id);
+         deletedCount++;
+      }
+
+      await _loadEvents(); // Refresh UI
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Deleted $deletedCount events.'), backgroundColor: Colors.redAccent)
+        );
+      }
+  }
+
+  void _handleEventUpdated(Event event) {
     setState(() {
-      events = saved;
+      // Update global events list
+      final index = _globalEvents.indexWhere((e) => e.id == event.id);
+      if (index != -1) {
+        _globalEvents[index] = event;
+      } else {
+        _globalEvents.add(event);
+      }
+      // Rebuild combined list
+      events = [..._scheduledEvents, ..._globalEvents];
+
+      // Also update _eventToEdit if it matches, to keep it fresh
+      if (_eventToEdit?.id == event.id) {
+        _eventToEdit = event;
+      }
     });
   }
 
-  Future<void> _saveEvent(Event e, {bool publish = false}) async {
-    setState(() => events.insert(0, e));
-    await _local.saveEvents(events);
-    if (publish) {
-      try {
-        await _firebase.publishEvent(e);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Published to Firestore (if configured)')));
-      } catch (err) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Publish failed (no Firebase configured)')));
+  void _handleEditEvent(Event event) {
+    setState(() {
+      _eventToEdit = event;
+    });
+    // Check permission before navigation
+    if (_hasAccess('event_creator')) {
+      _tabController.animateTo(1); // Index 1 is Event Creator
+    } else {
+       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Access Denied to Event Creator')));
+    }
+  }
+
+  Future<void> _handleDeleteEvent(Event event) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Event?'),
+        content: Text('Are you sure you want to delete "${event.title}"? This will remove it from the dashboard and reset its slot.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete', style: TextStyle(color: Colors.red))),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      if (event.id.startsWith('global_event_')) {
+        if (_repository is FirestoreEventRepository) {
+          await (_repository as FirestoreEventRepository).deleteGlobalEvent(event.id);
+        }
+        // Optimistic update for global events
+        setState(() {
+          _globalEvents.removeWhere((e) => e.id == event.id);
+          events = [..._scheduledEvents, ..._globalEvents];
+        });
+      } else {
+        await _repository.deleteEvent(event.id);
+
+        // --- CLEANUP DRAFT ---
+        try {
+          if (event.startTimeUTC != null) {
+            final start = DateTime.parse(event.startTimeUTC!).toUtc();
+            final now = DateTime.now().toUtc();
+            final today = DateTime.utc(now.year, now.month, now.day);
+            
+            // Calculate Week Match relative to rolling week
+            final eventDate = DateTime.utc(start.year, start.month, start.day);
+            final diff = eventDate.difference(today).inDays;
+            
+            if (diff >= 0) {
+              final weekOffset = (diff / 7).floor();
+              final slotId = '${start.hour.toString().padLeft(2, '0')}:${start.minute.toString().padLeft(2, '0')}';
+              
+              final prefs = await SharedPreferences.getInstance();
+              final key = 'eventSchedulerDraftV3_Week$weekOffset';
+              
+              final draftString = prefs.getString(key);
+              if (draftString != null) {
+                 final Map<String, dynamic> draftMap = jsonDecode(draftString);
+                 if (draftMap.containsKey(slotId)) {
+                   draftMap.remove(slotId);
+                   await prefs.setString(key, jsonEncode(draftMap));
+                   debugPrint('Auto-removed deleted event from Draft (Week $weekOffset, Slot $slotId)');
+                 }
+              }
+            }
+          }
+        } catch (e) {
+          debugPrint('Draft cleanup failed: $e');
+        }
+        
+        // Optimistic update for scheduled events
+        setState(() {
+          _scheduledEvents.removeWhere((e) => e.id == event.id);
+          events = [..._scheduledEvents, ..._globalEvents];
+        });
+      }
+      // await _loadEvents(); // Refresh - Removed to prevent race condition with slow sync
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Event deleted')),
+        );
       }
     }
   }
 
   @override
+  void initState() {
+    super.initState();
+    _calculateTabs();
+    _tabController = TabController(length: _tabs.length, vsync: this);
+    // Switch to Firestore repository for real-time streaming
+    _repository = FirestoreEventRepository();
+    _loadEvents();
+    _initStream();
+    _startHeartbeat();
+    AdminUserService().updateLastLoginNow();
+  }
+
+  void _startHeartbeat() {
+    _heartbeatTimer = Timer.periodic(const Duration(minutes: 1), (timer) {
+      FirebaseFirestore.instance
+          .collection('admin_users')
+          .doc(widget.adminUser.uid)
+          .update({'lastActive': DateTime.now().toIso8601String()})
+          .catchError((e) => debugPrint('Heartbeat failed: $e'));
+    });
+    // Fire immediately once
+    FirebaseFirestore.instance
+        .collection('admin_users')
+        .doc(widget.adminUser.uid)
+        .update({'lastActive': DateTime.now().toIso8601String()});
+  }
+
+  Future<void> _loadEvents() async {
+    final saved = await _repository.loadEvents();
+    List<Event> globals = [];
+    if (_repository is FirestoreEventRepository) {
+      globals = await (_repository as FirestoreEventRepository).loadGlobalEvents();
+    }
+
+    setState(() {
+      _scheduledEvents = saved;
+      _globalEvents = globals;
+      events = [..._scheduledEvents, ..._globalEvents];
+    });
+  }
+
+  void _initStream() {
+    _eventsStream = _repository.eventsStream();
+    if (_eventsStream != null) {
+      _eventsSub = _eventsStream!.listen((live) {
+        setState(() {
+          _scheduledEvents = live;
+          events = [..._scheduledEvents, ..._globalEvents];
+        });
+      });
+    }
+
+    if (_repository is FirestoreEventRepository) {
+      final firestoreRepo = _repository as FirestoreEventRepository;
+      final globalStream = firestoreRepo.globalEventsStream();
+      if (globalStream != null) {
+        _globalEventsSub = globalStream.listen((live) {
+          print('HARMONY_DEBUG: Loaded ${live.length} global events');
+          setState(() {
+            _globalEvents = live;
+            events = [..._scheduledEvents, ..._globalEvents];
+          });
+        });
+      }
+    }
+  }
+
+  Future<void> _saveEvent(Event e, {bool publish = false}) async {
+    if (publish) {
+      await _repository.publishEvent(e);
+    } else {
+      await _repository.saveEvent(e);
+    }
+    await _loadEvents(); // Refresh list
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(publish ? 'Event published!' : 'Event saved as draft'),
+          backgroundColor: publish ? Colors.green : Colors.orange,
+        ),
+      );
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final currentUser = FirebaseAuth.instance.currentUser;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Harmony by Intent — Admin'),
         centerTitle: true,
+        actions: [
+          // User info
+          if (currentUser != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Icon(Icons.account_circle,
+                      color: Colors.white.withValues(alpha: 0.9)),
+                  const SizedBox(width: 8),
+                  Text(
+                    currentUser.email ?? 'Admin',
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                ],
+              ),
+            ),
+          // About
+          IconButton(
+            icon: const Icon(Icons.info_outline),
+            tooltip: 'About',
+            onPressed: () {
+              showAboutDialog(
+                context: context,
+                applicationName: 'Harmony Admin',
+                applicationVersion: BuildInfo.version,
+                applicationIcon: const Icon(Icons.movie_creation_outlined),
+                children: const [
+                  Text('Admin console for Harmony by Intent.'),
+                  SizedBox(height: 8),
+                  Text('Changelog: https://github.com/Norm-byte/Sound-Intents'),
+                ],
+              );
+            },
+          ),
+          // Logout button
+          IconButton(
+            icon: const Icon(Icons.logout),
+            onPressed: () async {
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: const Text('Sign Out'),
+                  content: const Text('Are you sure you want to sign out?'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('Cancel'),
+                    ),
+                    ElevatedButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('Sign Out'),
+                    ),
+                  ],
+                ),
+              );
+
+              if (confirm == true) {
+                await FirebaseAuth.instance.signOut();
+              }
+            },
+            tooltip: 'Sign Out',
+          ),
+        ],
         bottom: TabBar(
           controller: _tabController,
           isScrollable: true,
-          tabs: const [
-            Tab(text: 'Dashboard'),
-            Tab(text: 'Event Creator'),
-            Tab(text: 'Content Editor'),
-            Tab(text: 'Media Library'),
-            Tab(text: 'Preview'),
-            Tab(text: 'Scheduler'),
-            Tab(text: 'Users'),
-          ],
+          tabs: _tabs,
         ),
       ),
       body: TabBarView(
         controller: _tabController,
-        children: [
-          _buildDashboard(),
-          EventCreatorPanel(onSave: _saveEvent, initialEvents: events),
-          const Center(child: Text('Content Editor - coming soon')),
-          const Center(child: Text('Media Library - coming soon')),
-          _buildPreview(),
-          const Center(child: Text('Scheduler - coming soon')),
-          const Center(child: Text('Users - coming soon')),
-        ],
+        children: _buildTabViews(),
       ),
+      bottomNavigationBar: const AppFooter(),
     );
   }
 
-  Widget _buildDashboard() {
-    return Padding(
-      padding: const EdgeInsets.all(16.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('Dashboard', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 12),
-          Text('Events saved locally: ${events.length}'),
-          const SizedBox(height: 12),
-          Expanded(
-            child: ListView.builder(
-              itemCount: events.length,
-              itemBuilder: (context, i) {
-                final e = events[i];
-                return ListTile(
-                  title: Text(e.title),
-                  subtitle: Text(e.intent ?? ''),
-                  trailing: Text(e.startTimeUTC ?? ''),
-                );
-              },
-            ),
-          )
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPreview() {
-    return Padding(
-      padding: const EdgeInsets.all(16.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('Integrated Preview', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 12),
-          Expanded(
-            child: events.isEmpty
-                ? const Center(child: Text('No events saved yet'))
-                : ListView.builder(
-                    itemCount: events.length,
-                    itemBuilder: (context, i) {
-                      final e = events[i];
-                      return Card(
-                        margin: const EdgeInsets.only(bottom: 12.0),
-                        child: Padding(
-                          padding: const EdgeInsets.all(12.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(e.title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                              const SizedBox(height: 8),
-                              Text(e.intent ?? ''),
-                              const SizedBox(height: 8),
-                              Text('Start (UTC): ${e.startTimeUTC ?? 'not set'}'),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-          )
-        ],
-      ),
-    );
-  }
-}
-
-class EventCreatorPanel extends StatefulWidget {
-  final Function(Event e, {bool publish}) onSave;
-  final List<Event> initialEvents;
-
-  const EventCreatorPanel({required this.onSave, required this.initialEvents, super.key});
-
-  @override
-  State<EventCreatorPanel> createState() => _EventCreatorPanelState();
-}
-
-class _EventCreatorPanelState extends State<EventCreatorPanel> {
-  final _title = TextEditingController();
-  final _intent = TextEditingController();
-  DateTime? _referenceLocal;
-  String _timezone = 'UTC';
-  String? _startUTCPreview;
-  bool _publish = false;
-
-  void _computeStartUTC() {
-    if (_referenceLocal == null) return;
-    // For now, treat referenceLocal as already in UTC or convert via timezone placeholder.
-    final utc = _referenceLocal!.toUtc();
-    setState(() {
-      _startUTCPreview = utc.toIso8601String();
-    });
+  void _importEvents(List<Event> importedEvents) async {
+    for (final imported in importedEvents) {
+      await _repository.saveEvent(imported);
+    }
+    await _loadEvents();
   }
 
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(16.0),
-      child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Event Creator', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 12),
-            TextField(controller: _title, decoration: const InputDecoration(labelText: 'Title')),
-            const SizedBox(height: 8),
-            TextField(controller: _intent, maxLines: 4, decoration: const InputDecoration(labelText: 'Intent Description')),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                ElevatedButton.icon(
-                  icon: const Icon(Icons.access_time),
-                  label: const Text('Pick Reference Time'),
-                  onPressed: () async {
-                    final now = DateTime.now();
-                    final picked = await showDatePicker(
-                      context: context,
-                      initialDate: now,
-                      firstDate: DateTime(now.year - 1),
-                      lastDate: DateTime(now.year + 5),
-                    );
-                    if (picked != null) {
-                      final time = await showTimePicker(context: context, initialTime: TimeOfDay.now());
-                      if (time != null) {
-                        setState(() {
-                          _referenceLocal = DateTime(picked.year, picked.month, picked.day, time.hour, time.minute);
-                        });
-                        _computeStartUTC();
-                      }
-                    }
-                  },
-                ),
-                const SizedBox(width: 12),
-                Text(_referenceLocal == null ? 'No time chosen' : _referenceLocal!.toLocal().toString()),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(children: [
-              const Text('Timezone:'),
-              const SizedBox(width: 8),
-              DropdownButton<String>(
-                value: _timezone,
-                items: const [
-                  DropdownMenuItem(value: 'UTC', child: Text('UTC')),
-                  DropdownMenuItem(value: 'Local', child: Text('Local')),
-                ],
-                onChanged: (v) => setState(() => _timezone = v ?? 'UTC'),
-              )
-            ]),
-            const SizedBox(height: 8),
-            Row(children: [
-              Checkbox(value: _publish, onChanged: (v) => setState(() => _publish = v ?? false)),
-              const Text('Publish to Firestore (if configured)')
-            ]),
-            const SizedBox(height: 8),
-            Text('StartTimeUTC Preview: ${_startUTCPreview ?? 'N/A'}'),
-            const SizedBox(height: 12),
-            Row(children: [
-              ElevatedButton(
-                onPressed: () {
-                  final e = Event(
-                    id: DateTime.now().millisecondsSinceEpoch.toString(),
-                    title: _title.text,
-                    intent: _intent.text,
-                    startTimeUTC: _startUTCPreview,
-                  );
-                  widget.onSave(e, publish: _publish);
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Event saved locally')));
-                },
-                child: const Text('Save Event'),
-              ),
-              const SizedBox(width: 12),
-              OutlinedButton(onPressed: () => setState(() { _title.clear(); _intent.clear(); _referenceLocal = null; _startUTCPreview = null; _publish = false;}), child: const Text('Reset'))
-            ])
-          ],
-        ),
-      ),
-    );
+  void dispose() {
+    _eventsSub?.cancel();
+    _globalEventsSub?.cancel();
+    _heartbeatTimer?.cancel();
+    _tabController.dispose();
+    super.dispose();
   }
 }
