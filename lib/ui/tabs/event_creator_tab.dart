@@ -277,44 +277,43 @@ class _EventCreatorTabState extends State<EventCreatorTab>
                   isDraft: true,
                 ));
       } else {
-        // Ensure we have 7 slots, filling gaps if needed
-        // Also filter out past non-recurring events from the slots (reset them)
-        final now = DateTime.now().toUtc();
+        // Ensure we have slots for all existing global events + padding to at least 7
+        // Do NOT auto-reset expired events. Keep them visible so user knows the slot is occupied (or can republish).
         
-        _events = List.generate(7, (index) {
+        // 1. Map existing events
+        final Map<String, Event> idMap = {for (var e in loaded) e.id: e};
+        
+        // 2. Find max slot index used
+        int maxIndex = 6; // Minimum 7 slots (0-6)
+        for (var e in loaded) {
+           if (e.id.startsWith('global_event_')) {
+              try {
+                 int idx = int.parse(e.id.split('_').last);
+                 if (idx > maxIndex) maxIndex = idx;
+              } catch (_) {}
+           }
+        }
+        
+        // 3. Generate list covering all slots
+        _events = List.generate(maxIndex + 1, (index) {
           final id = 'global_event_$index';
-          final found = loaded.firstWhere(
-            (e) => e.id == id,
-            orElse: () => Event(
-                id: id,
-                title: 'Global Event ${index + 1}',
-                isPublished: false,
-                isDraft: true),
-          );
-
-          // Check if expired
-          bool isExpired = false;
-          if (found.isPublished && !found.isDraft) {
-             final isRecurring = found.recurrenceType != null && found.recurrenceType != 'None';
-             if (!isRecurring && found.startTimeUTC != null) {
-                final start = DateTime.parse(found.startTimeUTC!);
-                if (start.isBefore(now)) {
-                  isExpired = true;
-                }
-             }
+          if (idMap.containsKey(id)) {
+             return idMap[id]!;
           }
-
-          if (isExpired) {
-             // Reset slot
-             return Event(
+          // Empty slot
+          return Event(
                 id: id,
                 title: 'Global Event ${index + 1}',
                 isPublished: false,
                 isDraft: true);
-          }
-
-          return found;
         });
+
+        // 4. Append any events with non-standard IDs (safekeeping)
+        for (var e in loaded) {
+           if (!e.id.startsWith('global_event_')) {
+              _events.add(e);
+           }
+        }
       }
     } catch (e) {
       debugPrint('Error loading global events: $e');
@@ -406,8 +405,10 @@ class _EventCreatorTabState extends State<EventCreatorTab>
 
     // Calculate UTC
     final date = _selectedDate;
-    // Create date in UTC but with the "Local" time components, then subtract offset
-    // This is a simplified conversion
+    
+    // STRICT RULE: All events start at 00 seconds.
+    // User requested to remove the "Current Seconds" logic and enforce standard scheduling.
+    
     final localDateTime = DateTime.utc(date.year, date.month, date.day,
         _selectedTime.hour, _selectedTime.minute);
     final utcDateTime =
@@ -685,16 +686,25 @@ class _EventCreatorTabState extends State<EventCreatorTab>
                               enablePreview: true, // Enable preview to show thumbnail
                               autoPlay: false, // Disable autoplay to save resources
                             );
-                          } else if (item.type == 'pdf' || item.type == 'doc' || item.type == 'document') {
-                             content = const Center(child: Icon(Icons.description, size: 48, color: Colors.orange));
                           } else {
-                            content = const Center(
-                              child: Icon(
-                                Icons.audiotrack,
-                                size: 48,
-                                color: Colors.purple,
-                              ),
-                            );
+                            // Robust Document Detection
+                            final lowerName = item.name.toLowerCase();
+                            final isPdf = item.type == 'pdf' || lowerName.endsWith('.pdf');
+                            final isDoc = item.type == 'doc' || item.type == 'document' || 
+                                          lowerName.endsWith('.doc') || lowerName.endsWith('.docx') ||
+                                          lowerName.endsWith('.ppt') || lowerName.endsWith('.pptx');
+
+                            if (isPdf || isDoc) {
+                               content = const Center(child: Icon(Icons.description, size: 48, color: Colors.orange));
+                            } else {
+                              content = const Center(
+                                child: Icon(
+                                  Icons.audiotrack,
+                                  size: 48,
+                                  color: Colors.purple,
+                                ),
+                              );
+                            }
                           }
 
                           return InkWell(
@@ -862,6 +872,7 @@ class _EventCreatorTabState extends State<EventCreatorTab>
 
     return Scaffold(
       body: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           // Left Sidebar: Schedule & Calendar
           Container(
@@ -1367,7 +1378,6 @@ class _EventCreatorTabState extends State<EventCreatorTab>
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Row(
-                        mainAxisSize: MainAxisSize.min,
                         children: [
                           const Icon(Icons.public,
                               color: Colors.lightBlueAccent, size: 16),
@@ -2468,7 +2478,8 @@ class _EventCreatorTabState extends State<EventCreatorTab>
                       children: [
                          Expanded(
                            child: DropdownButtonFormField<String>(
-                             value: _recurrenceType == 'None' || _recurrenceType == 'Daily' || _recurrenceType == 'Weekly' ? 'global' : 'global', // Temporary, we need a separate field for type in the state
+                             isExpanded: true,
+                             initialValue: _recurrenceType == 'None' || _recurrenceType == 'Daily' || _recurrenceType == 'Weekly' ? 'global' : 'global', // Temporary, we need a separate field for type in the state
                              // Actually, let's just use a SegmentedButton or Radio buttons for Type
                              // But we need to add _selectedEventType field to state first.
                              // For now, let's hack it in by hijacking the UI structure
@@ -2499,7 +2510,7 @@ class _EventCreatorTabState extends State<EventCreatorTab>
                           flex: 3,
                           child: DropdownButtonFormField<String>(
                             isExpanded: true, // Ensure dropdown takes full width and handles overflow
-                            value: _selectedTimeZoneLabel, // Use value instead of initialValue for reactive updates
+                            initialValue: _selectedTimeZoneLabel, // Use value instead of initialValue for reactive updates
                             decoration: const InputDecoration(
                                 labelText: 'Origin Time Zone / Country'),
                             items: _timeZones
@@ -2597,7 +2608,7 @@ class _EventCreatorTabState extends State<EventCreatorTab>
                     const SizedBox(height: 16),
                     
                     DropdownButtonFormField<String>(
-                      value: _recurrenceType,
+                      initialValue: _recurrenceType,
                       decoration: const InputDecoration(
                         labelText: 'Repeat Event',
                         border: OutlineInputBorder(),
@@ -2673,21 +2684,24 @@ class _EventCreatorTabState extends State<EventCreatorTab>
                           border: OutlineInputBorder()),
                     ),
                     const SizedBox(height: 16),
-                    SwitchListTile(
-                      title: const Text('Use Trending Intent'),
-                      subtitle: const Text('Automatically set intent based on user popularity'),
-                      value: _useTrendingIntent,
-                      onChanged: (val) => setState(() => _useTrendingIntent = val),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                    const SizedBox(height: 8),
+                    // Only show Trending Intent option if it's a Global Event
+                    if (_selectedEventType == 'global') ...[
+                      SwitchListTile(
+                        title: const Text('Use Trending Intent'),
+                        subtitle: const Text('Automatically set intent based on user popularity'),
+                        value: _useTrendingIntent,
+                        onChanged: (val) => setState(() => _useTrendingIntent = val),
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                      const SizedBox(height: 8),
+                    ],
                     TextField(
                       controller: _intentController,
                       decoration: InputDecoration(
                           labelText: 'Intent (e.g. Peace, Joy)',
-                          helperText: _useTrendingIntent 
+                          helperText: (_useTrendingIntent && _selectedEventType == 'global')
                               ? 'Currently set to auto-update. Turn off to manually override.' 
-                              : 'Manually set the intent for this event.',
+                              : 'Sets the shared intent for this event.',
                           border: const OutlineInputBorder()),
                     ),
                     const SizedBox(height: 16),

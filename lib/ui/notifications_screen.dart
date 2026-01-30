@@ -116,7 +116,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
               // Target Topic
               DropdownButtonFormField<String>(
-                value: _targetTopic,
+                initialValue: _targetTopic,
                 decoration: const InputDecoration(
                   labelText: 'Target Audience',
                   helperText: 'Who should receive this message?',

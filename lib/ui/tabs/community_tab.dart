@@ -170,11 +170,18 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
           return const Center(child: Text('No data'));
         }
 
-        // Client-side filtering for profanity
+        // Client-side filtering for profanity OR manually flagged
         final flaggedPosts = snapshot.data!.docs.where((doc) {
           final data = doc.data() as Map<String, dynamic>;
           final content = (data['content'] as String? ?? '').toLowerCase();
-          return _badWords.any((word) => content.contains(word));
+          
+          // Future V3: Check 'status' field here (e.g. status == 'open')
+          // if (data['status'] == 'resolved') return false; 
+          
+          final containsProfanity = _badWords.any((word) => content.contains(word));
+          final manualFlag = data['isFlagged'] == true; // Support future manual flagging
+          
+          return containsProfanity || manualFlag;
         }).toList();
 
         if (flaggedPosts.isEmpty) {
@@ -253,6 +260,26 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                           ),
                         ),
                         OutlinedButton.icon(
+                          icon: const Icon(Icons.check, size: 16, color: Colors.green),
+                          label: const Text('Resolve (V3 Mock)', style: TextStyle(color: Colors.green)),
+                          onPressed: () async {
+                              // V3 Preparation: This button creates the 'status' and 'assignedTo' fields.
+                              // This ensures the data structure is ready for the future update.
+                              await postDoc.reference.set({
+                                'status': 'resolved',
+                                'resolvedAt': FieldValue.serverTimestamp(),
+                                'assignedTo': 'admin_legacy', // Placeholder for token system
+                              }, SetOptions(merge: true));
+                              
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Marked as Resolved (Prepared for V3)')),
+                                );
+                              }
+                          },
+                          style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.green)),
+                        ),
+                        OutlinedButton.icon(
                           icon: const Icon(Icons.delete, size: 16, color: Colors.red),
                           label: const Text('Delete Post', style: TextStyle(color: Colors.red)),
                           onPressed: () async {
@@ -312,7 +339,7 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                       const SizedBox(width: 12),
                       Expanded(
                         child: DropdownButtonFormField<String>(
-                          value: _selectedFeedId,
+                          initialValue: _selectedFeedId,
                           decoration: const InputDecoration(
                             isDense: true,
                             border: OutlineInputBorder(),
@@ -479,30 +506,41 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                                 const SnackBar(content: Text('Message deleted')),
                               );
                             }
-                          } else if (value == 'ban') {
-                            // Ban logic (requires userID, which might be missing in simple chat)
+                          } else if (value == 'suspend') {
                             final userId = post['userId'];
                             if (userId != null) {
+                              // Standardized suspension logic matching User Management
                               await FirebaseFirestore.instance.collection('users').doc(userId).update({
                                 'status': 'suspended',
+                                'suspensionExpiry': null, // Indefinite by default when triggered from chat
+                                'lastAdminAction': 'Suspended from Live Feed',
+                                'lastAdminActionDate': FieldValue.serverTimestamp(),
                               });
+                              
                               if (mounted) {
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('User suspended')),
+                                  const SnackBar(
+                                    content: Text('User suspended. Moved to "Resolved/Suspended" list.'),
+                                    backgroundColor: Colors.orange,
+                                  ),
                                 );
                               }
                             } else {
                                 if (mounted) {
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('Cannot ban: User ID not linked to this message')),
+                                  const SnackBar(content: Text('Cannot suspend: User ID is missing')),
                                 );
                               }
                             }
                           }
                         },
                         itemBuilder: (context) => [
-                          const PopupMenuItem(value: 'delete', child: Text('Delete Message')),
-                          const PopupMenuItem(value: 'ban', child: Text('Ban User')),
+                          const PopupMenuItem(value: 'delete', child: Row(
+                            children: [Icon(Icons.delete, size: 20, color: Colors.grey), SizedBox(width: 8), Text('Delete Message')],
+                          )),
+                          const PopupMenuItem(value: 'suspend', child: Row(
+                            children: [Icon(Icons.block, size: 20, color: Colors.red), SizedBox(width: 8), Text('Suspend User')],
+                          )),
                         ],
                       ),
                     ),

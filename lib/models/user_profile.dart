@@ -14,6 +14,7 @@ class UserProfile {
   final String? lastActive;
   final DateTime? suspensionExpiry;
   final String? lastAdminAction;
+  final bool willRenew; // From RevenueCat
 
   UserProfile({
     required this.id,
@@ -28,6 +29,7 @@ class UserProfile {
     this.lastActive,
     this.suspensionExpiry,
     this.lastAdminAction,
+    this.willRenew = false,
   });
 
   factory UserProfile.fromFirestore(String id, Map<String, dynamic> data) {
@@ -66,6 +68,7 @@ class UserProfile {
       lastActive: parseDate(data['lastActive']),
       suspensionExpiry: (data['suspensionExpiry'] as Timestamp?)?.toDate(),
       lastAdminAction: data['lastAdminAction'] as String?,
+      willRenew: data['willRenew'] as bool? ?? false,
     );
   }
 
@@ -83,6 +86,7 @@ class UserProfile {
       'lastActive': lastActive,
       'suspensionExpiry': suspensionExpiry,
       'lastAdminAction': lastAdminAction,
+      'willRenew': willRenew,
     };
   }
 
@@ -98,6 +102,7 @@ class UserProfile {
     String? lastActive,
     DateTime? suspensionExpiry,
     String? lastAdminAction,
+    bool? willRenew,
   }) {
     return UserProfile(
       id: id,
@@ -112,6 +117,7 @@ class UserProfile {
       lastActive: lastActive ?? this.lastActive,
       suspensionExpiry: suspensionExpiry ?? this.suspensionExpiry,
       lastAdminAction: lastAdminAction ?? this.lastAdminAction,
+      willRenew: willRenew ?? this.willRenew,
     );
   }
 }

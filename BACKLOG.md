@@ -11,6 +11,10 @@ Priority order (short-term):
 7. User Management — view users, suspend, delete comments (admin tools)
 8. Post-Event Tools — QuoteLibrary, AI-generated drafts (stubs for Gemini)
 9. CI / GitHub Actions — build web on push, optional deploy
+10. Internationalization & Compliance (Post-v2)
+    - [ ] Implement on-device message translation (Google ML Kit) for user chats.
+    - [ ] Expand profanity/blocklist to support detailed per-locale filtering.
+    - [ ] Implement "Report User" flow for full App Store/Play Store compliance.
 
 Notes:
 - Each backlog item can be converted into small issues/tickets and implemented incrementally.

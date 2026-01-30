@@ -1,8 +1,38 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    match /{allPaths=**} {
-      allow read, write: if true;
+    
+    // --- FUNCTIONS ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Check if the user is an active admin in Firestore
+    function isAdmin() {
+      return isSignedIn() &&
+             firestore.exists(/databases/(default)/documents/admin_users/$(request.auth.uid)) &&
+             firestore.get(/databases/(default)/documents/admin_users/$(request.auth.uid)).data.isActive == true;
+    }
+
+    // --- POLICY ---
+
+    // Media Library assets (Images, Audio)
+    // Used by: MediaLibraryTab, User App (playback)
+    match /media/{allPaths=**} {
+      allow read: if true; 
+      allow write: if isAdmin(); 
+    }
+
+    // YouTube/Video content (Thumbnails, Video Swaps)
+    // Used by: YoutubeLibraryTab
+    match /youtube_library/{allPaths=**} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Diagnostics (Admin connectivity tests)
+    match /diagnostics/{allPaths=**} {
+      allow read, write: if isAdmin();
     }
   }
 }

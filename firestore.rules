@@ -137,9 +137,16 @@ service cloud.firestore {
       allow read, write: if isActiveAdmin();
     }
 
-    // System Settings - only active admins can read/write
+    // Global Settings (Maintenance Mode, etc.) - user app reads 'settings/global'
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if isActiveAdmin();
+    }
+
+    // System Settings - Public read (for feature flags), Admin write
     match /system_settings/{settingId} {
-      allow read, write: if isActiveAdmin();
+      allow read: if true;
+      allow write: if isActiveAdmin();
     }
 
     // VIP Codes
@@ -188,6 +195,17 @@ service cloud.firestore {
     // Collection Group Query for Messages (Support Inbox)
     match /{path=**}/messages/{messageId} {
       allow read: if isActiveAdmin();
+    }
+
+    // Product Tiers (Monetization Offers)
+    match /product_tiers/{tierId} {
+      allow read: if true; // User app needs to see offers (e.g. for paywall)
+      allow write: if isActiveAdmin();
+    }
+
+    // Product Tiers Drafts (Admin Workspace)
+    match /product_tiers_draft/{tierId} {
+      allow read, write: if isActiveAdmin();
     }
     
     // Default deny all other collections

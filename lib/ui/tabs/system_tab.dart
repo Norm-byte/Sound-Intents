@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import '../widgets/locked_tab_wrapper.dart';
 import 'admin_management_tab.dart';
 import 'user_management_tab.dart';
 import 'community_tab.dart';
@@ -17,273 +18,555 @@ class SystemTab extends StatefulWidget {
 class _SystemTabState extends State<SystemTab> with SingleTickerProviderStateMixin {
   late TabController _tabController;
   
-  // Locking State
-  bool _isLocked = true;
-  bool _isLoadingLockState = true;
-  final _unlockController = TextEditingController();
-  String? _storedSecurityPassword;
-  String? _storedVipCode;
+  // State for user management navigation
   String? _selectedUserIdForManagement;
 
   @override
   void initState() {
     super.initState();
     // Initialize controller immediately to prevent build errors
-    _tabController = TabController(length: 6, vsync: this);
-    
-    // Start loading lock state safely
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _loadLockState();
-    });
-  }
-
-  Future<void> _loadLockState() async {
-    if (!mounted) return;
-    print('SystemTab: Loading lock state...');
-    setState(() => _isLoadingLockState = true);
-    
-    // Safety timer to prevent infinite loading
-    final safetyTimer = Timer(const Duration(seconds: 8), () {
-      if (mounted && _isLoadingLockState) {
-        print('SystemTab: Safety timer triggered. Forcing unlock.');
-        setState(() {
-          _isLoadingLockState = false;
-          // Optional: _isLocked = false; // Uncomment to auto-unlock on timeout
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('System check timed out. Please try unlocking manually.')),
-        );
-      }
-    });
-
-    try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) {
-        print('SystemTab: No user logged in');
-        return;
-      }
-
-      // 1. Get Security Password
-      print('SystemTab: Fetching admin user doc...');
-      final userDoc = await FirebaseFirestore.instance
-          .collection('admin_users')
-          .doc(user.uid)
-          .get()
-          .timeout(const Duration(seconds: 5));
-      
-      if (mounted) {
-        _storedSecurityPassword = userDoc.data()?['security_password'];
-        print('SystemTab: Security password found: ${_storedSecurityPassword != null}');
-      }
-
-      // 2. Get VIP Code
-      print('SystemTab: Fetching VIP code...');
-      final vipQuery = await FirebaseFirestore.instance
-          .collection('vip_codes')
-          .where('type', isEqualTo: 'super_admin')
-          .where('assignee', isEqualTo: user.email)
-          .limit(1)
-          .get()
-          .timeout(const Duration(seconds: 5));
-      
-      if (mounted && vipQuery.docs.isNotEmpty) {
-        _storedVipCode = vipQuery.docs.first.data()['code'];
-      }
-      print('SystemTab: VIP code found: ${_storedVipCode != null}');
-
-      // If neither is set, unlock by default (first run)
-      if (_storedSecurityPassword == null && _storedVipCode == null) {
-        print('SystemTab: No lock set, unlocking...');
-        if (mounted) setState(() => _isLocked = false);
-      }
-
-    } catch (e) {
-      debugPrint('Error loading lock state: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Connection error: $e')),
-        );
-      }
-    } finally {
-      safetyTimer.cancel();
-      if (mounted) {
-        setState(() => _isLoadingLockState = false);
-        print('SystemTab: Loading complete. Locked: $_isLocked');
-      }
-    }
-  }
-
-  Future<void> _attemptUnlock() async {
-    final input = _unlockController.text.trim();
-    if (input.isEmpty) return;
-
-    bool unlocked = false;
-    if (_storedSecurityPassword != null && input == _storedSecurityPassword) unlocked = true;
-    if (_storedVipCode != null && input == _storedVipCode) unlocked = true;
-
-    // Fallback: Check Firestore for any valid super_admin code
-    if (!unlocked) {
-      try {
-        final query = await FirebaseFirestore.instance
-            .collection('vip_codes')
-            .where('code', isEqualTo: input)
-            .where('type', isEqualTo: 'super_admin')
-            .where('status', isEqualTo: 'active')
-            .limit(1)
-            .get();
-            
-        if (query.docs.isNotEmpty) {
-          unlocked = true;
-        }
-      } catch (e) {
-        debugPrint('Error checking VIP code: $e');
-      }
-    }
-
-    if (unlocked) {
-      setState(() {
-        _isLocked = false;
-        _unlockController.clear();
-      });
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Incorrect password or VIP code'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
+    _tabController = TabController(length: 8, vsync: this);
   }
 
   @override
   void dispose() {
     _tabController.dispose();
-    _unlockController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoadingLockState) return const Center(child: CircularProgressIndicator());
-
-    if (_isLocked) {
-      return Center(
-        child: SingleChildScrollView(
-          child: Card(
-            elevation: 4,
-            margin: const EdgeInsets.all(32),
-            child: Container(
-              constraints: const BoxConstraints(maxWidth: 400),
-              padding: const EdgeInsets.all(32),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.lock_outline, size: 64, color: Colors.indigo),
-                  const SizedBox(height: 24),
-                  const Text(
-                    'System Access Restricted',
-                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Please enter your Security Password or VIP Code to access System Management.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.grey),
-                  ),
-                  const SizedBox(height: 32),
-                  TextField(
-                    controller: _unlockController,
-                    obscureText: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Password or VIP Code',
-                      border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.key),
-                    ),
-                    onSubmitted: (_) => _attemptUnlock(),
-                  ),
-                  const SizedBox(height: 24),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: _attemptUnlock,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.indigo,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                      ),
-                      child: const Text('Unlock'),
-                    ),
-                  ),
-                ],
+    // Wrap entire content in LockedTabWrapper for consistent security/appearance
+    return LockedTabWrapper(
+      title: 'System Management',
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border(
+                bottom: BorderSide(color: Colors.grey.shade300),
               ),
             ),
-          ),
-        ),
-      );
-    }
-
-    return Column(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            border: Border(
-              bottom: BorderSide(color: Colors.grey.shade300),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'System Management',
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Configure system settings, monitor performance, and manage users',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey.shade600,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TabBar(
+                  controller: _tabController,
+                  isScrollable: true,
+                  tabs: const [
+                    Tab(icon: Icon(Icons.people), text: 'Users'),
+                    Tab(icon: Icon(Icons.forum), text: 'Community'),
+                    Tab(icon: Icon(Icons.security), text: 'Safety & Filter'),
+                    Tab(icon: Icon(Icons.gavel), text: 'Legal & Compliance'),
+                    Tab(icon: Icon(Icons.analytics), text: 'Performance'),
+                    Tab(icon: Icon(Icons.admin_panel_settings), text: 'Admin Management'),
+                    Tab(icon: Icon(Icons.home), text: 'Welcome Screen'),
+                    Tab(icon: Icon(Icons.build), text: 'Maintenance'),
+                  ],
+                ),
+              ],
             ),
           ),
+          Expanded(
+            child: TabBarView(
+              controller: _tabController,
+              children: [
+                UserManagementTab(initialUserId: _selectedUserIdForManagement),
+                CommunityTab(
+                  onUserSelected: (userId) {
+                    setState(() {
+                      _selectedUserIdForManagement = userId;
+                    });
+                    _tabController.animateTo(0);
+                  },
+                ),
+                const ChatSafetyTab(),
+                const ComplianceTab(),
+                const _PerformanceTab(),
+                const AdminManagementTab(),
+                const WelcomeScreenManager(),
+                const _MaintenanceTab(),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class ComplianceTab extends StatefulWidget {
+  const ComplianceTab({super.key});
+
+  @override
+  State<ComplianceTab> createState() => _ComplianceTabState();
+}
+
+class _ComplianceTabState extends State<ComplianceTab> {
+  final _privacyController = TextEditingController();
+  final _termsController = TextEditingController();
+  final _eulaController = TextEditingController();
+  final _contactController = TextEditingController();
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+  }
+
+  Future<void> _loadSettings() async {
+    try {
+      final doc = await FirebaseFirestore.instance.collection('system_settings').doc('legal').get();
+      if (doc.exists) {
+        final data = doc.data()!;
+        _privacyController.text = data['privacy_url'] ?? '';
+        _termsController.text = data['terms_url'] ?? '';
+        _eulaController.text = data['eula_url'] ?? '';
+        _contactController.text = data['contact_email'] ?? '';
+      }
+    } catch (e) {
+      debugPrint('Error loading legal settings: $e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _saveSettings() async {
+    setState(() => _isLoading = true);
+    try {
+      await FirebaseFirestore.instance.collection('system_settings').doc('legal').set({
+        'privacy_url': _privacyController.text,
+        'terms_url': _termsController.text,
+        'eula_url': _eulaController.text,
+        'contact_email': _contactController.text,
+        'updated_at': FieldValue.serverTimestamp(),
+      });
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Legal Settings Saved')));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) return const Center(child: CircularProgressIndicator());
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'System Management',
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
+              Text('Legal & Compliance Documents', style: Theme.of(context).textTheme.headlineSmall),
               const SizedBox(height: 8),
-              Text(
-                'Configure system settings, monitor performance, and manage users',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey.shade600,
+              const Text('Enter the URLs where your legal documents are hosted. These will be linked in the User App.', style: TextStyle(color: Colors.grey)),
+              const SizedBox(height: 24),
+              
+              const Text('GDPR & Privacy', style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _privacyController,
+                decoration: const InputDecoration(
+                  labelText: 'Privacy Policy URL',
+                  hintText: 'https://your-website.com/privacy',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.privacy_tip),
                 ),
               ),
               const SizedBox(height: 16),
-              TabBar(
-                controller: _tabController,
-                isScrollable: true,
-                tabs: const [
-                  Tab(icon: Icon(Icons.people), text: 'Users'),
-                  Tab(icon: Icon(Icons.forum), text: 'Community'),
-                  Tab(icon: Icon(Icons.analytics), text: 'Performance'),
-                  Tab(icon: Icon(Icons.admin_panel_settings), text: 'Admin Management'),
-                  Tab(icon: Icon(Icons.home), text: 'Welcome Screen'),
-                  Tab(icon: Icon(Icons.build), text: 'Maintenance'),
-                ],
+              
+              const Text('Terms & Conditions', style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _termsController,
+                decoration: const InputDecoration(
+                  labelText: 'Terms of Service URL',
+                  hintText: 'https://your-website.com/terms',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.description),
+                ),
               ),
+              const SizedBox(height: 16),
+              
+              const Text('EULA (End User License Agreement)', style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _eulaController,
+                decoration: const InputDecoration(
+                  labelText: 'EULA URL (Required for Apple App Store)',
+                  hintText: 'https://your-website.com/eula',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.gavel),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.only(top: 4.0),
+                child: Text('Apple requires a standard EULA for apps with User Generated Content (Chat/Community). You can use Apple\'s standard EULA or your own.', style: TextStyle(fontSize: 12, color: Colors.grey)),
+              ),
+              
+              const SizedBox(height: 16),
+              
+              const Text('Contact Information', style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _contactController,
+                decoration: const InputDecoration(
+                  labelText: 'Support / DPO Email',
+                  hintText: 'support@your-domain.com',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.email),
+                ),
+              ),
+
+              const SizedBox(height: 32),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _saveSettings,
+                  icon: const Icon(Icons.save),
+                  label: const Text('Save Computance Settings'),
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.all(16),
+                    backgroundColor: Colors.blue.shade800,
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+              ),
+              
+              const SizedBox(height: 24),
+              const Divider(),
+              const SizedBox(height: 16),
+              const Text('Compliance Checklist Advice:', style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              _buildChecklistItem('GDPR Deletion', 'Users must be able to delete their account. This is handled in the App Settings.'),
+              _buildChecklistItem('Content Moderation', 'For Chat/Community, ensure you have "Report" and "Block" features (Implemented).'),
+              _buildChecklistItem('Age Rating', 'Set correctly in App Store Connect / Google Play Console (12+ or 17+ for Unfiltered Internet Access).'),
             ],
           ),
         ),
-        Expanded(
-          child: TabBarView(
-            controller: _tabController,
-            children: [
-              UserManagementTab(initialUserId: _selectedUserIdForManagement),
-              CommunityTab(
-                onUserSelected: (userId) {
-                  setState(() {
-                    _selectedUserIdForManagement = userId;
-                  });
-                  _tabController.animateTo(0);
-                },
+      ),
+    );
+  }
+
+  Widget _buildChecklistItem(String title, String desc) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.check_circle, color: Colors.green, size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: RichText(
+              text: TextSpan(
+                style: const TextStyle(color: Colors.black87),
+                children: [
+                  TextSpan(text: '$title: ', style: const TextStyle(fontWeight: FontWeight.bold)),
+                  TextSpan(text: desc),
+                ],
               ),
-              const _PerformanceTab(),
-              const AdminManagementTab(),
-              const WelcomeScreenManager(),
-              const _MaintenanceTab(),
-            ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class ChatSafetyTab extends StatefulWidget {
+  const ChatSafetyTab({super.key});
+
+  @override
+  State<ChatSafetyTab> createState() => _ChatSafetyTabState();
+}
+
+class _ChatSafetyTabState extends State<ChatSafetyTab> {
+  final TextEditingController _testController = TextEditingController();
+  final TextEditingController _addWordController = TextEditingController();
+  List<String> _bannedWords = [];
+  bool _isLoading = true;
+  String? _testResult;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBannedWords();
+  }
+
+  Future<void> _loadBannedWords() async {
+    try {
+      final doc = await FirebaseFirestore.instance.collection('system_settings').doc('profanity_filter').get();
+      if (doc.exists && doc.data() != null) {
+        setState(() {
+          _bannedWords = List<String>.from(doc.data()!['banned_words'] ?? []);
+          _isLoading = false;
+        });
+      } else {
+        setState(() {
+          _bannedWords = []; // Initialize empty
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading profanity filter: $e');
+      setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _addWord() async {
+    final word = _addWordController.text.trim().toLowerCase();
+    if (word.isEmpty) return;
+    
+    if (_bannedWords.contains(word)) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Word already in list')));
+      return;
+    }
+
+    setState(() {
+      _bannedWords.add(word);
+      _bannedWords.sort();
+      _addWordController.clear();
+    });
+
+    await _saveWords();
+  }
+
+  Future<void> _removeWord(String word) async {
+    setState(() {
+      _bannedWords.remove(word);
+    });
+    await _saveWords();
+  }
+
+  Future<void> _seedDefaults() async {
+    setState(() => _isLoading = true);
+    // Representative subset of "LDNOOBW" and standard safety lists.
+    // Covers: Profanity, Hate Speech, Sexual Content, Violence, Self-Harm.
+    final defaults = [
+      // Standard Profanity
+      "abuse", "arse", "ass", "asshole", "bastard", "bitch", "bloody", "bollocks",
+      "bullshit", "cock", "cunt", "damn", "dick", "douche", "dyke", "fag", "faggot",
+      "fuck", "fucker", "fucking", "goddamn", "hell", "homo", "jerk", "kike", "nigger",
+      "nigga", "piss", "prick", "pussy", "queer", "shit", "slut", "spic", "tits",
+      "twat", "wank", "wanker", "whore", "retard", "spastic",
+      
+      // Sexual Content / Harassment
+      "anal", "anus", "blowjob", "boner", "boob", "clitoris", "cum", "dildo", 
+      "ejaculation", "handjob", "masturbate", "naked", "nude", "orgasm", "penis", 
+      "porn", "sex", "vagina", "xxx", "rape", "rapist", "molest", "incest", 
+      "pedophile", "pornography", "strip club", "hooker",
+
+      // Violence / Threat / Self-Harm
+      "kill", "murder", "die", "suicide", "terrorist", "bomb", "massacre", "shoot",
+      "stab", "attack", "death", "execute", "mass shooting", "cut myself", "kill myself",
+
+      // Drugs
+      "cocaine", "heroin", "meth", "crack", "weed", "marijuana", "lsd", "acid",
+
+      // Phrases (Matching logic: text.contains(phrase))
+      "white power", "black power", "hate you", "go die", "kill yourself", 
+      "blow me", "eat me", "suck it", "piece of shit", "son of a bitch",
+
+      // --- International (Common European - DE, FR, ES) ---
+      // Spanish
+      "puta", "mierda", "coño", "cabron", "maricon", "pendejo", "gilipollas", 
+      "verga", "chinga", "culo", "hijo de puta", "joder",
+      
+      // French
+      "merde", "putain", "connard", "connasse", "salope", "encule", "foutre", 
+      "bite", "couille", "pede", "nique", "bordel", "chatte",
+      
+      // German
+      "scheisse", "arschloch", "fotze", "hure", "wichser", "schlampe", 
+      "ficken", "verdammt", "arsch", "miststueck"
+    ];
+    
+    _bannedWords.addAll(defaults);
+    // Unique
+    _bannedWords = _bannedWords.toSet().toList()..sort();
+    
+    await _saveWords();
+    setState(() => _isLoading = false);
+    
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Standards-Based Safety Blocklist Loaded.')));
+  }
+
+  Future<void> _saveWords() async {
+    await FirebaseFirestore.instance.collection('system_settings').doc('profanity_filter').set({
+      'banned_words': _bannedWords,
+      'last_updated': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  void _testPhrase() {
+    final text = _testController.text.toLowerCase();
+    if (text.isEmpty) return;
+
+    final found = _bannedWords.where((w) => text.contains(w)).toList();
+    if (found.isNotEmpty) {
+      setState(() {
+        _testResult = '❌ FLAGGED: Contains banned words: ${found.join(", ")}';
+      });
+    } else {
+      setState(() {
+        _testResult = '✅ PASSED: No banned words found.';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) return const Center(child: CircularProgressIndicator());
+
+    return Row(
+      children: [
+        // Left Column: Filter Management
+        Expanded(
+          flex: 2,
+          child: Card(
+            margin: const EdgeInsets.all(16),
+            child: Padding(
+               padding: const EdgeInsets.all(16),
+               child: Column(
+                 crossAxisAlignment: CrossAxisAlignment.start,
+                 children: [
+                   const Text('Blocked Words List', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                   const SizedBox(height: 8),
+                   const Text('Messages containing these words will be flagged for moderation.', style: TextStyle(color: Colors.grey)),
+                   const SizedBox(height: 16),
+                   
+                   Row(children: [
+                     Expanded(child: TextField(
+                       controller: _addWordController,
+                       decoration: const InputDecoration(
+                         labelText: 'Add word or phrase to blocklist',
+                         border: OutlineInputBorder(),
+                         prefixIcon: Icon(Icons.block),
+                       ),
+                       onSubmitted: (_) => _addWord(),
+                     )),
+                     const SizedBox(width: 8),
+                     ElevatedButton(onPressed: _addWord, child: const Text('Add')),
+                   ]),
+                   
+                   const SizedBox(height: 8),
+                   Align(
+                     alignment: Alignment.centerLeft,
+                     child: OutlinedButton.icon(
+                        icon: const Icon(Icons.cloud_download),
+                        label: const Text('Load/Refreshed Standard Safety Blocklist'),
+                        onPressed: _seedDefaults,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.orange,
+                        ),
+                      ),
+                   ),
+
+                   const SizedBox(height: 16),
+                   Expanded(
+                     child: Container(
+                       decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade300), borderRadius: BorderRadius.circular(8)),
+                       child: _bannedWords.isEmpty 
+                         ? const Center(child: Text('No words banned yet.'))
+                         : ListView.separated(
+                           itemCount: _bannedWords.length,
+                           separatorBuilder: (c, i) => const Divider(height: 1),
+                           itemBuilder: (ctx, index) {
+                             final word = _bannedWords[index];
+                             return ListTile(
+                               title: Text(word),
+                               trailing: IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () => _removeWord(word)),
+                             );
+                           },
+                         ),
+                     ),
+                   ),
+                 ],
+               ),
+            ),
+          ),
+        ),
+        
+        // Right Column: Testing Tool
+        Expanded(
+          flex: 1,
+          child: Card(
+            margin: const EdgeInsets.only(top: 16, bottom: 16, right: 16),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Filter Test Tool', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  const Text('Type a sentence to check if it would be flagged.', style: TextStyle(color: Colors.grey)),
+                  const SizedBox(height: 24),
+                  
+                  TextField(
+                    controller: _testController,
+                    maxLines: 3,
+                    decoration: const InputDecoration(
+                      hintText: 'e.g. "This works fine" or "You are a [bad word]"',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: _testPhrase,
+                      icon: const Icon(Icons.check_circle_outline),
+                      label: const Text('Test Filter'),
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                      ),
+                    ),
+                  ),
+                  
+                  if (_testResult != null) ...[
+                    const SizedBox(height: 24),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: _testResult!.startsWith('❌') ? Colors.red.shade50 : Colors.green.shade50,
+                        border: Border.all(color: _testResult!.startsWith('❌') ? Colors.red.shade200 : Colors.green.shade200),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        _testResult!,
+                        style: TextStyle(
+                          fontSize: 16, 
+                          fontWeight: FontWeight.bold,
+                          color: _testResult!.startsWith('❌') ? Colors.red.shade900 : Colors.green.shade900,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ),
         ),
       ],
@@ -658,6 +941,45 @@ class _MaintenanceTab extends StatefulWidget {
 
 class _MaintenanceTabState extends State<_MaintenanceTab> {
   bool _isCleaning = false;
+  bool _isLoadingConfig = true;
+  bool _showNicheChatRooms = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadConfig();
+  }
+
+  Future<void> _loadConfig() async {
+    try {
+       final doc = await FirebaseFirestore.instance.collection('system_settings').doc('app_config').get();
+       if (doc.exists) {
+          setState(() {
+             _showNicheChatRooms = doc.data()?['show_niche_chat_rooms'] ?? true;
+          });
+       }
+    } catch(e) { 
+      debugPrint(e.toString()); 
+    } finally { 
+      if(mounted) setState(() => _isLoadingConfig = false); 
+    }
+  }
+  
+  Future<void> _toggleNicheChatRooms(bool value) async {
+     setState(() => _showNicheChatRooms = value);
+     await FirebaseFirestore.instance.collection('system_settings').doc('app_config').set({
+        'show_niche_chat_rooms': value
+     }, SetOptions(merge: true));
+
+     if (mounted) {
+       ScaffoldMessenger.of(context).showSnackBar(
+         SnackBar(
+           content: Text(value ? 'Niche Chat Rooms Enabled' : 'Niche Chat Rooms Paused (Hidden)'),
+           backgroundColor: value ? Colors.green : Colors.orange,
+         ),
+       );
+     }
+  }
 
   Future<void> _clearAllEvents() async {
     final confirm = await showDialog<bool>(
@@ -762,6 +1084,28 @@ class _MaintenanceTabState extends State<_MaintenanceTab> {
             style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 24),
+
+          // Feature Configuration
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                   const Text('Feature Configuration', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                   const SizedBox(height: 8),
+                   SwitchListTile(
+                     title: const Text('Enable Niche Chat Rooms'),
+                     subtitle: const Text('Show "My Chat Rooms" & "Find Chatrooms" in User App (My Harmony). Turn OFF to pause these features.'),
+                     value: _showNicheChatRooms,
+                     onChanged: _isLoadingConfig ? null : _toggleNicheChatRooms,
+                   ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+
           Card(
             color: Colors.red.shade50,
             child: Padding(

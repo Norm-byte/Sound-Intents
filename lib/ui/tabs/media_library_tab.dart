@@ -521,7 +521,7 @@ class _MediaLibraryTabState extends State<MediaLibraryTab> {
                     }
 
                     return DropdownButtonFormField<String>(
-                      value: dropdownValue,
+                      initialValue: dropdownValue,
                       items: sections.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
                       onChanged: (val) => setState(() => targetSection = val!),
                       decoration: const InputDecoration(
@@ -653,7 +653,7 @@ class _MediaLibraryTabState extends State<MediaLibraryTab> {
                         // Ensure value is valid for dropdown
                         final dropdownValue = sections.contains(value) ? value : validSection;
                         return DropdownButtonFormField<String>(
-                          value: dropdownValue,
+                          initialValue: dropdownValue,
                           items: sections.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
                           onChanged: (val) {
                             if (val != null) {
@@ -1005,7 +1005,7 @@ class _MediaLibraryTabState extends State<MediaLibraryTab> {
                       }
 
                       return DropdownButtonFormField<String>(
-                        value: validTarget,
+                        initialValue: validTarget,
                         items: sections.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
                         onChanged: (val) {
                           if (val != null) targetSectionNotifier.value = val;

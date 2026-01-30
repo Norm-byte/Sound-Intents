@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -20,33 +21,57 @@ class LockedTabWrapper extends StatefulWidget {
 
 class _LockedTabWrapperState extends State<LockedTabWrapper> {
   final TextEditingController _unlockController = TextEditingController();
+  final FocusNode _focusNode = FocusNode(); // ADDED FocusNode
   bool _isLocked = true;
   bool _isLoading = true;
   String? _storedSecurityPassword;
   String? _storedVipCode;
   String? _storedDirectVipCode;
+  StreamSubscription? _userSub;
 
   @override
   void initState() {
     super.initState();
-    _loadAuthSecrets();
+    _initAuthSecrets();
   }
 
-  Future<void> _loadAuthSecrets() async {
-    try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) return;
+  @override
+  void dispose() {
+    _userSub?.cancel();
+    _unlockController.dispose();
+    _focusNode.dispose(); // ADDED dispose
+    super.dispose();
+  }
 
-      // 1. Get Security Password & Direct VIP Code from admin_users
-      final userDoc = await FirebaseFirestore.instance
+  void _initAuthSecrets() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      setState(() => _isLoading = false);
+      return;
+    }
+
+    try {
+       // 1. Subscription to admin user doc for real-time updates (handles password reset)
+      _userSub = FirebaseFirestore.instance
           .collection('admin_users')
           .doc(user.uid)
-          .get();
-      
-      _storedSecurityPassword = userDoc.data()?['security_password'];
-      _storedDirectVipCode = userDoc.data()?['vipCode'];
+          .snapshots()
+          .listen((snapshot) {
+            if (mounted && snapshot.exists) {
+              setState(() {
+                _storedSecurityPassword = snapshot.data()?['security_password'];
+                _storedDirectVipCode = snapshot.data()?['vipCode'];
+                _isLoading = false;
+              });
+            }
+          }, onError: (e) {
+             debugPrint('Error stream admin user: $e');
+             if(mounted) setState(() => _isLoading = false);
+          });
 
       // 2. Get VIP Code from vip_codes collection (super_admin type assigned to user)
+      // This is less likely to change rapidly, so we can keep it as a get or move to stream if needed.
+      // Keeping as get for now to minimize reads, but re-fetching on unlock attempt might be safer.
       final vipQuery = await FirebaseFirestore.instance
           .collection('vip_codes')
           .where('assignee', isEqualTo: user.email)
@@ -57,18 +82,13 @@ class _LockedTabWrapperState extends State<LockedTabWrapper> {
           (d) => d.data()['type'] == 'super_admin', 
           orElse: () => vipQuery.docs.first
         );
-        _storedVipCode = superAdminCode.data()['code'];
+        setState(() {
+          _storedVipCode = superAdminCode.data()['code'];
+        });
       }
-
-      // If no password/code set at all, maybe we should unlock? 
-      // User requirement says "all should have password protection", so we enforce lock unless credentials exist.
-      // But if they don't have a password set, they can't unlock it?
-      // Assuming admins MUST have a password/code set if they are Restricted.
-      
     } catch (e) {
       debugPrint('Error loading auth secrets: $e');
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if(mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -77,17 +97,34 @@ class _LockedTabWrapperState extends State<LockedTabWrapper> {
     if (input.isEmpty) return;
 
     bool unlocked = false;
-    
-    // Check personal security password
-    if (_storedSecurityPassword != null && input == _storedSecurityPassword) unlocked = true;
-    
-    // Check assigned VIP code
-    if (_storedVipCode != null && input == _storedVipCode) unlocked = true;
-    
-    // Check direct VIP code on user doc
-    if (_storedDirectVipCode != null && input == _storedDirectVipCode) unlocked = true;
 
-    // Fallback: Check Global VIP Codes (if allowed by policy? LegalTab does this)
+    // 1. Try Firebase Auth Re-authentication (Primary Method)
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+          AuthCredential credential = EmailAuthProvider.credential(email: user.email!, password: input);
+          // NOTE: reauthenticateWithCredential can throw if the token is stale or password wrong.
+          // It can also cause a state change that disconnects active streams if using FlutterFire.
+          await user.reauthenticateWithCredential(credential);
+          
+          // Force reload user to get fresh token which fixes "permission denied" on other tabs immediately
+          await user.reload(); 
+          
+          unlocked = true;
+          debugPrint('Unlocked via Firebase Auth');
+      }
+    } catch (e) {
+      debugPrint('Auth unlock failed: $e');
+      // If error is "wrong password", we just fail silently to try legacy.
+      // If error is "assertion failed" or network, we might want to log it.
+    }
+
+    // 2. Legacy Checks
+    if (!unlocked && _storedSecurityPassword != null && input == _storedSecurityPassword) unlocked = true;
+    if (!unlocked && _storedVipCode != null && input == _storedVipCode) unlocked = true;
+    if (!unlocked && _storedDirectVipCode != null && input == _storedDirectVipCode) unlocked = true;
+
+    // 3. Fallback: Global VIP Codes
     if (!unlocked) {
         try {
             final query = await FirebaseFirestore.instance
@@ -110,12 +147,14 @@ class _LockedTabWrapperState extends State<LockedTabWrapper> {
       });
       widget.onUnlock?.call(true);
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Incorrect password or VIP code'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Incorrect password or VIP code'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -156,12 +195,23 @@ class _LockedTabWrapperState extends State<LockedTabWrapper> {
               const SizedBox(height: 24),
               TextField(
                 controller: _unlockController,
+                focusNode: _focusNode, // ADDED FocusNode attachment
+                autofocus: true,       // Ensures immediate focus
                 obscureText: true,
-                onSubmitted: (_) => _attemptUnlock(),
-                decoration: const InputDecoration(
+                onSubmitted: (_) { 
+                   _attemptUnlock();
+                   _focusNode.requestFocus(); // Keep focus if failed
+                },
+                decoration: InputDecoration( // CHANGED from const to allow suffix
                   labelText: 'Password / VIP Code',
-                  border: OutlineInputBorder(),
-                  prefixIcon: Icon(Icons.vpn_key),
+                  border: const OutlineInputBorder(),
+                  prefixIcon: const Icon(Icons.vpn_key),
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.clear),
+                    onPressed: () { 
+                       _unlockController.clear(); 
+                    },
+                  ),
                 ),
               ),
               const SizedBox(height: 24),

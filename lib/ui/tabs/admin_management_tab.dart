@@ -31,6 +31,7 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
   // Beta Access & VIP Variables
   final _assigneeController = TextEditingController();
   final _contactController = TextEditingController();
+  final _customCodeController = TextEditingController(); // Added custom code
   bool _isGenerating = false;
   String _selectedType = 'beta_tester'; // beta_tester, admin
 
@@ -40,8 +41,9 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
   bool _generateVipForNewAdmin = false; // New: Integrate VIP generation
   bool _isSavingCode = false;
   bool _isSyncing = false;
-  bool _isLocked = true;
-  bool _isLoadingLockState = true;
+  bool _isLocked = false; 
+  bool _isSuperAdminUnlocked = false; // New: Lock Super Admin Tab by default
+  bool _isLoadingLockState = false;
   bool _isSettingPassword = false;
   String? _storedSecurityPassword;
   String? _storedVipCode;
@@ -52,10 +54,10 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
     'event_creator': false,
     'event_scheduler': false,
     'media_library': false,
-    'chat_management': false, // Add Chat Rooms
+    'chat_rooms': false, // Renamed from Chat Management
     'topics': false,
     'system': false,
-    'notifications': false, // Add Notifications
+    'notifications': false, 
     'legal': false, 
     'documentation': true, // Auto-grant Documentation
   };
@@ -69,125 +71,41 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 7, vsync: this); // Reduced to 7
+    _tabController = TabController(length: 4, vsync: this); // Reduced to 4
     _newAdminPermissions = Map.from(_defaultAdminPermissions);
     _showAddForm = true; // Always show the form by default
     _loadLockState();
   }
 
   Future<void> _loadLockState() async {
+    // Deprecated: No more tab lock.
+  }
+
+  Future<void> _verifySuperAdminAccess() async {
+    final password = _unlockController.text;
+    if (password.isEmpty) return;
+
     setState(() => _isLoadingLockState = true);
+
     try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) return;
-
-      // 1. Get Security Password
-      final userDoc = await FirebaseFirestore.instance
-          .collection('admin_users')
-          .doc(user.uid)
-          .get();
-      
-      _storedSecurityPassword = userDoc.data()?['security_password'];
-
-      // 2. Get VIP Code
-      final vipQuery = await FirebaseFirestore.instance
-          .collection('vip_codes')
-          .where('type', isEqualTo: 'super_admin')
-          .where('assignee', isEqualTo: user.email)
-          .limit(1)
-          .get();
-      
-      if (vipQuery.docs.isNotEmpty) {
-        _storedVipCode = vipQuery.docs.first.data()['code'];
-        _superAdminCodeController.text = _storedVipCode ?? '';
-      }
-
-      // If neither is set, unlock by default (first run)
-      if (_storedSecurityPassword == null && _storedVipCode == null) {
-        if (mounted) setState(() => _isLocked = false);
-      }
-
+      await _authService.reauthenticate(password);
+      setState(() {
+        _isSuperAdminUnlocked = true;
+        _unlockController.clear();
+      });
     } catch (e) {
-      print('Error loading lock state: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Invalid password. Access denied.'), backgroundColor: Colors.red),
+        );
+      }
     } finally {
       if (mounted) setState(() => _isLoadingLockState = false);
     }
   }
 
-  Future<void> _attemptUnlock() async {
-    final input = _unlockController.text.trim();
-    if (input.isEmpty) return;
-
-    bool unlocked = false;
-    if (_storedSecurityPassword != null && input == _storedSecurityPassword) unlocked = true;
-    if (_storedVipCode != null && input == _storedVipCode) unlocked = true;
-
-    // Fallback: Check Firestore for any valid super_admin code
-    if (!unlocked) {
-      try {
-        // Check for any active super_admin code that matches
-        final query = await FirebaseFirestore.instance
-            .collection('vip_codes')
-            .where('code', isEqualTo: input)
-            .where('type', isEqualTo: 'super_admin')
-            .where('status', isEqualTo: 'active')
-            .limit(1)
-            .get();
-            
-        if (query.docs.isNotEmpty) {
-          unlocked = true;
-        }
-      } catch (e) {
-        debugPrint('Error checking VIP code: $e');
-      }
-    }
-
-    if (unlocked) {
-      setState(() {
-        _isLocked = false;
-        _unlockController.clear();
-      });
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Incorrect password or VIP code'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
-  }
-
   Future<void> _updateSecurityPassword() async {
-    setState(() => _isSettingPassword = true);
-    try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) return;
-
-      final newPass = _securityPasswordController.text.trim();
-      if (newPass.isEmpty) throw Exception('Password cannot be empty');
-
-      await FirebaseFirestore.instance
-          .collection('admin_users')
-          .doc(user.uid)
-          .set({'security_password': newPass}, SetOptions(merge: true));
-
-      _storedSecurityPassword = newPass;
-      
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Security password updated!'), backgroundColor: Colors.green),
-        );
-        _securityPasswordController.clear();
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _isSettingPassword = false);
-    }
+    // Deprecated: No more security password.
   }
 
   Future<void> _syncAuthData() async {
@@ -300,10 +218,16 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
           ),
         );
 
-        if (vipCodeToShare != null) {
-          _showShareDialog(vipCodeToShare, _nameController.text.trim(), _emailController.text.trim());
-        }
+        // Create Invitiation Message
+        final inviteMsg = "Welcome to the Harmony by Intent Admin Team, ${_nameController.text.trim()}.\n\n"
+            "Your Operator Access Credentials:\n"
+            "Email: ${_emailController.text.trim()}\n"
+            "Initial Password: ${_passwordController.text.trim()}\n"
+            "App VIP Code: $vipCodeToShare\n\n"
+            "Please log in to the Admin Panel to begin.";
 
+        _showShareDialog(vipCodeToShare, _nameController.text.trim(), _emailController.text.trim(), customMessage: inviteMsg);
+      
         setState(() {
           // _showAddForm = false; // Keep form open as requested
           _generateVipForNewAdmin = false;
@@ -442,9 +366,16 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
     setState(() => _isGenerating = true);
 
     try {
-      final code = _generateCode();
-      // Format as XXXX-XXXX
-      final formattedCode = '${code.substring(0, 4)}-${code.substring(4, 8)}';
+      String formattedCode;
+      if (_customCodeController.text.trim().isNotEmpty) {
+          formattedCode = _customCodeController.text.trim().toUpperCase();
+          // Check for uniqueness potentially (skipped for now, assumption is low volume)
+      } else {
+          final code = _generateCode();
+          // Format as XXXX-XXXX
+          formattedCode = '${code.substring(0, 4)}-${code.substring(4, 8)}';
+      }
+
       final assignee = _assigneeController.text.trim();
       final contact = _contactController.text.trim();
 
@@ -560,50 +491,89 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
   }
 
   void _showGenerateDialog() {
+    _assigneeController.clear();
+    _contactController.clear();
+    _customCodeController.clear();
+    // Default to beta_tester
+    _selectedType = 'beta_tester';
+
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Generate Beta Access Code'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              'This will generate a unique code that bypasses subscription requirements.',
-              style: TextStyle(fontSize: 12, color: Colors.grey),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setStateDialog) {
+          return AlertDialog(
+            title: const Text('Generate VIP Access Code'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Generate a unique code or create a custom one.',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<String>(
+                  value: _selectedType,
+                  decoration: const InputDecoration(
+                    labelText: 'Access Type',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 'beta_tester', child: Text('Beta Tester (App Only)')),
+                    DropdownMenuItem(value: 'super_admin', child: Text('Super Admin (Full Access)')),
+                  ],
+                  onChanged: (val) {
+                    if (val != null) {
+                       setStateDialog(() => _selectedType = val);
+                       // Update parent too for _createCode to use
+                       this.setState(() => _selectedType = val);
+                    }
+                  },
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _customCodeController,
+                  decoration: const InputDecoration(
+                    labelText: 'Custom Code (Optional)',
+                    hintText: 'e.g. SARAH-VIP',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.vpn_key),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _assigneeController,
+                  decoration: const InputDecoration(
+                    labelText: 'Assignee Name (Friend/Family)',
+                    hintText: 'e.g. John Doe',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _contactController,
+                  decoration: const InputDecoration(
+                    labelText: 'Contact Info (Email/Phone)',
+                    hintText: 'e.g. john@example.com',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _assigneeController,
-              decoration: const InputDecoration(
-                labelText: 'Assignee Name (Friend/Family)',
-                hintText: 'e.g. John Doe',
-                border: OutlineInputBorder(),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
               ),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _contactController,
-              decoration: const InputDecoration(
-                labelText: 'Contact Info (Email/Phone)',
-                hintText: 'e.g. john@example.com',
-                border: OutlineInputBorder(),
+              ElevatedButton(
+                onPressed: _isGenerating ? null : _createCode,
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.indigo, foregroundColor: Colors.white),
+                child: _isGenerating 
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Text('Generate Code'),
               ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: _isGenerating ? null : _createCode,
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.indigo, foregroundColor: Colors.white),
-            child: _isGenerating 
-                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                : const Text('Generate Code'),
-          ),
-        ],
+            ],
+          );
+        }
       ),
     );
   }
@@ -624,61 +594,7 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (_isLocked) {
-      return Center(
-        child: SingleChildScrollView(
-          child: Card(
-            elevation: 4,
-            margin: const EdgeInsets.all(32),
-            child: Container(
-              constraints: const BoxConstraints(maxWidth: 400),
-              padding: const EdgeInsets.all(32),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.lock_outline, size: 64, color: Colors.indigo),
-                  const SizedBox(height: 24),
-                  const Text(
-                    'Restricted Access',
-                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Please enter your Security Password or VIP Code to access Admin Management.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.grey),
-                  ),
-                  const SizedBox(height: 32),
-                  TextField(
-                    controller: _unlockController,
-                    obscureText: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Password or VIP Code',
-                      border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.key),
-                    ),
-                    onSubmitted: (_) => _attemptUnlock(),
-                  ),
-                  const SizedBox(height: 24),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: _attemptUnlock,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.indigo,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                      ),
-                      child: const Text('Unlock'),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      );
-    }
+    // REMOVED: Tab Lock Screen Check (_isLocked)
 
     final currentUser = FirebaseAuth.instance.currentUser;
     
@@ -734,13 +650,11 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
                 isScrollable: true,
                 onTap: (_) => setState(() {}),
                 tabs: const [
-                  Tab(icon: Icon(Icons.people), text: 'Add / Manage Admins'),
-                  Tab(icon: Icon(Icons.pending_actions), text: 'Access Requests'),
-                  Tab(icon: Icon(Icons.vpn_key), text: 'Beta & VIP Access'), // Restored
-                  Tab(icon: Icon(Icons.person), text: 'My Profile'),
+                  Tab(icon: Icon(Icons.person_add), text: 'Onboard Admin'),
+                  // Tab(icon: Icon(Icons.pending_actions), text: 'Access Requests'), // Removed
+                  Tab(icon: Icon(Icons.admin_panel_settings), text: 'Super Admin'),
                   Tab(icon: Icon(Icons.build), text: 'Maintenance'),
                   Tab(icon: Icon(Icons.mobile_screen_share), text: 'App Content'),
-                  Tab(icon: Icon(Icons.attach_money), text: 'Pricing'),
                 ],
               ),
             ],
@@ -752,250 +666,20 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
           child: TabBarView(
             controller: _tabController,
             children: [
-              // Tab 1: Active Admins
-              _buildActiveAdminsTab(),
+              // Tab 1: Onboard Admin
+              _buildOnboardAdminTab(),
               
-              // Tab 2: Access Requests
-              _buildAccessRequestsTab(),
+              // Tab 2: Access Requests (Removed)
+              // _buildAccessRequestsTab(),
 
-              // Tab 3: Beta & VIP Access
-              _buildBetaAccessTab(),
+              // Tab 3: Super Admin
+              _buildSuperAdminTab(),
 
-              // Tab 4: My Profile
-              StreamBuilder<DocumentSnapshot>(
-                stream: FirebaseFirestore.instance.collection('admin_users').doc(currentUser?.uid).snapshots(),
-                builder: (context, snapshot) {
-                  if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-                  
-                  final userData = snapshot.data!.data() as Map<String, dynamic>? ?? {};
-                  final name = userData['displayName'] ?? 'Admin';
-                  final role = userData['role'] ?? 'admin';
-                  
-                  return SingleChildScrollView(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'My Admin Profile',
-                          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                        ),
-                        const SizedBox(height: 24),
-                        
-                        // Profile Card
-                        Card(
-                          child: Padding(
-                            padding: const EdgeInsets.all(24),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    CircleAvatar(
-                                      radius: 30,
-                                      backgroundColor: role == 'super-admin' ? Colors.purple : Colors.indigo,
-                                      child: Text(name.isNotEmpty ? name[0].toUpperCase() : 'A', style: const TextStyle(fontSize: 24, color: Colors.white)),
-                                    ),
-                                    const SizedBox(width: 16),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            name,
-                                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                                          ),
-                                          Row(
-                                            children: [
-                                              Text(
-                                                currentUser?.email ?? '',
-                                                style: TextStyle(color: Colors.grey.shade600),
-                                              ),
-                                              const SizedBox(width: 8),
-                                              InkWell(
-                                                onTap: _showChangeEmailDialog,
-                                                child: Padding(
-                                                  padding: const EdgeInsets.all(4.0),
-                                                  child: Icon(Icons.edit, size: 14, color: Colors.grey.shade600),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Chip(
-                                            label: Text(role.toUpperCase(), style: const TextStyle(color: Colors.white, fontSize: 10)),
-                                            backgroundColor: role == 'super-admin' ? Colors.purple : Colors.indigo,
-                                            visualDensity: VisualDensity.compact,
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    IconButton(
-                                      icon: const Icon(Icons.edit),
-                                      tooltip: 'Edit Display Name',
-                                      onPressed: () {
-                                        _nameController.text = name;
-                                        showDialog(
-                                          context: context,
-                                          builder: (ctx) => AlertDialog(
-                                            title: const Text('Edit Profile'),
-                                            content: TextField(
-                                              controller: _nameController,
-                                              decoration: const InputDecoration(labelText: 'Display Name'),
-                                            ),
-                                            actions: [
-                                              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-                                              ElevatedButton(
-                                                onPressed: () async {
-                                                  await FirebaseFirestore.instance
-                                                      .collection('admin_users')
-                                                      .doc(currentUser?.uid)
-                                                      .set({'displayName': _nameController.text.trim()}, SetOptions(merge: true));
-                                                  if (mounted) Navigator.pop(ctx);
-                                                },
-                                                child: const Text('Save'),
-                                              ),
-                                            ],
-                                          ),
-                                        );
-                                      },
-                                    ),
-                                    const SizedBox(width: 8),
-                                    ElevatedButton.icon(
-                                      icon: _isSyncing 
-                                          ? const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.blue))
-                                          : const Icon(Icons.sync, size: 16),
-                                      label: Text(_isSyncing ? 'Syncing...' : 'Sync Data'),
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: Colors.blue.shade50,
-                                        foregroundColor: Colors.blue.shade800,
-                                        elevation: 0,
-                                      ),
-                                      onPressed: _isSyncing ? null : _syncAuthData,
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        
-                        const SizedBox(height: 24),
-                        
-                        // App Access Code Section
-                        Card(
-                          child: Padding(
-                            padding: const EdgeInsets.all(24),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'Super Admin App Access',
-                                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                                ),
-                                const SizedBox(height: 8),
-                                const Text(
-                                  'Set a permanent access code for yourself to use in the mobile app. This code will never expire.',
-                                  style: TextStyle(color: Colors.grey),
-                                ),
-                                const SizedBox(height: 16),
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: TextField(
-                                        controller: _superAdminCodeController,
-                                        decoration: const InputDecoration(
-                                          labelText: 'My App Access Code',
-                                          hintText: 'e.g. app1',
-                                          border: OutlineInputBorder(),
-                                          prefixIcon: Icon(Icons.vpn_key),
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 16),
-                                    ElevatedButton(
-                                      onPressed: _isSavingCode ? null : () => _updateSuperAdminCode(),
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: Colors.indigo,
-                                        foregroundColor: Colors.white,
-                                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                                      ),
-                                      child: _isSavingCode 
-                                          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                                          : const Text('Save Code'),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-
-                        const SizedBox(height: 24),
-
-                        // Tab Security Section
-                        Card(
-                          child: Padding(
-                            padding: const EdgeInsets.all(24),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'Admin Tab Security',
-                                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                                ),
-                                const SizedBox(height: 8),
-                                const Text(
-                                  'Set a password to lock this Admin Management tab. You can unlock it with this password OR your VIP Code.',
-                                  style: TextStyle(color: Colors.grey),
-                                ),
-                                const SizedBox(height: 16),
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: TextField(
-                                        controller: _securityPasswordController,
-                                        obscureText: true,
-                                        decoration: const InputDecoration(
-                                          labelText: 'New Security Password',
-                                          hintText: 'Enter password',
-                                          border: OutlineInputBorder(),
-                                          prefixIcon: Icon(Icons.lock),
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 16),
-                                    ElevatedButton(
-                                      onPressed: _isSettingPassword ? null : _updateSecurityPassword,
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: Colors.indigo,
-                                        foregroundColor: Colors.white,
-                                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                                      ),
-                                      child: _isSettingPassword 
-                                          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                                          : const Text('Set Password'),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-              ),
-
-              // Tab 5: Maintenance
+              // Tab 4: Maintenance
               const _MaintenanceTab(),
 
-              // Tab 6: App Content
+              // Tab 5: App Content
               const AppContentTab(),
-
-              // Tab 7: Pricing
-              const _PricingTab(),
             ],
           ),
         ),
@@ -1003,163 +687,560 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
     );
   }
 
-  Widget _buildBetaAccessTab() {
-    return Padding(
+  Widget _buildOnboardAdminTab() {
+    return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // New Admin Form (Restored Layout)
+          Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: Colors.indigo.shade50,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.indigo.shade100),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.person_add, color: Colors.indigo),
+                    const SizedBox(width: 8),
+                    const Text(
+                      'Create New Admin Operators Access Codes',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.indigo),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                
+                Column(
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _nameController,
+                            decoration: const InputDecoration(
+                              labelText: 'Full Name',
+                              border: OutlineInputBorder(),
+                              filled: true,
+                              fillColor: Colors.white,
+                              prefixIcon: Icon(Icons.person),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: TextField(
+                            controller: _emailController,
+                            decoration: const InputDecoration(
+                              labelText: 'Email Address *',
+                              border: OutlineInputBorder(),
+                              filled: true,
+                              fillColor: Colors.white,
+                              prefixIcon: Icon(Icons.email),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _passwordController,
+                            obscureText: false,
+                            decoration: const InputDecoration(
+                              labelText: 'Initial Password *',
+                              border: OutlineInputBorder(),
+                              filled: true,
+                              fillColor: Colors.white,
+                              prefixIcon: Icon(Icons.lock),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        ElevatedButton.icon(
+                          icon: const Icon(Icons.vpn_key),
+                          label: const Text('Generate Password'),
+                          onPressed: () {
+                            if (mounted) {
+                               setState(() {
+                                  _passwordController.text = _generateRandomPassword();
+                               });
+                            }
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.amber.shade700,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                
+                const Text('Tab Permissions:', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 16,
+                  runSpacing: 8,
+                  children: _newAdminPermissions.keys.map((key) {
+                    return SizedBox(
+                      width: 200,
+                      child: CheckboxListTile(
+                        title: Text(key.replaceAll('_', ' ').toUpperCase(), style: const TextStyle(fontSize: 12)),
+                        value: _newAdminPermissions[key],
+                        onChanged: (val) {
+                          setState(() {
+                            _newAdminPermissions[key] = val ?? false;
+                          });
+                        },
+                        controlAffinity: ListTileControlAffinity.leading,
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                      ),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 24),
+                Center(
+                  child: ElevatedButton.icon(
+                    onPressed: _addAdmin,
+                    icon: const Icon(Icons.save),
+                    label: const Text('Create Admin User'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.indigo, // Darker blue
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 16),
+                      textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        
+          const SizedBox(height: 32),
+          const Text('Current Admin Team', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+
+          // Simple Read-Only List
+          StreamBuilder<QuerySnapshot>(
+            stream: FirebaseFirestore.instance.collection('admin_users').orderBy('createdAt', descending: true).snapshots(),
+            builder: (context, snapshot) {
+              if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+              final docs = snapshot.data!.docs;
+              
+              if (docs.isEmpty) return const Text('No other admins found.');
+
+              return Card(
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: docs.length,
+                  separatorBuilder: (ctx, i) => const Divider(height: 1),
+                  itemBuilder: (context, index) {
+                    final data = docs[index].data() as Map<String, dynamic>;
+                    final name = data['displayName'] ?? 'Unknown';
+                    final role = data['role'] ?? 'admin';
+                    final isActive = data['isActive'] ?? true;
+                    // Hiding Super Admin from here as requested
+                    if (role == 'super-admin') return const SizedBox.shrink();
+
+                    return ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: isActive ? Colors.indigo.shade100 : Colors.red.shade100,
+                        child: Icon(Icons.person, color: isActive ? Colors.indigo : Colors.red),
+                      ),
+                      title: Text(name),
+                      subtitle: Text(role.toUpperCase()),
+                      trailing: isActive 
+                          ? const Chip(label: Text('ACTIVE', style: TextStyle(color: Colors.white, fontSize: 10)), backgroundColor: Colors.green)
+                          : const Chip(label: Text('INACTIVE', style: TextStyle(color: Colors.white, fontSize: 10)), backgroundColor: Colors.red),
+                    );
+                  },
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _resetUserPassword(String uid, String email) async {
+    // Generate new random password
+    final newPassword = _generateRandomPassword();
+    
+    // In a real app, this would call a Cloud Function to update Firebase Auth.
+    // Since we are client-side only for now, we will update the record and SEND A RESET EMAIL.
+    // Changing another user's password directly requires Cloud Admin SDK (Backend).
+    
+    await _authService.sendPasswordResetEmail(email);
+    
+    // Update the record for the Super Admin's reference (Note: this is just a record)
+    await FirebaseFirestore.instance.collection('admin_users').doc(uid).update({
+      'initialPassword': 'Reset Email Sent: ${DateTime.now().toIso8601String().substring(0, 10)}',
+    });
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Password reset email sent to $email. They can set a new password via the link.')),
+      );
+    }
+  }
+
+  String _generateRandomPassword() {
+    const chars = 'AaBbCcDdEeFfGgHhIiJjKkLlMmNnOoPpQqRrSsTtUuVvWwXxYyZz1234567890!@#\$%^&*';
+    final rnd = Random();
+    return String.fromCharCodes(Iterable.generate(12, (_) => chars.codeUnitAt(rnd.nextInt(chars.length))));
+  }
+
+    // --- SUPER ADMIN TAB & HELPERS ---
+
+  Widget _buildSuperAdminTab() {
+    final currentUser = FirebaseAuth.instance.currentUser;
+
+    return StreamBuilder<DocumentSnapshot>(
+      stream: FirebaseFirestore.instance.collection('admin_users').doc(currentUser?.uid).snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) return Center(child: SelectableText('Error loading profile: ${snapshot.error}', style: const TextStyle(color: Colors.red)));
+        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+        
+        final userData = snapshot.data!.data() as Map<String, dynamic>? ?? {};
+        final role = userData['role'] ?? 'admin';
+        
+        // Security Check: Only Super Admin sees this content
+        if (role != 'super-admin') {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.lock_outline, size: 64, color: Colors.grey.shade400),
+                const SizedBox(height: 16),
+                const Text('Restricted Access', style: TextStyle(fontSize: 20, color: Colors.grey, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                const Text('Only Super Administrators can view this tab.', style: TextStyle(color: Colors.grey)),
+              ],
+            ),
+          );
+        }
+
+        // DOUBLE SECURITY: Lock Screen for Super Admin
+        if (!_isSuperAdminUnlocked) {
+          return Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(16.0),
+              child: Card(
+                elevation: 8,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+                child: Container(
+                  width: 400,
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.security, size: 48, color: Colors.indigo),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Super Admin Verification',
+                        style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Please enter your password to access restricted controls.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.grey),
+                      ),
+                      const SizedBox(height: 24),
+                      TextField(
+                        controller: _unlockController,
+                        obscureText: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Password',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.lock),
+                        ),
+                        onSubmitted: (_) => _verifySuperAdminAccess(),
+                      ),
+                      const SizedBox(height: 24),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: () => _unlockController.clear(),
+                            child: const Text('Clear'),
+                          ),
+                          const SizedBox(width: 8),
+                          ElevatedButton(
+                            onPressed: _verifySuperAdminAccess,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.indigo,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                            ),
+                            child: _isLoadingLockState 
+                              ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                              : const Text('Unlock Access'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+
+        return DefaultTabController(
+          length: 3, 
+          child: Column(
+            children: [
+              Container(
+                color: Colors.white,
+                child: const TabBar(
+                  labelColor: Colors.purple,
+                  unselectedLabelColor: Colors.grey,
+                  indicatorColor: Colors.purple,
+                  tabs: [
+                    Tab(text: 'My Profile'),
+                    Tab(text: 'Master Admin List'),
+                    Tab(text: 'Beta & VIP Codes'),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: TabBarView(
+                  children: [
+                    _buildSuperAdminProfile(userData),
+                    _buildMasterAdminList(),
+                    _buildVipManagement(),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      }
+    );
+  }
+
+  Widget _buildSuperAdminProfile(Map<String, dynamic> ignoredUserData) {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance.collection('admin_users').where('role', isEqualTo: 'super-admin').snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) return Center(child: SelectableText('Error loading admins: ${snapshot.error}', style: const TextStyle(color: Colors.red)));
+        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+        final admins = snapshot.data!.docs;
+
+        return SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Super Admin Team', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.purple)),
+              const SizedBox(height: 16),
+              ...admins.map((doc) {
+                 final data = doc.data() as Map<String, dynamic>;
+                 final uid = doc.id;
+                 final isMe = currentUser?.uid == uid;
+                 final name = data['displayName'] ?? 'Super Admin';
+                 final email = data['email'] ?? 'No Email';
+                 
+                 return Card(
+                   margin: const EdgeInsets.only(bottom: 16),
+                   child: Padding(
+                     padding: const EdgeInsets.all(24),
+                     child: Column(
+                       children: [
+                         ListTile(
+                           leading: const CircleAvatar(backgroundColor: Colors.purple, child: Icon(Icons.security, color: Colors.white)),
+                           title: Text('$name${isMe ? " (You)" : ""}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                           subtitle: Column(
+                             crossAxisAlignment: CrossAxisAlignment.start,
+                             children: [
+                               Text(email),
+                               if (isMe) ...[
+                                 const SizedBox(height: 8),
+                                 Row(
+                                   children: [
+                                     const Text('Latest Recorded Password: ', style: TextStyle(color: Colors.grey)),
+                                     // Obfuscated password text logic
+                                     StatefulBuilder(builder: (context, setStateObscure) {
+                                        // We use a local variable key for this builder to toggle state, but simpler to just use a custom widget or generic state.
+                                        // Since we can't easily add state variables for dynamic list, we'll just show it or hide it.
+                                        // Actually, let's just make it selectable. Obscuring it requires state.
+                                        // We will just label it clearly.
+                                        return Tooltip(
+                                          message: "This is the password recorded during the last Global Reset. If you changed it manually elsewhere, this may be outdated.",
+                                          child: Text(data['initialPassword'] ?? 'Not recorded', style: const TextStyle(fontWeight: FontWeight.bold)),
+                                        );
+                                     }),
+                                   ],
+                                 ),
+                               ],
+                             ],
+                           ),
+                           trailing: isMe 
+                              ? Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    OutlinedButton(
+                                      onPressed: _showChangeEmailDialog,
+                                      child: const Text('Change Email'),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    ElevatedButton(
+                                      onPressed: () => _showChangeSuperAdminPasswordDialog(),
+                                      style: ElevatedButton.styleFrom(backgroundColor: Colors.indigo, foregroundColor: Colors.white),
+                                      child: const Text('Change Password'),
+                                    ),
+                                  ],
+                                )
+                              : IconButton(
+                                  icon: const Icon(Icons.delete, color: Colors.red),
+                                  tooltip: 'Delete this Super Admin',
+                                  onPressed: () {
+                                    showDialog(
+                                        context: context,
+                                        builder: (ctx) => AlertDialog(
+                                          title: const Text('Delete Super Admin'),
+                                          content: Text('Are you sure you want to remove $name ($email)?'),
+                                          actions: [
+                                            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+                                            ElevatedButton(
+                                              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                                              onPressed: () async {
+                                                await FirebaseFirestore.instance.collection('admin_users').doc(uid).delete();
+                                                if(mounted) Navigator.pop(ctx);
+                                              },
+                                              child: const Text('Delete'),
+                                            )
+                                          ]
+                                        )
+                                    );
+                                  },
+                                ),
+                         ),
+                         if (isMe) ...[
+                            const Divider(),
+                            _buildGlobalPasswordResetSection(),
+                         ]
+                       ],
+                     ),
+                   ),
+                 );
+              }).toList(),
+              
+              const SizedBox(height: 24),
+              _buildGlobalAppSettings(),
+            ],
+          ),
+        );
+      }
+    );
+  }
+
+  void _showChangeSuperAdminPasswordDialog() {
+    final passController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Change Super Admin Password'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+             const Text('This updates your IMMEDIATE login password for Firebase Auth. It also updates the record causing the System tab lock to update.'),
+             const SizedBox(height: 16),
+             TextField(
+               controller: passController,
+               obscureText: true,
+               decoration: const InputDecoration(labelText: 'New Password', border: OutlineInputBorder()),
+             ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              final newPass = passController.text.trim();
+              if(newPass.length < 6) {
+                 ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Password too short')));
+                 return;
+              }
+              Navigator.pop(ctx);
+              
+              try {
+                // Update Auth
+                await FirebaseAuth.instance.currentUser!.updatePassword(newPass);
+                // Update Record (For System Tab Lock consistency check if we used that, but we use Auth now. 
+                // We update initialPassword just for record keeping on the card)
+                await FirebaseFirestore.instance.collection('admin_users').doc(FirebaseAuth.instance.currentUser!.uid).update({
+                  'initialPassword': newPass,
+                  // Ensure legacy field is dead
+                  'security_password': FieldValue.delete(),
+                });
+                
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Password Updated Successfully')));
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+              }
+            },
+            child: const Text('Update'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGlobalPasswordResetSection() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.red.shade50,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.red.shade200),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Beta & VIP Access',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                  ),
-                  SizedBox(height: 4),
-                  Text(
-                    'Manage access codes for friends, family, and beta testers.',
-                    style: TextStyle(color: Colors.grey),
-                  ),
-                ],
-              ),
-              const Spacer(),
-              ElevatedButton.icon(
-                onPressed: _showGenerateDialog,
-                icon: const Icon(Icons.add),
-                label: const Text('Generate New Code'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.indigo,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                ),
+              Icon(Icons.warning_amber_rounded, color: Colors.red.shade900),
+              const SizedBox(width: 12),
+              Text(
+                'Emergency credential Reset',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.red.shade900),
               ),
             ],
           ),
-          const SizedBox(height: 24),
-          
-          // Codes List
-          Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection('vip_codes')
-                  .orderBy('createdAt', descending: true)
-                  .snapshots(),
-              builder: (context, snapshot) {
-                if (snapshot.hasError) return const Text('Something went wrong');
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-
-                final docs = snapshot.data?.docs ?? [];
-                // Filter out admin gifts to keep this list for "Users" only
-                final userDocs = docs.where((d) {
-                    final data = d.data() as Map<String, dynamic>;
-                    return data['type'] != 'admin_gift';
-                }).toList();
-
-                if (userDocs.isEmpty) {
-                  return Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.vpn_key_off, size: 64, color: Colors.grey.shade300),
-                        const SizedBox(height: 16),
-                        Text(
-                          'No active user codes found',
-                          style: TextStyle(color: Colors.grey.shade500),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-
-                return Card(
-                  child: ListView.separated(
-                    itemCount: userDocs.length,
-                    separatorBuilder: (context, index) => const Divider(height: 1),
-                    itemBuilder: (context, index) {
-                      final doc = userDocs[index];
-                      final data = doc.data() as Map<String, dynamic>;
-                      final status = data['status'] ?? 'active';
-                      final isRedeemed = status == 'redeemed';
-                      final isRevoked = status == 'revoked';
-                      
-                      Color statusColor = Colors.green;
-                      if (isRedeemed) statusColor = Colors.blue;
-                      if (isRevoked) statusColor = Colors.red;
-
-                      return ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: statusColor.withOpacity(0.1),
-                          child: Icon(
-                            isRedeemed ? Icons.check : (isRevoked ? Icons.block : Icons.vpn_key),
-                            color: statusColor,
-                            size: 20,
-                          ),
-                        ),
-                        title: Row(
-                          children: [
-                            Text(
-                              data['code'] ?? 'UNKNOWN',
-                              style: const TextStyle(
-                                fontFamily: 'monospace',
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16,
-                                letterSpacing: 1,
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Chip(
-                              label: Text(status.toString().toUpperCase(), style: const TextStyle(fontSize: 10, color: Colors.white)),
-                              backgroundColor: statusColor,
-                              visualDensity: VisualDensity.compact,
-                              padding: EdgeInsets.zero,
-                            ),
-                          ],
-                        ),
-                        subtitle: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const SizedBox(height: 4),
-                            Text('Assigned to: ${data['assignee'] ?? 'Unknown'}'),
-                            if (data['contactInfo'] != null && data['contactInfo'].toString().isNotEmpty)
-                              Text('Contact: ${data['contactInfo']}', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
-                            if (isRedeemed)
-                              Text(
-                                'Redeemed by: ${data['redeemedBy'] ?? 'Unknown User'}',
-                                style: TextStyle(fontSize: 12, color: Colors.blue.shade700),
-                              ),
-                          ],
-                        ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (!isRevoked && !isRedeemed)
-                              IconButton(
-                                icon: const Icon(Icons.share, color: Colors.indigo),
-                                tooltip: 'Share Code',
-                                onPressed: () => _showShareDialog(
-                                  data['code'] ?? '', 
-                                  data['assignee'] ?? 'Friend', 
-                                  data['contactInfo'] ?? ''
-                                ),
-                              ),
-                            if (!isRevoked && !isRedeemed)
-                              IconButton(
-                                icon: const Icon(Icons.cancel_outlined, color: Colors.red),
-                                tooltip: 'Revoke Code',
-                                onPressed: () => _revokeCode(doc.id),
-                              ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
-                );
-              },
+          const SizedBox(height: 12),
+          const Text(
+            'This action will generate new passwords for ALL other administrators and allow you to set a new Super Admin password. Use this if you suspect a security breach or need to rotate all keys.',
+            style: TextStyle(fontSize: 14),
+          ),
+          const SizedBox(height: 16),
+          Center(
+            child: ElevatedButton.icon(
+              onPressed: _showGlobalPasswordResetDialog,
+              icon: const Icon(Icons.lock_reset),
+              label: const Text('RESET ALL PASSWORDS'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                textStyle: const TextStyle(fontWeight: FontWeight.bold),
+              ),
             ),
           ),
         ],
@@ -1167,7 +1248,526 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
     );
   }
 
-  Widget _buildActiveAdminsTab() {
+  void _showGlobalPasswordResetDialog() {
+    final newSuperPasswordController = TextEditingController();
+    
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Global Password Reset'),
+        content: SizedBox(
+          width: 400,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '1. You may enter a new "Supreme Password" for yourself below (or leave blank to keep current).\n'
+                '2. All other admins will receive new randomly generated passwords.\n'
+                '3. You will be able to share these new credentials immediately.',
+                style: TextStyle(fontSize: 14),
+              ),
+              const SizedBox(height: 24),
+              TextField(
+                controller: newSuperPasswordController,
+                obscureText: true,
+                decoration: const InputDecoration(
+                  labelText: 'New Super Admin Password (Optional)',
+                  hintText: 'Leave empty to keep current',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.admin_panel_settings),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _executeGlobalReset(newSuperPasswordController.text.trim());
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+            child: const Text('EXECUTE RESET'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _executeGlobalReset(String newSuperPass) async {
+    setState(() => _isSyncing = true); // Show loading
+    String status = "Initializing...";
+    
+    try {
+      final batch = FirebaseFirestore.instance.batch();
+      final adminUsersRef = FirebaseFirestore.instance.collection('admin_users');
+      final currentUser = FirebaseAuth.instance.currentUser;
+      final currentUid = currentUser?.uid;
+
+      // 1. Update Super Admin if requested
+      if (newSuperPass.isNotEmpty) {
+        if (currentUid != null) {
+          status = "Updating your password...";
+          // Update Auth
+          try {
+            await currentUser!.updatePassword(newSuperPass);
+          } catch (e) {
+             throw Exception('Failed to update your password: $e. (Try logging out and in again)');
+          }
+          
+          // Update Record - Use set/merge to avoid "Not Found" errors if doc is missing
+          batch.set(adminUsersRef.doc(currentUid), {
+            'initialPassword': 'Set by Reset: ${DateTime.now().toIso8601String().substring(0, 10)}',
+            'security_password': FieldValue.delete(), // DELETE LEGACY SECURITY PASSWORD 
+          }, SetOptions(merge: true));
+        }
+      }
+
+      // 2. Fetch all other admins
+      status = "Fetching admins...";
+      final query = await adminUsersRef.get();
+      final List<Map<String, String>> updatedAdmins = [];
+
+      status = "Generating new credentials...";
+      for (var doc in query.docs) {
+        if (doc.id == currentUid) continue; // Skip self
+        final data = doc.data();
+        if (data['role'] == 'super-admin') continue; // Safety check
+
+        final newPass = _generateRandomPassword();
+        
+        // Use set/merge for robustness
+        batch.set(doc.reference, {
+          'initialPassword': newPass,
+          'security_password': FieldValue.delete(), // DELETE LEGACY SECURITY PASSWORD for others too
+        }, SetOptions(merge: true));
+        
+        updatedAdmins.add({
+          'name': data['displayName'] ?? 'Admin',
+          'email': data['email'] ?? '',
+          'pass': newPass,
+        });
+      }
+
+      // 3. Commit
+      status = "Saving to database...";
+      await batch.commit();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Global Reset Complete! Credentials Updated.'), backgroundColor: Colors.green),
+        );
+        _showMasterShareDialog(updatedAdmins);
+      }
+
+    } catch (e) {
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Error during Reset'),
+            content: Text('Failed at step: "$status"\n\nDetails: $e'),
+            actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSyncing = false);
+    }
+  }
+
+  void _showMasterShareDialog(List<Map<String, String>>? admins) {
+    if (admins == null || admins.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No admins to share with.')));
+      return;
+    }
+
+    final emails = admins.map((e) => e['email']!).join(',');
+    final subject = 'IMPORTANT: Harmony by Intent Admin Credentials Update';
+    final body = "Dear Admin Team,\n\n"
+                 "A global security reset has been performed. Please find your new credentials below:\n\n"
+                 "${admins.map((e) => "${e['name']}: ${e['email']} - Password: ${e['pass']}").join('\n')}\n\n"
+                 "Please confirm receipt of this message with a reply.\n\n"
+                 "Best regards,\nSuper Admin";
+    
+    final encodedBody = Uri.encodeComponent(body);
+    final encodedSubject = Uri.encodeComponent(subject);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Distribute Credentials'),
+        content: SizedBox(
+          width: 500,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('You can now email all admins with their new credentials including a receipt confirmation request.'),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                icon: const Icon(Icons.email),
+                label: const Text('Open Email Client (To All)'),
+                onPressed: () async {
+                   final url = Uri.parse('mailto:?bcc=$emails&subject=$encodedSubject&body=$encodedBody');
+                    try {
+                      if (await canLaunchUrl(url)) {
+                        await launchUrl(url);
+                      } else {
+                         await launchUrl(url, mode: LaunchMode.externalApplication);
+                      }
+                    } catch (e) {
+                      debugPrint('Error launching email: $e');
+                    }
+                },
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.indigo, foregroundColor: Colors.white, minimumSize: const Size(double.infinity, 50)),
+              ),
+               const SizedBox(height: 16),
+               const Text('Or copy the summary to clipboard:', style: TextStyle(fontWeight: FontWeight.bold)),
+               const SizedBox(height: 8),
+               Container(
+                 height: 150,
+                 width: double.infinity,
+                 padding: const EdgeInsets.all(8),
+                 decoration: BoxDecoration(color: Colors.grey.shade100, border: Border.all(color: Colors.grey.shade300)),
+                 child: SingleChildScrollView(child: SelectableText(body)),
+               ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+               Clipboard.setData(ClipboardData(text: body));
+               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
+            },
+            child: const Text('Copy to Clipboard'),
+          ),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Done')),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGlobalAppSettings() {
+    return StreamBuilder<DocumentSnapshot>(
+      stream: FirebaseFirestore.instance.collection('settings').doc('global').snapshots(),
+      builder: (context, snapshot) {
+        final data = snapshot.hasData && snapshot.data!.exists 
+            ? snapshot.data!.data() as Map<String, dynamic> 
+            : <String, dynamic>{};
+            
+        final supportEmail = data['supportEmail'] ?? '';
+        
+        return Card(
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.settings_applications, color: Colors.indigo),
+                    SizedBox(width: 12),
+                    Text('Global App Configuration', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                const Text('Public contact details displayed in the app.', style: TextStyle(color: Colors.grey)),
+                const Divider(height: 32),
+                
+                ListTile(
+                  title: const Text('Support / Contact Email'),
+                  subtitle: Text(supportEmail.isNotEmpty ? supportEmail : 'Not Set (Using Default)'),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.edit, color: Colors.indigo),
+                    onPressed: () => _showUpdateSupportEmailDialog(supportEmail),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+    );
+  }
+
+  void _showUpdateSupportEmailDialog(String current) {
+    final controller = TextEditingController(text: current);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Update Support Email'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Enter the dedicated email address for app support inquiries (e.g., admin@harmonybyintent.com).'),
+            const SizedBox(height: 16),
+            TextField(
+              controller: controller,
+              decoration: const InputDecoration(
+                labelText: 'Support Email Address',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.email),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              await FirebaseFirestore.instance.collection('settings').doc('global').set({
+                'supportEmail': controller.text.trim(),
+                'updatedAt': FieldValue.serverTimestamp(),
+              }, SetOptions(merge: true));
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: const Text('Save Configuration'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMasterAdminList() {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance.collection('admin_users').snapshots(),
+      builder: (context, snapshot) {
+         if (snapshot.hasError) {
+           return Center(
+             child: Padding(
+               padding: const EdgeInsets.all(16.0),
+               child: Column(
+                 mainAxisSize: MainAxisSize.min,
+                 children: [
+                   const Icon(Icons.error_outline, color: Colors.red, size: 48),
+                   const SizedBox(height: 16),
+                   SelectableText('Error loading admins: ${snapshot.error}', style: const TextStyle(color: Colors.red)),
+                 ],
+               ),
+             ),
+           );
+         }
+         if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+         
+         // Filter out Super Admins from this list as per requirement
+         final docs = snapshot.data!.docs.where((doc) {
+            final data = doc.data() as Map<String, dynamic>;
+            return data['role'] != 'super-admin';
+         }).toList();
+
+         return Column(
+           children: [
+             Padding(
+               padding: const EdgeInsets.all(16.0),
+               child: ElevatedButton.icon(
+                 onPressed: () {
+                    // Collect all admins and share (excluding super admin from share list? no, logic handles that)
+                    final List<Map<String, String>> admins = [];
+                    for(var doc in docs) {
+                       final d = doc.data() as Map<String, dynamic>;
+                       // logic above already filtered super-admin, but safe to keep check or just use filtered docs
+                       admins.add({
+                         'name': d['displayName'] ?? 'Admin',
+                         'email': d['email'] ?? '',
+                         'pass': d['initialPassword'] ?? 'Not set',
+                       });
+                    }
+                    _showMasterShareDialog(admins);
+                 },
+                 icon: const Icon(Icons.share),
+                 label: const Text('MASTER SHARE: Email All Admins'),
+                 style: ElevatedButton.styleFrom(backgroundColor: Colors.indigo, foregroundColor: Colors.white),
+               ),
+             ),
+             Expanded(
+               child: ListView.builder(
+                 padding: const EdgeInsets.all(24),
+                 itemCount: docs.length,
+                 itemBuilder: (ctx, i) {
+                   final doc = docs[i];
+                   final data = doc.data() as Map<String, dynamic>;
+                   final permissions = List<String>.from(data['permissions'] ?? []);
+                   
+                   return Card(
+                     margin: const EdgeInsets.only(bottom: 12),
+                     child: ExpansionTile(
+                       title: Text('${data['displayName']} (${data['role']})'),
+                       subtitle: Text(data['email'] ?? ''),
+                       children: [
+                         Padding(
+                           padding: const EdgeInsets.all(16.0),
+                           child: Column(
+                             crossAxisAlignment: CrossAxisAlignment.start,
+                             children: [
+                               Text('Initial Password Record: ${data['initialPassword'] ?? 'Not set'}'),
+                               const SizedBox(height: 8),
+                               Wrap(
+                                 spacing: 8,
+                                 children: permissions.map((p) => Chip(label: Text(p), visualDensity: VisualDensity.compact)).toList(),
+                               ),
+                               const SizedBox(height: 8),
+                               if (data['vipCode'] != null)
+                                 SelectableText('Link User App Access Code: ${data['vipCode']}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.purple)),
+                               const SizedBox(height: 8),
+                               if (data['role'] != 'super-admin')
+                                 Row(
+                                   mainAxisAlignment: MainAxisAlignment.end,
+                                   children: [
+                                      IconButton(
+                                       icon: const Icon(Icons.share, color: Colors.indigo),
+                                       tooltip: 'Share Credentials',
+                                       onPressed: () {
+                                          final msg = "Hello ${data['displayName']},\n\nHere are your updated admin credentials:\n"
+                                                      "Email: ${data['email']}\n"
+                                                      "Password: ${data['initialPassword']}\n\n"
+                                                      "Please confirm receipt by replying to this message.";
+                                          _showShareDialog(data['initialPassword'] ?? '', data['displayName'] ?? '', data['email'] ?? '', customMessage: msg);
+                                       },
+                                     ),
+                                     TextButton.icon(
+                                       icon: const Icon(Icons.edit_note, size: 16),
+                                       label: const Text('Update Pwd Record'),
+                                       onPressed: () {
+                                          final controller = TextEditingController(text: data['initialPassword']);
+                                          showDialog(
+                                            context: context,
+                                            builder: (ctx) => AlertDialog(
+                                              title: const Text('Update Password Record'),
+                                              content: Column(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  const Text(
+                                                    'NOTE: This only updates the text record below. It DOES NOT change their actual login password. '
+                                                    'To force a password change, use "Send Password Reset Email".',
+                                                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                                                  ),
+                                                  const SizedBox(height: 16),
+                                                  TextField(
+                                                    controller: controller,
+                                                    decoration: const InputDecoration(labelText: 'New Password Reference'),
+                                                  ),
+                                                ],
+                                              ),
+                                              actions: [
+                                                TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+                                                ElevatedButton(
+                                                  onPressed: () {
+                                                     FirebaseFirestore.instance.collection('admin_users').doc(doc.id).update({
+                                                       'initialPassword': controller.text.trim(),
+                                                       // Also ensure legacy is gone
+                                                       'security_password': FieldValue.delete(),
+                                                     });
+                                                     Navigator.pop(ctx);
+                                                  },
+                                                  child: const Text('Save Record'),
+                                                ),
+                                              ],
+                                            ),
+                                          );
+                                       },
+                                     ),
+                                     TextButton.icon(
+                                       icon: const Icon(Icons.lock_reset, size: 16),
+                                       label: const Text('Send Reset Email'),
+                                       onPressed: () => _resetUserPassword(doc.id, data['email']), 
+                                     ),
+                                     const SizedBox(width: 8),
+                                     TextButton(
+                                       onPressed: () {
+                                           // Delete Admin User
+                                           FirebaseFirestore.instance.collection('admin_users').doc(doc.id).delete();
+                                       }, 
+                                       style: TextButton.styleFrom(foregroundColor: Colors.red),
+                                       child: const Text('Revoke / Delete Admin'), 
+                                     ),
+                                   ],
+                                 ),
+                             ],
+                           ),
+                         ),
+                       ],
+                     ),
+                   );
+                 }
+               ),
+             ),
+           ],
+         );
+      }
+    );
+  }
+
+  Widget _buildVipManagement() {
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        children: [
+          ElevatedButton.icon(
+            onPressed: _showGenerateDialog,
+            icon: const Icon(Icons.add),
+            label: const Text('Generate VIP Code'),
+          ),
+          const SizedBox(height: 24),
+          Expanded(
+            child: StreamBuilder<QuerySnapshot>(
+              stream: FirebaseFirestore.instance.collection('vip_codes').orderBy('createdAt', descending: true).snapshots(),
+              builder: (context, snapshot) {
+                if (snapshot.hasError) {
+                  return Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.error_outline, color: Colors.red, size: 48),
+                          const SizedBox(height: 16),
+                          SelectableText('Error loading VIP codes: ${snapshot.error}', style: const TextStyle(color: Colors.red)),
+                        ],
+                      ),
+                    ),
+                  );
+                }
+                if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+                return ListView.separated(
+                  itemCount: snapshot.data!.docs.length,
+                  separatorBuilder: (ctx, i) => const Divider(),
+                  itemBuilder: (ctx, i) {
+                    final doc = snapshot.data!.docs[i];
+                    final data = doc.data() as Map<String, dynamic>;
+                    return ListTile(
+                      title: Text(data['code'] ?? '???', style: const TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.bold)),
+                      subtitle: Text('To: ${data['assignee'] ?? 'Unknown'}'),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(icon: const Icon(Icons.share), onPressed: () => _showShareDialog(data['code'], data['assignee'] ?? '', '')),
+                          IconButton(icon: const Icon(Icons.delete, color: Colors.grey), onPressed: () => _deleteCode(doc.id)),
+                        ],
+                      ),
+                    );
+                  },
+                );
+              }
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _deleteCode(String docId) async {
+    await FirebaseFirestore.instance.collection('vip_codes').doc(docId).delete();
+  }
+
+Widget _buildActiveAdminsTab_UNUSED() {
     final currentUser = FirebaseAuth.instance.currentUser;
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
@@ -1359,17 +1959,26 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
                         if (!isMe) // Can't toggle own status
                           Switch(
                             value: isActive,
-                            activeColor: Colors.green,
+                            activeThumbColor: Colors.green,
                             inactiveThumbColor: Colors.red,
                             onChanged: (val) {
                               FirebaseFirestore.instance.collection('admin_users').doc(uid).update({'isActive': val});
                             },
                           ),
                         if (!isMe) // Can't delete self
-                          IconButton(
-                            icon: const Icon(Icons.delete, color: Colors.red),
-                            onPressed: () {
-                              // Confirm delete
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.lock_reset, color: Colors.orange),
+                                tooltip: 'Reset Password',
+                                onPressed: () => _resetUserPassword(uid, email),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.delete, color: Colors.red),
+                                tooltip: 'Delete Admin',
+                                onPressed: () {
+                                  // Confirm delete
                               showDialog(
                                 context: context,
                                 builder: (ctx) => AlertDialog(
@@ -1390,8 +1999,10 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
                               );
                             },
                           ),
-                      ],
-                    ),
+                        ],
+                      ),
+                    ],
+                  ),
                     children: [
                       Padding(
                         padding: const EdgeInsets.all(16.0),
@@ -1694,230 +2305,12 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
 
 
 
-  // Build Access Requests Tab
-  Widget _buildAccessRequestsTab() {
-    return StreamBuilder<QuerySnapshot>(
-      stream: _adminService.getAccessRequestsStream(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
+  // Access Requests Tab removed as per request
+  // Widget _buildAccessRequestsTab() { ... }
 
-        if (snapshot.hasError) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.error_outline, size: 64, color: Colors.red.shade300),
-                const SizedBox(height: 16),
-                Text('Error loading requests: ${snapshot.error}'),
-              ],
-            ),
-          );
-        }
 
-        final requests = snapshot.data?.docs ?? [];
-        
-        // Sort client-side to avoid index requirement
-        requests.sort((a, b) {
-          final dataA = a.data() as Map<String, dynamic>;
-          final dataB = b.data() as Map<String, dynamic>;
-          final timeA = dataA['requestedAt'] as Timestamp?;
-          final timeB = dataB['requestedAt'] as Timestamp?;
-          if (timeA == null && timeB == null) return 0;
-          if (timeA == null) return 1;
-          if (timeB == null) return -1;
-          return timeB.compareTo(timeA);
-        });
+  /* Helper methods for Access Requests removed */
 
-        if (requests.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.inbox, size: 64, color: Colors.grey.shade300),
-                const SizedBox(height: 16),
-                Text(
-                  'No pending access requests',
-                  style: TextStyle(fontSize: 18, color: Colors.grey.shade600),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Users who request admin access will appear here',
-                  style: TextStyle(fontSize: 14, color: Colors.grey.shade500),
-                ),
-                const SizedBox(height: 24),
-                ElevatedButton.icon(
-                  onPressed: () {
-                    _tabController.animateTo(0);
-                    setState(() => _showAddForm = true);
-                  },
-                  icon: const Icon(Icons.person_add),
-                  label: const Text('Manually Add Admin'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.indigo,
-                    foregroundColor: Colors.white,
-                  ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        return ListView.builder(
-          padding: const EdgeInsets.all(16),
-          itemCount: requests.length,
-          itemBuilder: (context, index) {
-            final request = requests[index];
-            final data = request.data() as Map<String, dynamic>;
-            final email = data['email'] as String;
-            final displayName = data['displayName'] as String? ?? 'Unknown';
-            final requestedAt = (data['requestedAt'] as Timestamp).toDate();
-            final message = data['message'] as String?;
-
-            return Card(
-              margin: const EdgeInsets.only(bottom: 12),
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Row(
-                  children: [
-                    CircleAvatar(
-                      backgroundColor: Colors.orange.shade100,
-                      child: Icon(Icons.person_add, color: Colors.orange.shade700),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            displayName,
-                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            email,
-                            style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
-                          ),
-                          if (message != null && message.isNotEmpty) ...[
-                            const SizedBox(height: 8),
-                            Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: Colors.grey.shade50,
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(color: Colors.grey.shade300),
-                              ),
-                              child: Text(
-                                message,
-                                style: const TextStyle(fontSize: 13, fontStyle: FontStyle.italic),
-                              ),
-                            ),
-                          ],
-                          const SizedBox(height: 8),
-                          Text(
-                            'Requested ${_formatRelativeTime(requestedAt)}',
-                            style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Row(
-                      children: [
-                        ElevatedButton.icon(
-                          onPressed: () => _approveAccessRequest(request.id, email, displayName),
-                          icon: const Icon(Icons.check, size: 18),
-                          label: const Text('Approve'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.green,
-                            foregroundColor: Colors.white,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        OutlinedButton.icon(
-                          onPressed: () => _rejectAccessRequest(request.id, email),
-                          icon: const Icon(Icons.close, size: 18),
-                          label: const Text('Reject'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.red,
-                            side: const BorderSide(color: Colors.red),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  String _formatRelativeTime(DateTime dateTime) {
-    final now = DateTime.now();
-    final difference = now.difference(dateTime);
-
-    if (difference.inMinutes < 1) {
-      return 'just now';
-    } else if (difference.inHours < 1) {
-      return '${difference.inMinutes} minutes ago';
-    } else if (difference.inDays < 1) {
-      return '${difference.inHours} hours ago';
-    } else if (difference.inDays < 7) {
-      return '${difference.inDays} days ago';
-    } else {
-      return '${dateTime.day}/${dateTime.month}/${dateTime.year}';
-    }
-  }
-
-  Future<void> _approveAccessRequest(String requestId, String email, String displayName) async {
-    try {
-      await _adminService.approveAccessRequest(requestId, 'admin');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('$displayName has been granted admin access'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error approving request: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
-
-  Future<void> _rejectAccessRequest(String requestId, String email) async {
-    try {
-      await _adminService.rejectAccessRequest(requestId);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Access request from $email has been rejected'),
-            backgroundColor: Colors.orange,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error rejecting request: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
 
   void _showChangeEmailDialog() {
     final user = FirebaseAuth.instance.currentUser;
@@ -2446,14 +2839,7 @@ class _ActiveAdminsWidget extends StatelessWidget {
   }
 }
 
-// Pricing Tab (Placeholder)
-class _PricingTab extends StatelessWidget {
-  const _PricingTab();
-  @override
-  Widget build(BuildContext context) {
-    return const Center(child: Text('Pricing Management'));
-  }
-}
+// Pricing Tab (Removed)
 
 // Legal Tab
 class _LegalTab extends StatefulWidget {

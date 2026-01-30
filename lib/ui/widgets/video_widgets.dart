@@ -152,7 +152,7 @@ class _VideoGridItemState extends State<VideoGridItem> {
           decoration: BoxDecoration(
             borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
             image: thumb != null
-                ? DecorationImage(image: NetworkImage(thumb!), fit: BoxFit.cover)
+                ? DecorationImage(image: NetworkImage(thumb), fit: BoxFit.cover)
                 : null,
             color: Colors.black26,
           ),

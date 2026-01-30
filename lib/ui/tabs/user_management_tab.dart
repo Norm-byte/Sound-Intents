@@ -790,6 +790,16 @@ class _UserDetailPanelState extends State<_UserDetailPanel> with SingleTickerPro
                   _showEditSubscriptionDialog(context);
                 },
               ),
+              const Divider(),
+              ListTile(
+                title: const Text('Delete User', style: TextStyle(color: Colors.red)),
+                subtitle: const Text('Permanently remove user data.'),
+                leading: const Icon(Icons.delete_forever, color: Colors.red),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _confirmDeleteUser(context);
+                },
+              ),
             ],
           ),
         ),
@@ -800,8 +810,40 @@ class _UserDetailPanelState extends State<_UserDetailPanel> with SingleTickerPro
     );
   }
 
+  void _confirmDeleteUser(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete User?'),
+        content: Text('Are you sure you want to permanently delete "${widget.user.name}"? This action cannot be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              await _performUserAction('delete');
+            },
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _performUserAction(String action) async {
     try {
+      if (action == 'delete') {
+         await FirebaseFirestore.instance.collection('users').doc(widget.user.id).delete();
+         if (mounted) {
+           ScaffoldMessenger.of(context).showSnackBar(
+             const SnackBar(content: Text('User deleted successfully.'), backgroundColor: Colors.red),
+           );
+           widget.onUpdate();
+         }
+         return;
+      }
+
       final Map<String, dynamic> updates = {
          'lastAdminActionDate': FieldValue.serverTimestamp(),
       };
@@ -862,7 +904,7 @@ class _UserDetailPanelState extends State<_UserDetailPanel> with SingleTickerPro
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 DropdownButtonFormField<String>(
-                  value: selectedStatus,
+                  initialValue: selectedStatus,
                   decoration: const InputDecoration(labelText: 'Status'),
                   items: const [ // ... existing items
                     DropdownMenuItem(value: 'active', child: Text('Active')),
@@ -873,7 +915,7 @@ class _UserDetailPanelState extends State<_UserDetailPanel> with SingleTickerPro
                 ),
                 const SizedBox(height: 16),
                 DropdownButtonFormField<String>(
-                  value: selectedPlan,
+                  initialValue: selectedPlan,
                   decoration: const InputDecoration(labelText: 'Plan'),
                   items: const [
                     DropdownMenuItem(value: 'Free', child: Text('Free')),
@@ -1357,6 +1399,42 @@ class _BillingTab extends StatelessWidget {
           _InfoRow(label: 'Plan', value: user.subscriptionPlan),
           _InfoRow(label: 'Status', value: user.status),
           if (user.renewalDate != null) _InfoRow(label: 'Renewal Date', value: user.renewalDate!),
+          
+          // Auto-Renew Status
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: 140,
+                  child: Text(
+                    'Auto-Renew',
+                    style: TextStyle(fontWeight: FontWeight.w600, color: Colors.grey.shade700),
+                  ),
+                ),
+                Expanded(
+                  child: Row(
+                    children: [
+                      Icon(
+                        user.willRenew ? Icons.check_circle : Icons.cancel,
+                        color: user.willRenew ? Colors.green : Colors.red,
+                        size: 16,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        user.willRenew ? 'On' : 'Off / Cancelled',
+                        style: TextStyle(
+                            color: user.willRenew ? Colors.green.shade700 : Colors.red.shade700,
+                            fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          
           const SizedBox(height: 24),
           const Text('Payment History', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 16),

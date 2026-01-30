@@ -19,13 +19,13 @@ class LegalTab extends StatefulWidget {
 }
 
 class _LegalTabState extends State<LegalTab> {
-  // Locking State
+  // Locking State - RESTORED
   bool _isLocked = true;
   bool _isLoadingLockState = true;
   final _unlockController = TextEditingController();
   String? _storedSecurityPassword;
   String? _storedVipCode;
-  String? _storedDirectVipCode; // New field for direct code
+  String? _storedDirectVipCode;
 
   // Legal Content State
   String _selectedDocId = 'terms';
@@ -60,35 +60,21 @@ class _LegalTabState extends State<LegalTab> {
       _storedSecurityPassword = userDoc.data()?['security_password'];
 
       // 2. Get VIP Code
-      // Try finding by assignee email OR just find any super_admin code assigned to this user
-      // The user might be referring to the code they generated in "Beta & VIP Access"
       final vipQuery = await FirebaseFirestore.instance
           .collection('vip_codes')
           .where('assignee', isEqualTo: user.email)
           .get();
       
-      // Look for any code that might be considered a "super admin" or just their personal code
-      // The user calls it "super admin vip password".
       if (vipQuery.docs.isNotEmpty) {
-        // Prefer one marked as super_admin, otherwise take the first one
         final superAdminCode = vipQuery.docs.firstWhere(
           (d) => d.data()['type'] == 'super_admin', 
           orElse: () => vipQuery.docs.first
         );
         _storedVipCode = superAdminCode.data()['code'];
-        debugPrint('LegalTab: Found VIP Code: $_storedVipCode');
-      } else {
-        debugPrint('LegalTab: No VIP Code found for ${user.email}');
       }
 
-      // 3. ALSO CHECK 'vipCode' field on the admin_users document itself
-      // This is where "My App Access Code" is stored in AdminManagementTab
       final directVipCode = userDoc.data()?['vipCode'];
       if (directVipCode != null) {
-         // If we found one here, it might be the one the user means ("app1")
-         // We can store it as a secondary valid code or just overwrite if the other one wasn't found
-         debugPrint('LegalTab: Found Direct VIP Code: $directVipCode');
-         // Let's allow BOTH. We'll store this one in a new variable or just check against it.
          _storedDirectVipCode = directVipCode;
       }
 
@@ -104,47 +90,15 @@ class _LegalTabState extends State<LegalTab> {
     }
   }
 
-  Widget _buildPdfViewer(String url) {
-    if (kIsWeb) {
-      final String viewType = 'iframe-${url.hashCode}';
-      // Append params to hide toolbar, navpanes, and scrollbars
-      final String embedUrl = '$url#toolbar=0&navpanes=0&scrollbar=0';
-      registerPdfViewFactory(viewType, embedUrl);
-      return HtmlElementView(viewType: viewType);
-    }
-    
-    return SfPdfViewer.network(
-      url,
-      key: ValueKey(url),
-      canShowScrollHead: false,
-      canShowScrollStatus: false,
-      onDocumentLoaded: (PdfDocumentLoadedDetails details) {
-        debugPrint('PDF Loaded Successfully');
-      },
-      onDocumentLoadFailed: (PdfDocumentLoadFailedDetails details) {
-        debugPrint('PDF Load Failed: ${details.error}');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Load Failed: ${details.description}'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      },
-    );
-  }
-
   Future<void> _attemptUnlock() async {
     final input = _unlockController.text.trim();
     if (input.isEmpty) return;
-
-    debugPrint('Attempting unlock with: $input');
     
     bool unlocked = false;
     if (_storedSecurityPassword != null && input == _storedSecurityPassword) unlocked = true;
     if (_storedVipCode != null && input == _storedVipCode) unlocked = true;
     if (_storedDirectVipCode != null && input == _storedDirectVipCode) unlocked = true;
 
-    // Fallback: Check Firestore for any valid super_admin code (matches AdminManagementTab logic)
     if (!unlocked) {
       try {
         final query = await FirebaseFirestore.instance
@@ -177,6 +131,26 @@ class _LegalTabState extends State<LegalTab> {
       );
     }
   }
+
+  Widget _buildPdfViewer(String url) {
+    if (kIsWeb) {
+      final String viewType = 'iframe-${url.hashCode}';
+      // Append params to hide toolbar, navpanes, and scrollbars
+      final String embedUrl = '$url#toolbar=0&navpanes=0&scrollbar=0';
+      registerPdfViewFactory(viewType, embedUrl);
+      return HtmlElementView(viewType: viewType);
+    }
+    
+    return SfPdfViewer.network(
+      url,
+    );
+  }
+
+/*
+  Future<void> _attemptUnlock() async {
+    ... Removed ...
+  }
+*/
 
   Future<void> _loadAllDocs() async {
     setState(() => _isLoading = true);
@@ -315,7 +289,7 @@ class _LegalTabState extends State<LegalTab> {
 
     return Row(
       children: [
-        // Left Side: Controls (Similar to Topics Tab)
+        // Left Side: Controls
         Container(
           width: 400,
           color: Colors.white,

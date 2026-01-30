@@ -1,54 +1,57 @@
-Harmony Admin (Flutter Web)
+# Harmony by Intent - Admin Operating Manual (V2)
 
-Quick start (very simple):
+## Overview
+This Admin Panel is the control center for the "Harmony by Intent" ecosystem. It allows you to manage Global Events, Monetization Deals, User Safety, and Legal Compliance.
 
-Requirements:
-- Flutter SDK installed and on PATH
-- Chrome browser for `flutter run -d chrome`
+---
 
-Run locally (PowerShell):
+## 1. Dashboard ("Year Command Center")
+The **Dashboard** is your primary workspace for scheduling.
+*   **Vertical Cards**: Each card represents a week of the year (Week 1 - 52).
+*   **Sync Button**: The Blue/Amber button on each card controls the visibility of that week's events on the User App.
+    *   **Blue (Sync)**: All events are live and up-to-date.
+    *   **Amber (Publish Drafts)**: You have made changes (Drafts) that are not yet live. Click to publish.
+*   **Copy/Paste Workflow**:
+    1.  Click the **Three Dots** menu on a source week (e.g., Week 10).
+    2.  Select **Copy To Week...**.
+    3.  Select the destination (e.g., Week 15).
+    4.  The system copies all events to Week 15 as **Drafts**.
+*   **Alerts**: The top of the dashboard displays urgent system alerts (e.g., "3 Flagged Messages").
 
-```powershell
-cd "C:\Users\norms\OneDrive\Desktop\CommunityApps\harmony by intent\harmony-by-intent\src\admin"
-flutter pub get
-flutter run -d chrome
-```
+## 2. Event Scheduler (Drafting)
+Clicking a Week Card takes you to the **Scheduler**.
+*   **Draft Mode**: All changes here are saved instantly to your local "Draft" workspace. They are NOT live until you click "Save Week" or "Publish" from the Dashboard.
+*   **Visual/Audio**: Use the Media Library to attach content.
 
-Build for web:
+## 3. Deals / Offers (Monetization)
+This tab controls the **Paywall** and **Entitlements** displayed in the User App ("My Harmony" -> Upgrade).
+*   **Workflow**:
+    1.  **Edit**: Changes made here save to `product_tiers_draft` (Safe Mode).
+    2.  **Publish to Live App**: Copies your drafts to the live App. Users will immediately see the new limits/presentation.
+    3.  **Discard & Sync**: If you make a mistake, this resets your inputs to match what is currently live.
+*   **Fields**:
+    *   **RevenueCat Offering ID**: The exact ID string from your RevenueCat dashboard (e.g., `premium_monthly`).
+    *   **Limits**: 
+        *   **Sends**: How many messages a user can send (set `-1` for Infinity).
+        *   **Forums**: How many chat rooms they can join.
+*   **Troubleshooting**: If you see "Permission Denied" errors, ensure `firestore.rules` are deployed.
 
-```powershell
-flutter build web
-```
+## 4. Community & Safety
+*   **Moderation Queue**: Shows reported user content.
+    *   **Flagged**: Posts containing words from your Blocklist appear here automatically.
+    *   **Resolve**: Clicking "Resolve" removes the item from the active queue (V3 Feature Prep).
+*   **Safety & Filter**:
+    *   **Blocklist**: Add words here to automatically flag future messages.
+    *   **Load Defaults**: Click "Load Standard Blocklist" to populate with industry-standard safety terms.
 
-Notes:
-- This is a minimal scaffold (placeholder UI) to start the Admin Web app.
-- No Firebase or Gemini credentials are configured. I can add stubs when you confirm credentials or we can keep them as placeholders.
-- To share code on GitHub, run `git init` in this folder and push to your repository (you said you have GitHub on this computer).
+## 5. System Management
+*   **Legal Compliance**:
+    *   Enter URLs for your Privacy Policy, Terms, and EULA.
+    *   These links appear dynamically in the User App settings.
 
-Firebase setup (recommended next step)
------------------------------------
-This admin app is intended to publish events to Firestore so mobile clients can read and synchronize events worldwide.
+---
 
-1) Create a Firebase project in the Firebase console (https://console.firebase.google.com/).
-2) Add a web app in the Firebase project and copy the config values.
-3) Run the FlutterFire CLI to generate `firebase_options.dart` (recommended):
-
-```powershell
-dart pub global activate flutterfire_cli
-cd "C:\Users\norms\OneDrive\Desktop\CommunityApps\harmony by intent\harmony-by-intent\src\admin"
-flutterfire configure
-```
-
-This will create `lib/firebase_options.dart` with your web config. After that, the app will be able to initialize Firebase and the Firestore stub in `lib/services/firebase_service.dart` can be implemented to publish events.
-
-If you prefer to paste the config manually, add your web config and call `Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);` in `main.dart` — the scaffold already tries to initialize Firebase and will continue safely if no config is present.
-
-Local persistence
------------------
-Events are saved locally in browser `localStorage` so you can prototype without Firebase. When you publish (checkbox in Event Creator) the app will call the Firebase stub; after you configure Firebase we will wire it to write to Firestore.
-
-Next steps I can take for you:
-- Implement full Firestore wiring and publish/read flows (requires Firebase config)
-- Expand Event Creator with media upload (Firebase Storage)
-- Add Scheduler UI that saves recurring events to Firestore
+## Technical Maintenance
+*   **Deploying Rules**: If you modify permissions, run `deploy_rules.bat` in the `src/admin` folder.
+*   **Backend**: Powered by Firebase (Firestore, Storage, Auth).
 

@@ -2,10 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:video_player/video_player.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
 // ignore: deprecated_member_use
-import 'dart:html' as html;
-import 'dart:ui_web' as ui_web;
 import '../../services/media_library_service.dart';
 import '../../models/media_item.dart';
 import '../widgets/video_widgets.dart';

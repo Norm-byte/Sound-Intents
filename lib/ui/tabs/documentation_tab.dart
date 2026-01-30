@@ -101,6 +101,12 @@ class DocumentationTab extends StatelessWidget {
         ),
         _buildSection(
           'User Management',
+          '• **Guest Users**: Every installation of the User App automatically generates a "Guest" profile. This allows users to explore the app immediately. These users appear in your list to give you an accurate count of total installs/reach.\n'
+          '• **Subscriptions**: Handled automatically via revenue partners. If a user cancels or fails payment, they are downgraded to "Free" status but **NOT** deleted. This allows them to easily resubscribe later without losing their settings.\n'
+          '• **Data Retention**: We currently retain inactive accounts indefinitely to facilitate easy return. Use the "Delete User" action in the User Detail panel only for spam removal or GDPR requests.',
+        ),
+        _buildSection(
+          'User Management',
           'View, edit, and moderate user accounts. \n'
           '• Search users by email or name.\n'
           '• Use the "Ban/Suspend" functions responsibly.\n'

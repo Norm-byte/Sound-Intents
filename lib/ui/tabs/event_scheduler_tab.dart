@@ -24,11 +24,7 @@ class EventSchedulerTab extends StatefulWidget {
   final ValueNotifier<String?>? selectionNotifier;
   final List<Event>? liveEvents;
 
-  const EventSchedulerTab({
-    super.key, 
-    this.selectionNotifier,
-    this.liveEvents,
-  });
+  const EventSchedulerTab({super.key, this.selectionNotifier, this.liveEvents});
 
   @override
   State<EventSchedulerTab> createState() => EventSchedulerTabState();
@@ -43,6 +39,12 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
   Map<String, Map<String, dynamic>> _scheduledEventsData = {};
   String? _selectedSlotId; // e.g., "14:30"
   int _selectedWeekOffset = 0; // 0 = Current, 1 = Next Week, etc.
+
+  // Weekly Drafts
+  // Keeps track of drafts for each week offset, so switching weeks doesn't lose work.
+  // Key: weekOffset, Value: Map of "HH:mm" -> Event Data
+  final Map<int, Map<String, Map<String, dynamic>>> _weeklyDrafts = {};
+
   bool _isLoading = false;
   double? _uploadProgress;
 
@@ -73,7 +75,8 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
   bool _useTrendingIntent = false; // Auto-select most popular intent
   bool _showNoticeBoardPreview = false;
   int _noticeBoardShowBeforeMinutes = 60; // Default 1 hour
-  int _noticeBoardVisibilityAfterMinutes = 0; // Default 0 (hide immediately after end)
+  int _noticeBoardVisibilityAfterMinutes =
+      0; // Default 0 (hide immediately after end)
   final FocusNode _noticeBoardBgFocus = FocusNode();
   final FocusNode _visualUrlFocus = FocusNode();
   final FocusNode _titleFocus = FocusNode();
@@ -97,7 +100,7 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
       'Reverence',
       'Clarity',
       'Purpose',
-      'Renewal of Spirit'
+      'Renewal of Spirit',
     ],
     'Personal Development': [
       'Integrity',
@@ -113,7 +116,7 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
       'Empowerment',
       'Growth',
       'Creativity',
-      'Balance of Mind and Spirit'
+      'Balance of Mind and Spirit',
     ],
     'Social & Interpersonal Values': [
       'Kindness',
@@ -129,7 +132,7 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
       'Inclusion',
       'Cooperation',
       'Unity',
-      'Non-violence'
+      'Non-violence',
     ],
     'Global & Collective Good': [
       'Justice',
@@ -142,7 +145,7 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
       'Respect for Diversity',
       'Collective Good',
       'Universal Love',
-      'Equality of Opportunity'
+      'Equality of Opportunity',
     ],
     'Positive Outlook & Emotional Well-being': [
       'Hope',
@@ -153,7 +156,7 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
       'Benevolence',
       'Gratitude for Life',
       'Joy in Service',
-      'Faith in Humanity'
+      'Faith in Humanity',
     ],
   };
 
@@ -242,12 +245,15 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
     setState(() => _isLoading = true);
     try {
       final prefs = await SharedPreferences.getInstance();
-      final draftString = prefs.getString('eventSchedulerDraftV3_Week$_selectedWeekOffset');
+      final draftString = prefs.getString(
+        'eventSchedulerDraftV3_Week$_selectedWeekOffset',
+      );
       if (draftString != null) {
         final Map<String, dynamic> decoded = jsonDecode(draftString);
         setState(() {
           _scheduledEventsData = decoded.map(
-              (key, value) => MapEntry(key, Map<String, dynamic>.from(value)));
+            (key, value) => MapEntry(key, Map<String, dynamic>.from(value)),
+          );
         });
       } else {
         setState(() {
@@ -266,7 +272,9 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
       final prefs = await SharedPreferences.getInstance();
       // Use offset-specific key to allow saving drafts for different weeks separately
       await prefs.setString(
-          'eventSchedulerDraftV3_Week$_selectedWeekOffset', jsonEncode(_scheduledEventsData));
+        'eventSchedulerDraftV3_Week$_selectedWeekOffset',
+        jsonEncode(_scheduledEventsData),
+      );
     } catch (e) {
       debugPrint('Error saving draft (likely quota exceeded): $e');
     }
@@ -285,7 +293,7 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
 
     setState(() {
       _selectedSlotId = slotId;
-      
+
       // 1. Try to get local draft data
       Map<String, dynamic> data = _scheduledEventsData[slotId] ?? {};
 
@@ -296,33 +304,41 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
           final hour = int.parse(parts[0]);
           final minute = int.parse(parts[1]);
           final targetDate = _getTargetDate(); // Use offset
-          
-          final liveEvent = widget.liveEvents!.firstWhere((e) {
-            // Filter out Global events from the Scheduler
-            if (e.type == 'global') return false;
 
-            if (e.startTimeUTC == null) return false;
-            final start = DateTime.parse(e.startTimeUTC!);
-            
-            // Check time match
-            final timeMatch = start.hour == hour && start.minute >= minute && start.minute < minute + 15;
-            if (!timeMatch) return false;
+          final liveEvent = widget.liveEvents!.firstWhere(
+            (e) {
+              // Filter out Global events from the Scheduler
+              if (e.type == 'global') return false;
 
-            // Check date match (Must be on the target date)
-            // Note: Recurrence implies "Every day", so we accept recurring events regardless of date
-            // IF we want to edit specific instances, we should prioritize `isRecurring: false` on target date.
-            
-            final isTargetDate = start.year == targetDate.year && start.month == targetDate.month && start.day == targetDate.day;
-            
-            // Priority: Exact Date Match with same time
-            if (isTargetDate) return true;
-            
-            // Secondary: Recurring event that covers this day
-            // For now, simpler logic: if it matches time and isRecurring, we show it
-            if (e.isRecurring == true) return true;
+              if (e.startTimeUTC == null) return false;
+              final start = DateTime.parse(e.startTimeUTC!);
 
-            return false;
-          }, orElse: () => Event(id: '', title: '', type: 'national', isRecurring: true));
+              // Check time match
+              final timeMatch = start.hour == hour &&
+                  start.minute >= minute &&
+                  start.minute < minute + 15;
+              if (!timeMatch) return false;
+
+              // Check date match (Must be on the target date)
+              // Note: Recurrence implies "Every day", so we accept recurring events regardless of date
+              // IF we want to edit specific instances, we should prioritize `isRecurring: false` on target date.
+
+              final isTargetDate = start.year == targetDate.year &&
+                  start.month == targetDate.month &&
+                  start.day == targetDate.day;
+
+              // Priority: Exact Date Match with same time
+              if (isTargetDate) return true;
+
+              // Secondary: Recurring event that covers this day
+              // For now, simpler logic: if it matches time and isRecurring, we show it
+              if (e.isRecurring == true) return true;
+
+              return false;
+            },
+            orElse: () =>
+                Event(id: '', title: '', type: 'national', isRecurring: true),
+          );
 
           if (liveEvent.id.isNotEmpty) {
             data = _convertEventToMap(liveEvent);
@@ -371,16 +387,40 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
 
       // Visual URL handled above
       _soundUrlController.text = data['soundUrl'] ?? '';
-      _durationController.text = data['durationSeconds']?.toString() ?? '';
+      // Default to 10 seconds if empty or null to prevent "missing duration" issues
+      _durationController.text = data['durationSeconds']?.toString() ?? '10';
       _noticeBoardBgController.text = data['noticeBoardBgImage'] ?? '';
       _noticeBoardBgColorController.text = data['noticeBoardBgColor'] ?? '';
       _autoNotify = data['autoNotify'] ?? false;
       _isRecurring = data['isRecurring'] ?? false;
       _isRandomized = data['isRandomized'] ?? false;
       _useTrendingIntent = data['useTrendingIntent'] ?? false;
-      _noticeBoardShowBeforeMinutes = data['noticeBoardShowBeforeMinutes'] ?? 60;
-      _noticeBoardVisibilityAfterMinutes = data['noticeBoardVisibilityAfterMinutes'] ?? 0;
+      _noticeBoardShowBeforeMinutes =
+          data['noticeBoardShowBeforeMinutes'] ?? 60;
+      _noticeBoardVisibilityAfterMinutes =
+          data['noticeBoardVisibilityAfterMinutes'] ?? 0;
     });
+  }
+
+  String _calculateEndTimeStr() {
+      if (_selectedSlotId == null) return "--:--:--";
+      
+      try {
+          // Parse Start Time from Slot ID (HH:mm)
+          final parts = _selectedSlotId!.split(':');
+          final startHour = int.parse(parts[0]);
+          final startMinute = int.parse(parts[1]);
+          
+          final now = DateTime.now();
+          final startTime = DateTime(now.year, now.month, now.day, startHour, startMinute);
+          
+          final durationSecs = int.tryParse(_durationController.text) ?? 0;
+          final endTime = startTime.add(Duration(seconds: durationSecs));
+          
+          return "${endTime.hour.toString().padLeft(2,'0')}:${endTime.minute.toString().padLeft(2,'0')}:${endTime.second.toString().padLeft(2,'0')}";
+      } catch (e) {
+          return "--:--:--";
+      }
   }
 
   void _saveCurrentSlot() {
@@ -406,7 +446,7 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
         'description': _descriptionController.text,
         'visualUrl': visualUrlToSave,
         'soundUrl': _soundUrlController.text,
-        'durationSeconds': int.tryParse(_durationController.text),
+        'durationSeconds': int.tryParse(_durationController.text.trim()),
         'noticeBoardBgImage': _noticeBoardBgController.text,
         'noticeBoardBgColor': _noticeBoardBgColorController.text,
         'autoNotify': _autoNotify,
@@ -425,61 +465,81 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
     if (_selectedSlotId == null) return;
 
     // Determine the ID to delete
-    String eventId = 'slot_${_selectedSlotId!.replaceAll(':', '')}';
+    String eventId;
 
     // 1. Check if we have a stored ID in local draft
     if (_scheduledEventsData[_selectedSlotId]?.containsKey('id') == true) {
       eventId = _scheduledEventsData[_selectedSlotId]!['id'];
-    } else if (widget.liveEvents != null) {
-      // 2. Fallback: Search in live events (in case draft wasn't fully populated with ID)
-      try {
-        final parts = _selectedSlotId!.split(':');
-        final hour = int.parse(parts[0]);
-        final minute = int.parse(parts[1]);
-        final now = DateTime.now().toUtc();
-        final today = DateTime.utc(now.year, now.month, now.day);
-        
-        final liveEvent = widget.liveEvents!.firstWhere((e) {
-          // Filter out Global events just like _selectSlot
-          if (e.type == 'global') return false;
+    } else {
+      // 2. Generate Deterministic ID (re-create logic from _publishSchedule)
+      final targetDate = _getTargetDate();
+      final dateSuffix =
+          "${targetDate.year}${targetDate.month.toString().padLeft(2, '0')}${targetDate.day.toString().padLeft(2, '0')}";
+      eventId = 'slot_${_selectedSlotId!.replaceAll(':', '')}_$dateSuffix';
 
-          if (e.startTimeUTC == null) return false;
-          final start = DateTime.parse(e.startTimeUTC!);
-          
-          final timeMatch = start.hour == hour && start.minute >= minute && start.minute < minute + 15;
-          if (!timeMatch) return false;
+      // 3. Fallback check: Search in live events if the deterministic one isn't the one needed
+      // (This is mostly for non-deterministic or legacy IDs, but let's prioritize the deterministic one first because that's what we create)
+      if (widget.liveEvents != null) {
+        try {
+          final parts = _selectedSlotId!.split(':');
+          final hour = int.parse(parts[0]);
+          final minute = int.parse(parts[1]);
+          final now = DateTime.now().toUtc();
+          final today = DateTime.utc(now.year, now.month, now.day);
 
-          final dateMatch = start.year == today.year && start.month == today.month && start.day == today.day;
-          final isRecurring = e.isRecurring == true;
+          final liveEvent = widget.liveEvents!.firstWhere((e) {
+            // Filter out Global events just like _selectSlot
+            if (e.type == 'global') return false;
 
-          return dateMatch || isRecurring;
-        }, orElse: () => Event(id: '', title: '')); 
-        
-        if (liveEvent.id.isNotEmpty) {
-          eventId = liveEvent.id;
+            if (e.startTimeUTC == null) return false;
+            final start = DateTime.parse(e.startTimeUTC!);
+
+            final timeMatch = start.hour == hour &&
+                start.minute >= minute &&
+                start.minute < minute + 15;
+            if (!timeMatch) return false;
+
+            final dateMatch = start.year == today.year &&
+                start.month == today.month &&
+                start.day == today.day;
+            final isRecurring = e.isRecurring == true;
+
+            // Note: If we are editing a specific instance (date match), we prefer that ID.
+            // If it's recurring, we might have a different ID structure.
+            return dateMatch || isRecurring;
+          }, orElse: () => Event(id: '', title: ''));
+
+          if (liveEvent.id.isNotEmpty && liveEvent.id != eventId) {
+             // If we found a live event that matches this slot and has a different ID,
+             // it usually means we are editing an existing event.
+             // However, for TRASH, we want to delete whatever is there.
+             // If we have a drift between deterministic ID and actual ID, use the actual one found.
+             eventId = liveEvent.id;
+          }
+        } catch (e) {
+          // Ignore fallback errors
         }
-      } catch (e) {
-        // Ignore fallback errors
       }
     }
-    
+
     // Optimistically delete from Firestore (if it exists)
     _eventRepository.deleteEvent(eventId).then((_) {
-       if (mounted) {
-         ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Event cleared from schedule'))
-         );
-       }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Event cleared from schedule')),
+        );
+      }
     }).catchError((e) {
-       // Ignore errors if doc doesn't exist
-       debugPrint("Error deleting event $eventId: $e");
+      // Ignore errors if doc doesn't exist
+      debugPrint("Error deleting event $eventId: $e");
     });
 
     setState(() {
       _scheduledEventsData.remove(_selectedSlotId);
-      _selectedSlotId = null; // Prevent _saveCurrentSlot from resurrecting this on next navigation
+      _selectedSlotId =
+          null; // Prevent _saveCurrentSlot from resurrecting this on next navigation
     });
-    
+
     _resetForm();
     _saveDraftToLocal();
   }
@@ -487,11 +547,12 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
   void _stopLocalVideo() {
     if (kIsWeb) {
       try {
-        final video = html.document.getElementById('scheduler_preview_video') as html.VideoElement?;
+        final video = html.document.getElementById('scheduler_preview_video')
+            as html.VideoElement?;
         if (video != null) {
           video.pause();
-          video.removeAttribute('src'); 
-          video.load(); 
+          video.removeAttribute('src');
+          video.load();
         }
       } catch (e) {
         debugPrint("Error stopping local video: $e");
@@ -538,10 +599,16 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
           'This helps fix issues where deleted events keep reappearing.',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Reset Draft', style: TextStyle(color: Colors.red)),
+            child: const Text(
+              'Reset Draft',
+              style: TextStyle(color: Colors.red),
+            ),
           ),
         ],
       ),
@@ -552,22 +619,95 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
     setState(() {
       _selectedSlotId = null;
       _scheduledEventsData.clear();
+      if (_weeklyDrafts.containsKey(_selectedWeekOffset)) {
+        _weeklyDrafts[_selectedWeekOffset]?.clear();
+      }
       _resetForm();
     });
-    
+
     await _saveDraftToLocal(); // Saves empty map
-    
+
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Draft schedule reset. You can now build fresh.')),
+        const SnackBar(
+          content: Text('Draft schedule reset. You can now build fresh.'),
+        ),
       );
+    }
+  }
+
+  void _copyWeekToClipboard() {
+    // 1. Serialize current week's schedule
+    final jsonString = jsonEncode(_scheduledEventsData);
+
+    // 2. Put into clipboard variable (or system clipboard if possible, but in-memory is safer for now)
+    // For now we will just store it in a static variable or just assume "Copy" means "hold in memory"
+    // But user asked to "Copy a week and paste it into another", so let's stick to in-memory for this session.
+
+    // We can use a standard clipboard if we want cross-session, but let's just make it simple first:
+    // We'll store it in a static variable in this class for simplicity
+    _copiedWeekData = jsonString;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Week schedule copied! Navigate to another week and click "Paste Week". (${_scheduledEventsData.length} events)',
+        ),
+      ),
+    );
+  }
+
+  static String? _copiedWeekData;
+
+  void _pasteWeekFromClipboard() {
+    if (_copiedWeekData == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Clipboard is empty. Copy a week first.')),
+      );
+      return;
+    }
+
+    try {
+      final Map<String, dynamic> decoded = jsonDecode(_copiedWeekData!);
+      // Convert dynamic map back to our strong-typed map structure
+      final Map<String, Map<String, dynamic>> newWeekData = {};
+
+      decoded.forEach((key, value) {
+        if (value is Map<String, dynamic>) {
+          // We need to regenerate IDs so they don't clash?
+          // Actually, _publishSchedule generates IDs based on target date, so we can keep the data as is.
+          // BUT, we should probably strip the 'id' field so it regenerates for the new week.
+          final eventData = Map<String, dynamic>.from(value);
+          eventData.remove('id');
+          newWeekData[key] = eventData;
+        }
+      });
+
+      setState(() {
+        _scheduledEventsData = newWeekData;
+        _saveDraftToLocal(); // persist immediately
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Schedule pasted successfully! Don\'t forget to Review and Publish.',
+          ),
+        ),
+      );
+    } catch (e) {
+      debugPrint('Error pasting week: $e');
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Error pasting schedule.')));
     }
   }
 
   Future<void> _publishSchedule() async {
     if (_scheduledEventsData.isEmpty) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('No events to publish')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('No events to publish')));
       return;
     }
 
@@ -585,37 +725,50 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
 
         // Create a UTC DateTime for this slot based on SELECTED WEEK
         final targetDate = _getTargetDate();
-        final eventTime = DateTime.utc(targetDate.year, targetDate.month, targetDate.day, hour, minute);
+        final eventTime = DateTime.utc(
+          targetDate.year,
+          targetDate.month,
+          targetDate.day,
+          hour,
+          minute,
+        );
 
         // Generate a deterministic ID based on the Slot Time and Date to prevent duplicates
         // Format: slot_HHmm_yyyyMMdd
         // This ensures if we re-save the same slot for the same day, it overwrites the existing event instead of creating a new one.
-        final dateSuffix = "${targetDate.year}${targetDate.month.toString().padLeft(2, '0')}${targetDate.day.toString().padLeft(2, '0')}";
-        final deterministicId = 'slot_${slotId.replaceAll(':', '')}_$dateSuffix';
+        final dateSuffix =
+            "${targetDate.year}${targetDate.month.toString().padLeft(2, '0')}${targetDate.day.toString().padLeft(2, '0')}";
+        final deterministicId =
+            'slot_${slotId.replaceAll(':', '')}_$dateSuffix';
 
         final event = Event(
-          id: data['id'] ?? deterministicId, 
-          
+          id: data['id'] ?? deterministicId,
+
           title: data['title'] ?? 'Untitled Event',
           intent: data['intent'],
           visualUrl: data['visualUrl'],
           // Ensure mediaUrl is set for User App compatibility (from visualUrl)
           // User App uses mediaUrl for video/audio playback logic
-          mediaUrl: data['visualUrl'] ?? data['soundUrl'], // Fallback to sound if no visual 
+          mediaUrl: data['visualUrl'] ??
+              data['soundUrl'], // Fallback to sound if no visual
           soundUrl: data['soundUrl'],
           durationSeconds: data['durationSeconds'],
           startTimeUTC: eventTime.toIso8601String(),
-          originTime: slotId, // Save the HH:mm string for consistent local time parsing
-          isRecurring: data['isRecurring'] ?? false, // Default from map or false
+          originTime:
+              slotId, // Save the HH:mm string for consistent local time parsing
+          isRecurring:
+              data['isRecurring'] ?? false, // Default from map or false
           isRandomized: data['isRandomized'] ?? false,
           useTrendingIntent: data['useTrendingIntent'] ?? false,
           autoNotify: data['autoNotify'] ?? false,
-          noticeBoardShowBeforeMinutes: data['noticeBoardShowBeforeMinutes'] ?? 60,
-          noticeBoardVisibilityAfterMinutes: data['noticeBoardVisibilityAfterMinutes'] ?? 0,
+          noticeBoardShowBeforeMinutes:
+              data['noticeBoardShowBeforeMinutes'] ?? 60,
+          noticeBoardVisibilityAfterMinutes:
+              data['noticeBoardVisibilityAfterMinutes'] ?? 0,
           noticeBoardBgImage: data['noticeBoardBgImage'],
           noticeBoardBgColor: data['noticeBoardBgColor'],
           // User Request: Save as Draft (Yellow) first, Publish from Dashboard
-          isPublished: false, 
+          isPublished: false,
           isDraft: true,
           type: 'national', // Explicitly mark as National
           updatedAt: data['updatedAt'] ?? DateTime.now().toIso8601String(),
@@ -627,18 +780,56 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
 
       await _eventRepository.saveEvents(eventsToSave);
 
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content:
-              Text('Schedule saved as Draft (${eventsToSave.length} slots). Go to Dashboard to Publish.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Schedule saved as Draft (${eventsToSave.length} slots). Go to Dashboard to Publish.',
+          ),
+        ),
+      );
     } catch (e) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Error saving: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error saving: $e')));
     } finally {
       setState(() => _isLoading = false);
     }
   }
 
-  // --- UI Helpers ---
+  String _getWeekDateRange(int offset) {
+    if (offset == 0) return 'This Week';
+    if (offset == 1) return 'Next Week';
+    final now = DateTime.now();
+    // Monday of current week
+    final currentMonday = now.subtract(Duration(days: now.weekday - 1));
+    // Monday of target week
+    final targetMonday = currentMonday.add(Duration(days: 7 * offset));
+    final targetSunday = targetMonday.add(const Duration(days: 6));
+
+    final f = DateFormat('MMM d');
+    return '${f.format(targetMonday)} - ${f.format(targetSunday)}';
+  }
+
+  int _getISOWeekNumber(DateTime date) {
+    // Simplistic Week Number Calculation
+    // Note: DateFormat('w') isn't always reliable in standard subset, but 'D' is DayOfYear
+    final dayOfYear = int.parse(DateFormat('D').format(date));
+    int woy = ((dayOfYear - date.weekday + 10) / 7).floor();
+    if (woy < 1) return 52;
+    if (woy > 52) return 1;
+    return woy;
+  }
+
+  void _rebuildScheduleData() {
+    setState(() {
+      _selectedSlotId = null;
+      _scheduledEventsData.clear();
+    });
+    // First try to load draft for the new week offset
+    _loadDraftFromLocal();
+    // If no draft exists, and we are viewing a future week,
+    // the UI will show empty or live recurring events as appropriate.
+  }
 
   List<String> _generateTimeSlots() {
     List<String> slots = [];
@@ -653,9 +844,10 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
     return slots;
   }
 
-  Future<void> _pickFromMediaLibrary(
-      {required Function(String) onSelect, String? typeFilter}) async {
-    
+  Future<void> _pickFromMediaLibrary({
+    required Function(String) onSelect,
+    String? typeFilter,
+  }) async {
     String? selectedSection; // Default to null to force selection
 
     await showDialog(
@@ -671,144 +863,200 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text('Select ${typeFilter ?? 'Media'}',
-                        style: Theme.of(context).textTheme.titleLarge),
-                    
+                    Text(
+                      'Select ${typeFilter ?? 'Media'}',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+
                     // Section Filter
                     StreamBuilder<List<MediaItem>>(
                       stream: _mediaLibrary.getMediaStream(),
                       builder: (context, snapshot) {
                         if (!snapshot.hasData) return const SizedBox();
                         final allItems = snapshot.data!;
-                        final sections = allItems.map((e) => e.section).toSet().toList()..sort();
-                        
+                        final sections = allItems
+                            .map((e) => e.section)
+                            .toSet()
+                            .toList()
+                          ..sort();
+
                         return DropdownButton<String>(
                           value: selectedSection,
                           hint: const Text('Select Category'),
                           items: [
-                            const DropdownMenuItem(value: 'All', child: Text('All Categories')),
-                            ...sections.map((s) => DropdownMenuItem(value: s, child: Text(s))),
+                            const DropdownMenuItem(
+                              value: 'All',
+                              child: Text('All Categories'),
+                            ),
+                            ...sections.map(
+                              (s) => DropdownMenuItem(value: s, child: Text(s)),
+                            ),
                           ],
-                          onChanged: (val) => setState(() => selectedSection = val),
+                          onChanged: (val) =>
+                              setState(() => selectedSection = val),
                         );
                       },
                     ),
 
                     IconButton(
-                        icon: const Icon(Icons.close),
-                        onPressed: () => Navigator.pop(context)),
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.pop(context),
+                    ),
                   ],
                 ),
                 const Divider(),
                 Expanded(
-                  child: selectedSection == null 
-                    ? const Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.category, size: 64, color: Colors.grey),
-                            SizedBox(height: 16),
-                            Text('Please select a category from the dropdown above', 
-                              style: TextStyle(fontSize: 18, color: Colors.grey)),
-                          ],
-                        ),
-                      )
-                    : StreamBuilder<List<MediaItem>>(
-                    stream: _mediaLibrary.getMediaStream(section: selectedSection == 'All' ? null : selectedSection),
-                    builder: (context, snapshot) {
-                      if (snapshot.connectionState == ConnectionState.waiting) {
-                        return const Center(child: CircularProgressIndicator());
-                      }
-                      if (snapshot.hasError) {
-                        return Center(child: Text('Error: ${snapshot.error}'));
-                      }
-                      final allItems = snapshot.data ?? [];
-                      List<MediaItem> items;
-                      
-                      if (typeFilter == 'visual') {
-                        items = allItems.where((i) => i.type == 'image' || i.type == 'video' || i.type == 'youtube').toList();
-                      } else if (typeFilter != null) {
-                        items = allItems.where((i) => i.type == typeFilter).toList();
-                      } else {
-                        items = allItems;
-                      }
+                  child: selectedSection == null
+                      ? const Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.category,
+                                size: 64,
+                                color: Colors.grey,
+                              ),
+                              SizedBox(height: 16),
+                              Text(
+                                'Please select a category from the dropdown above',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  color: Colors.grey,
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      : StreamBuilder<List<MediaItem>>(
+                          stream: _mediaLibrary.getMediaStream(
+                            section: selectedSection == 'All'
+                                ? null
+                                : selectedSection,
+                          ),
+                          builder: (context, snapshot) {
+                            if (snapshot.connectionState ==
+                                ConnectionState.waiting) {
+                              return const Center(
+                                child: CircularProgressIndicator(),
+                              );
+                            }
+                            if (snapshot.hasError) {
+                              return Center(
+                                child: Text('Error: ${snapshot.error}'),
+                              );
+                            }
+                            final allItems = snapshot.data ?? [];
+                            List<MediaItem> items;
 
-                      if (items.isEmpty) {
-                        return Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                const Icon(Icons.perm_media, size: 48, color: Colors.grey),
-                                const SizedBox(height: 16),
-                                Text('No ${typeFilter ?? ''} media found in ${selectedSection == 'All' ? 'library' : selectedSection}.'),
-                              ],
-                            ));
-                      }
-                      return GridView.builder(
-                        gridDelegate:
-                            const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 4,
-                          crossAxisSpacing: 10,
-                          mainAxisSpacing: 10,
-                          childAspectRatio: 1.0,
-                        ),
-                        itemCount: items.length,
-                        itemBuilder: (context, index) {
-                          final item = items[index];
-                          final isImage = item.type == 'image';
-                          
-                          // Robust YouTube detection
-                          final urlLower = item.url.toLowerCase();
-                          final isYoutube = item.type == 'youtube' || 
-                                          urlLower.contains('youtube') || 
-                                          urlLower.contains('youtu.be');
-                          final isVideo = item.type == 'video' || isYoutube;
+                            if (typeFilter == 'visual') {
+                              items = allItems
+                                  .where(
+                                    (i) =>
+                                        i.type == 'image' ||
+                                        i.type == 'video' ||
+                                        i.type == 'youtube',
+                                  )
+                                  .toList();
+                            } else if (typeFilter != null) {
+                              items = allItems
+                                  .where((i) => i.type == typeFilter)
+                                  .toList();
+                            } else {
+                              items = allItems;
+                            }
 
-                          Widget content;
-                          if (isImage) {
-                            content = Image.network(item.url, fit: BoxFit.cover);
-                          } else if (isVideo) {
-                             content = VideoGridItem(
-                              url: item.url,
-                              type: isYoutube ? 'youtube' : 'upload',
-                              enablePreview: true,
-                              autoPlay: false,
-                            );
-                          } else {
-                            content = const Center(child: Icon(Icons.audiotrack, size: 48));
-                          }
+                            if (items.isEmpty) {
+                              return Center(
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    const Icon(
+                                      Icons.perm_media,
+                                      size: 48,
+                                      color: Colors.grey,
+                                    ),
+                                    const SizedBox(height: 16),
+                                    Text(
+                                      'No ${typeFilter ?? ''} media found in ${selectedSection == 'All' ? 'library' : selectedSection}.',
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }
+                            return GridView.builder(
+                              gridDelegate:
+                                  const SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 4,
+                                crossAxisSpacing: 10,
+                                mainAxisSpacing: 10,
+                                childAspectRatio: 1.0,
+                              ),
+                              itemCount: items.length,
+                              itemBuilder: (context, index) {
+                                final item = items[index];
+                                final isImage = item.type == 'image';
 
-                          return InkWell(
-                            onTap: () {
-                              onSelect(item.url);
-                              Navigator.pop(context);
-                            },
-                            child: Card(
-                              clipBehavior: Clip.antiAlias,
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  Expanded(
-                                    child: IgnorePointer(child: content),
-                                  ),
-                                  Padding(
-                                    padding: const EdgeInsets.all(4.0),
-                                    child: Text(
-                                      item.name,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(fontSize: 12),
-                                      textAlign: TextAlign.center,
+                                // Robust YouTube detection
+                                final urlLower = item.url.toLowerCase();
+                                final isYoutube = item.type == 'youtube' ||
+                                    urlLower.contains('youtube') ||
+                                    urlLower.contains('youtu.be');
+                                final isVideo =
+                                    item.type == 'video' || isYoutube;
+
+                                Widget content;
+                                if (isImage) {
+                                  content = Image.network(
+                                    item.url,
+                                    fit: BoxFit.cover,
+                                  );
+                                } else if (isVideo) {
+                                  content = VideoGridItem(
+                                    url: item.url,
+                                    type: isYoutube ? 'youtube' : 'upload',
+                                    enablePreview: true,
+                                    autoPlay: false,
+                                  );
+                                } else {
+                                  content = const Center(
+                                    child: Icon(Icons.audiotrack, size: 48),
+                                  );
+                                }
+
+                                return InkWell(
+                                  onTap: () {
+                                    onSelect(item.url);
+                                    Navigator.pop(context);
+                                  },
+                                  child: Card(
+                                    clipBehavior: Clip.antiAlias,
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
+                                      children: [
+                                        Expanded(
+                                          child: IgnorePointer(child: content),
+                                        ),
+                                        Padding(
+                                          padding: const EdgeInsets.all(4.0),
+                                          child: Text(
+                                            item.name,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                            ),
+                                            textAlign: TextAlign.center,
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ),
-                                ],
-                              ),
-                            ),
-                          );
-                        },
-                      );
-                    },
-                  ),
+                                );
+                              },
+                            );
+                          },
+                        ),
                 ),
               ],
             ),
@@ -818,8 +1066,12 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
     );
   }
 
-  Future<void> _uploadWithProgress(Uint8List bytes, String fileName,
-      String folder, Function(String) onSuccess) async {
+  Future<void> _uploadWithProgress(
+    Uint8List bytes,
+    String fileName,
+    String folder,
+    Function(String) onSuccess,
+  ) async {
     setState(() {
       _isLoading = true;
       _uploadProgress = 0.0;
@@ -838,13 +1090,15 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
 
       onSuccess(url);
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Upload complete!')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Upload complete!')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Error: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: $e')));
       }
     } finally {
       if (mounted) {
@@ -863,8 +1117,9 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
     if (kIsWeb) {
       final wf = await web_file_input.pickFileViaHtml();
       if (wf != null) {
-        await _uploadWithProgress(wf.bytes, wf.name, 'scheduler_notice_board',
-            (url) {
+        await _uploadWithProgress(wf.bytes, wf.name, 'scheduler_notice_board', (
+          url,
+        ) {
           if (mounted) {
             if (_scheduledEventsData[uploadingSlotId] == null) {
               _scheduledEventsData[uploadingSlotId] = {};
@@ -1002,17 +1257,17 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
               ..style.width = '100%'
               ..style.height = '100%';
 
-            // Apply duration limit if set
-            final durationStr = _durationController.text;
-            final durationLimit = int.tryParse(durationStr);
-            if (durationLimit != null && durationLimit > 0) {
-              video.onTimeUpdate.listen((event) {
+            // Apply duration limit dynamically
+            video.onTimeUpdate.listen((event) {
+              final durationStr = _durationController.text;
+              final durationLimit = int.tryParse(durationStr);
+              if (durationLimit != null && durationLimit > 0) {
                 if (video.currentTime > durationLimit) {
                   video.currentTime = 0;
                   video.play();
                 }
-              });
-            }
+              }
+            });
             return video;
           });
         } else if (isPdf) {
@@ -1078,8 +1333,9 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
     }
 
     // Fallback for non-web
-    FilePickerResult? result =
-        await FilePicker.platform.pickFiles(type: FileType.any);
+    FilePickerResult? result = await FilePicker.platform.pickFiles(
+      type: FileType.any,
+    );
     if (result != null && result.files.single.bytes != null) {
       // Set local preview immediately
       setState(() {
@@ -1127,32 +1383,48 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text('24-Hour Event Scheduler',
-                        style: TextStyle(
-                            fontSize: 24, fontWeight: FontWeight.bold)),
-                    
+                    const Text(
+                      '24-Hour Event Scheduler',
+                      style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+
                     // Action Buttons
                     Row(
                       children: [
                         OutlinedButton.icon(
                           onPressed: _clearCurrentSlot,
-                          icon: const Icon(Icons.delete_outline, color: Colors.orange),
-                          label: const Text('Clear Slot Fields', style: TextStyle(color: Colors.orange)),
+                          icon: const Icon(
+                            Icons.delete_outline,
+                            color: Colors.orange,
+                          ),
+                          label: const Text(
+                            'Clear Slot',
+                            style: TextStyle(color: Colors.orange),
+                          ), // Shortened text
                           style: OutlinedButton.styleFrom(
                             side: const BorderSide(color: Colors.orange),
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 16,
+                            ),
                           ),
                         ),
                         const SizedBox(width: 16),
                         ElevatedButton.icon(
                           onPressed: _isLoading ? null : _publishSchedule,
                           icon: const Icon(Icons.save),
-                          label: const Text('Save Draft to Dashboard'),
+                          label: const Text(
+                              'Save Draft'), // Renamed from Save Week
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.amber.shade800,
                             foregroundColor: Colors.white,
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 24, vertical: 16),
+                              horizontal: 24,
+                              vertical: 16,
+                            ),
                           ),
                         ),
                       ],
@@ -1160,9 +1432,12 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                   ],
                 ),
                 const SizedBox(height: 16),
-                // Week Selector Header (Replaces Toggle Buttons)
+                // Toggle Buttons for Week Selection (Previous/Next)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.indigo.shade50,
                     borderRadius: BorderRadius.circular(8),
@@ -1171,31 +1446,35 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      IconButton(
-                        icon: const Icon(Icons.arrow_back_ios, size: 16),
-                        onPressed: _selectedWeekOffset > 0 ? () {
-                          setState(() => _selectedWeekOffset--);
-                          _rebuildScheduleData();
-                        } : null,
+                      Text(
+                        _getWeekDateRange(_selectedWeekOffset),
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.indigo.shade900,
+                        ),
                       ),
-                      Column(
+
+                      // Navigation Arrows
+                      Row(
                         children: [
-                          Text(
-                            "Week ${_selectedWeekOffset + 1}",
-                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.indigo.shade900),
+                          IconButton(
+                            icon: const Icon(Icons.arrow_back_ios, size: 16),
+                            onPressed: _selectedWeekOffset > 0
+                                ? () {
+                                    setState(() => _selectedWeekOffset--);
+                                    _rebuildScheduleData();
+                                  }
+                                : null,
                           ),
-                          Text(
-                            _getWeekDateRange(_selectedWeekOffset),
-                            style: TextStyle(fontSize: 12, color: Colors.indigo.shade600),
+                          IconButton(
+                            icon: const Icon(Icons.arrow_forward_ios, size: 16),
+                            onPressed: () {
+                              setState(() => _selectedWeekOffset++);
+                              _rebuildScheduleData();
+                            },
                           ),
                         ],
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.arrow_forward_ios, size: 16),
-                        onPressed: () {
-                          setState(() => _selectedWeekOffset++);
-                          _rebuildScheduleData();
-                        },
                       ),
                     ],
                   ),
@@ -1220,10 +1499,13 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                             children: [
                               const Padding(
                                 padding: EdgeInsets.only(bottom: 12.0),
-                                child: Text('Time Slots',
-                                    style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.grey)),
+                                child: Text(
+                                  'Time Slots',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.grey,
+                                  ),
+                                ),
                               ),
                               Expanded(
                                 child: GridView.builder(
@@ -1238,9 +1520,12 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                   itemCount: slots.length,
                                   itemBuilder: (context, index) {
                                     final slotId = slots[index];
-                                    final hasLocalData = _scheduledEventsData.containsKey(slotId);
-                                    final isSelected = _selectedSlotId == slotId;
-                                    final localData = _scheduledEventsData[slotId];
+                                    final hasLocalData = _scheduledEventsData
+                                        .containsKey(slotId);
+                                    final isSelected =
+                                        _selectedSlotId == slotId;
+                                    final localData =
+                                        _scheduledEventsData[slotId];
 
                                     // Check for live event in this slot
                                     Event? liveEvent;
@@ -1249,34 +1534,50 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                         final parts = slotId.split(':');
                                         final hour = int.parse(parts[0]);
                                         final minute = int.parse(parts[1]);
-                                        
+
                                         // Use the Week Offset logic to check for events in THIS week
                                         final targetDate = _getTargetDate();
-                                        
-                                        liveEvent = widget.liveEvents!.firstWhere((e) {
-                                          if (e.startTimeUTC == null) return false;
-                                          final start = DateTime.parse(e.startTimeUTC!);
-                                          
-                                          // Check time match
-                                          final timeMatch = start.hour == hour && start.minute >= minute && start.minute < minute + 15;
-                                          if (!timeMatch) return false;
 
-                                          // Check date match (On Target Date)
-                                          final isTargetDate = start.year == targetDate.year && start.month == targetDate.month && start.day == targetDate.day;
-                                          
-                                          // Check recurrence
-                                          final isRecurring = e.isRecurring == true;
+                                        liveEvent =
+                                            widget.liveEvents!.firstWhere(
+                                          (e) {
+                                            if (e.startTimeUTC == null)
+                                              return false;
+                                            final start = DateTime.parse(
+                                              e.startTimeUTC!,
+                                            );
 
-                                          return isTargetDate || isRecurring;
-                                        });
+                                            // Check time match
+                                            final timeMatch =
+                                                start.hour == hour &&
+                                                    start.minute >= minute &&
+                                                    start.minute < minute + 15;
+                                            if (!timeMatch) return false;
+
+                                            // Check date match (On Target Date)
+                                            final isTargetDate =
+                                                start.year == targetDate.year &&
+                                                    start.month ==
+                                                        targetDate.month &&
+                                                    start.day == targetDate.day;
+
+                                            // Check recurrence
+                                            final isRecurring =
+                                                e.isRecurring == true;
+
+                                            return isTargetDate || isRecurring;
+                                          },
+                                        );
                                       } catch (_) {}
                                     }
 
-                                    final hasData = hasLocalData || liveEvent != null;
+                                    final hasData =
+                                        hasLocalData || liveEvent != null;
 
                                     // Determine status color
-                                    Color statusColor = Colors.grey.shade300; // Default: Empty
-                                    
+                                    Color statusColor =
+                                        Colors.grey.shade300; // Default: Empty
+
                                     if (hasData) {
                                       // Check if played out or fresh
                                       final now = DateTime.now().toUtc();
@@ -1287,23 +1588,27 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                       // Use target date to ensure we compare against the correct day (supports Week Offset)
                                       // This fixes an issue where viewing future/past weeks compared slots against "Today's" time
                                       final targetDate = _getTargetDate();
-                                      final slotTime = targetDate.add(Duration(hours: hour, minutes: minute));
-                                      
+                                      final slotTime = targetDate.add(
+                                        Duration(hours: hour, minutes: minute),
+                                      );
+
                                       final isFuture = slotTime.isAfter(now);
 
                                       if (hasLocalData) {
-                                        // Draft status - Cyan for future, BlueGrey for past
-                                        statusColor = isFuture ? Colors.cyan : Colors.blueGrey;
+                                        // Draft status - Amber for unpublished drafts (as requested)
+                                        // We use Amber to signify "Pending Publish"
+                                        statusColor = Colors.amber;
                                       } else {
-                                        // Live status - Green for future, Amber for past
-                                        statusColor = isFuture ? Colors.green : Colors.amber;
+                                        // Live status - Green for Published/Live
+                                        statusColor = Colors.green;
                                       }
                                     }
 
                                     // Tooltip message
                                     String tooltip = slotId;
                                     if (hasLocalData) {
-                                      tooltip += ' - ${localData?['title']} (Draft)';
+                                      tooltip +=
+                                          ' - ${localData?['title']} (Draft)';
                                     } else if (liveEvent != null) {
                                       tooltip += ' - ${liveEvent.title} (Live)';
                                     }
@@ -1373,8 +1678,9 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                             borderRadius: BorderRadius.circular(12),
                             boxShadow: [
                               BoxShadow(
-                                  color: Colors.black.withOpacity(0.05),
-                                  blurRadius: 10)
+                                color: Colors.black.withOpacity(0.05),
+                                blurRadius: 10,
+                              ),
                             ],
                           ),
                           child: _selectedSlotId == null
@@ -1382,13 +1688,19 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                   child: Column(
                                     mainAxisAlignment: MainAxisAlignment.center,
                                     children: [
-                                      Icon(Icons.touch_app,
-                                          size: 48, color: Colors.grey),
+                                      Icon(
+                                        Icons.touch_app,
+                                        size: 48,
+                                        color: Colors.grey,
+                                      ),
                                       SizedBox(height: 16),
-                                      Text('Select a time slot to edit',
-                                          style: TextStyle(
-                                              color: Colors.grey,
-                                              fontSize: 16)),
+                                      Text(
+                                        'Select a time slot to edit',
+                                        style: TextStyle(
+                                          color: Colors.grey,
+                                          fontSize: 16,
+                                        ),
+                                      ),
                                     ],
                                   ),
                                 )
@@ -1399,13 +1711,18 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                     children: [
                                       Row(
                                         children: [
-                                          const Icon(Icons.edit_calendar,
-                                              color: Colors.indigo),
+                                          const Icon(
+                                            Icons.edit_calendar,
+                                            color: Colors.indigo,
+                                          ),
                                           const SizedBox(width: 8),
-                                          Text('Editing Slot: $_selectedSlotId',
-                                              style: const TextStyle(
-                                                  fontSize: 20,
-                                                  fontWeight: FontWeight.bold)),
+                                          Text(
+                                            'Editing Slot: $_selectedSlotId',
+                                            style: const TextStyle(
+                                              fontSize: 20,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
                                         ],
                                       ),
                                       const Divider(height: 32),
@@ -1423,7 +1740,10 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                 border: OutlineInputBorder(),
                                                 prefixIcon: Icon(Icons.title),
                                               ),
-                                              onTap: () => setState(() => _showNoticeBoardPreview = false),
+                                              onTap: () => setState(
+                                                () => _showNoticeBoardPreview =
+                                                    false,
+                                              ),
                                               onChanged: (_) =>
                                                   _saveCurrentSlot(),
                                             ),
@@ -1432,19 +1752,42 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                           Expanded(
                                             flex: 1,
                                             child: TextFormField(
-                                              controller: _durationController,
-                                              decoration: const InputDecoration(
-                                                labelText: 'Duration (sec)',
-                                                hintText: 'e.g. 60',
-                                                border: OutlineInputBorder(),
-                                                prefixIcon: Icon(Icons.timer),
-                                              ),
-                                              keyboardType:
-                                                  TextInputType.number,
-                                              onTap: () => setState(() => _showNoticeBoardPreview = false),
-                                              onChanged: (_) =>
-                                                  _saveCurrentSlot(),
+                                               controller: _durationController,
+                                               decoration: const InputDecoration(
+                                                 labelText: 'Duration (Seconds)',
+                                                 helperText: 'Enter exact seconds (e.g. 10)',
+                                                 border: OutlineInputBorder(),
+                                                 prefixIcon: Icon(Icons.timer_outlined),
+                                               ),
+                                               keyboardType: TextInputType.number,
+                                               onChanged: (_) {
+                                                  setState(() {}); // Trigger rebuild to update calculated end time
+                                                  _saveCurrentSlot();
+                                               },
                                             ),
+                                          ),
+                                          const SizedBox(width: 16),
+                                          // Display Calculated End Time
+                                          Expanded(
+                                              flex: 1,
+                                              child: Container(
+                                                  padding: const EdgeInsets.all(12),
+                                                  decoration: BoxDecoration(
+                                                      border: Border.all(color: Colors.grey),
+                                                      borderRadius: BorderRadius.circular(4),
+                                                      color: Colors.grey.shade100,
+                                                  ),
+                                                  child: Column(
+                                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                                      children: [
+                                                          const Text("End Time (Calc):", style: TextStyle(fontSize: 10, color: Colors.grey)),
+                                                          Text(
+                                                              _calculateEndTimeStr(),
+                                                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                                                          ),
+                                                      ],
+                                                  ),
+                                              ),
                                           ),
                                         ],
                                       ),
@@ -1462,17 +1805,24 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                               decoration: const InputDecoration(
                                                 labelText: 'Intent Category',
                                                 border: OutlineInputBorder(),
-                                                prefixIcon:
-                                                    Icon(Icons.category),
+                                                prefixIcon: Icon(
+                                                  Icons.category,
+                                                ),
                                               ),
-                                              items:
-                                                  _intentGroups.keys.map((cat) {
+                                              items: _intentGroups.keys.map((
+                                                cat,
+                                              ) {
                                                 return DropdownMenuItem(
-                                                    value: cat,
-                                                    child: Text(cat,
-                                                        overflow: TextOverflow.ellipsis,
-                                                        style: const TextStyle(
-                                                            fontSize: 13)));
+                                                  value: cat,
+                                                  child: Text(
+                                                    cat,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: const TextStyle(
+                                                      fontSize: 13,
+                                                    ),
+                                                  ),
+                                                );
                                               }).toList(),
                                               onChanged: (val) {
                                                 setState(() {
@@ -1480,7 +1830,8 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                   _selectedIntentValue =
                                                       null; // Reset specific intent
                                                   _intentController.clear();
-                                                  _showNoticeBoardPreview = false;
+                                                  _showNoticeBoardPreview =
+                                                      false;
                                                 });
                                               },
                                             ),
@@ -1503,12 +1854,15 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                           _selectedIntentCategory]!
                                                       .map((intent) {
                                                       return DropdownMenuItem(
-                                                          value: intent,
-                                                          child: Text(intent,
-                                                              style:
-                                                                  const TextStyle(
-                                                                      fontSize:
-                                                                          13)));
+                                                        value: intent,
+                                                        child: Text(
+                                                          intent,
+                                                          style:
+                                                              const TextStyle(
+                                                            fontSize: 13,
+                                                          ),
+                                                        ),
+                                                      );
                                                     }).toList(),
                                               onChanged:
                                                   _selectedIntentCategory ==
@@ -1521,7 +1875,8 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                             _intentController
                                                                     .text =
                                                                 val ?? '';
-                                                            _showNoticeBoardPreview = false;
+                                                            _showNoticeBoardPreview =
+                                                                false;
                                                           });
                                                           _saveCurrentSlot();
                                                         },
@@ -1542,7 +1897,9 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                               'Add details, affirmations, or content for this slot...',
                                         ),
                                         maxLines: 3,
-                                        onTap: () => setState(() => _showNoticeBoardPreview = false),
+                                        onTap: () => setState(
+                                          () => _showNoticeBoardPreview = false,
+                                        ),
                                         onChanged: (_) => _saveCurrentSlot(),
                                       ),
                                       const SizedBox(height: 16),
@@ -1559,7 +1916,10 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                 border: OutlineInputBorder(),
                                                 prefixIcon: Icon(Icons.image),
                                               ),
-                                              onTap: () => setState(() => _showNoticeBoardPreview = false),
+                                              onTap: () => setState(
+                                                () => _showNoticeBoardPreview =
+                                                    false,
+                                              ),
                                               onChanged: (_) =>
                                                   _saveCurrentSlot(),
                                             ),
@@ -1567,19 +1927,23 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                           const SizedBox(width: 8),
                                           PopupMenuButton<String>(
                                             icon: const Icon(
-                                                Icons.add_photo_alternate,
-                                                color: Colors.indigo),
+                                              Icons.add_photo_alternate,
+                                              color: Colors.indigo,
+                                            ),
                                             tooltip: 'Select Image Source',
                                             onSelected: (value) {
                                               if (value == 'upload') {
                                                 _pickImage();
                                               } else if (value == 'library') {
                                                 _pickFromMediaLibrary(
-                                                  typeFilter: 'visual', // Custom filter for image+video
+                                                  typeFilter:
+                                                      'visual', // Custom filter for image+video
                                                   onSelect: (url) {
                                                     setState(() {
-                                                      _visualUrlController.text = url;
-                                                      _showNoticeBoardPreview = false;
+                                                      _visualUrlController
+                                                          .text = url;
+                                                      _showNoticeBoardPreview =
+                                                          false;
                                                     });
                                                     _saveCurrentSlot();
                                                   },
@@ -1597,8 +1961,10 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                 value: 'library',
                                                 child: Row(
                                                   children: [
-                                                    Icon(Icons.photo_library,
-                                                        color: Colors.grey),
+                                                    Icon(
+                                                      Icons.photo_library,
+                                                      color: Colors.grey,
+                                                    ),
                                                     SizedBox(width: 8),
                                                     Text('Select from Library'),
                                                   ],
@@ -1608,12 +1974,17 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                 value: 'clear',
                                                 child: Row(
                                                   children: [
-                                                    Icon(Icons.delete_outline,
-                                                        color: Colors.red),
+                                                    Icon(
+                                                      Icons.delete_outline,
+                                                      color: Colors.red,
+                                                    ),
                                                     SizedBox(width: 8),
-                                                    Text('Clear / Remove',
-                                                        style: TextStyle(
-                                                            color: Colors.red)),
+                                                    Text(
+                                                      'Clear / Remove',
+                                                      style: TextStyle(
+                                                        color: Colors.red,
+                                                      ),
+                                                    ),
                                                   ],
                                                 ),
                                               ),
@@ -1623,20 +1994,23 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                       ),
                                       if (_isLoading && _uploadProgress != null)
                                         Padding(
-                                          padding:
-                                              const EdgeInsets.only(top: 8.0),
+                                          padding: const EdgeInsets.only(
+                                            top: 8.0,
+                                          ),
                                           child: Column(
                                             crossAxisAlignment:
                                                 CrossAxisAlignment.start,
                                             children: [
                                               LinearProgressIndicator(
-                                                  value: _uploadProgress),
+                                                value: _uploadProgress,
+                                              ),
                                               const SizedBox(height: 4),
                                               Text(
                                                 'Uploading: ${((_uploadProgress ?? 0) * 100).toStringAsFixed(0)}%',
                                                 style: const TextStyle(
-                                                    fontSize: 12,
-                                                    color: Colors.grey),
+                                                  fontSize: 12,
+                                                  color: Colors.grey,
+                                                ),
                                               ),
                                             ],
                                           ),
@@ -1652,27 +2026,34 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                               decoration: const InputDecoration(
                                                 labelText: 'Sound / Audio URL',
                                                 border: OutlineInputBorder(),
-                                                prefixIcon:
-                                                    Icon(Icons.audiotrack),
+                                                prefixIcon: Icon(
+                                                  Icons.audiotrack,
+                                                ),
                                               ),
-                                              onTap: () => setState(() => _showNoticeBoardPreview = false),
+                                              onTap: () => setState(
+                                                () => _showNoticeBoardPreview =
+                                                    false,
+                                              ),
                                               onChanged: (_) =>
                                                   _saveCurrentSlot(),
                                             ),
                                           ),
                                           const SizedBox(width: 8),
                                           PopupMenuButton<String>(
-                                            icon: const Icon(Icons.audio_file,
-                                                color: Colors.indigo),
+                                            icon: const Icon(
+                                              Icons.audio_file,
+                                              color: Colors.indigo,
+                                            ),
                                             tooltip: 'Select Audio Source',
                                             onSelected: (value) {
                                               if (value == 'library') {
                                                 _pickFromMediaLibrary(
                                                   typeFilter: 'audio',
                                                   onSelect: (url) {
-                                                    setState(() =>
-                                                        _soundUrlController
-                                                            .text = url);
+                                                    setState(
+                                                      () => _soundUrlController
+                                                          .text = url,
+                                                    );
                                                     _saveCurrentSlot();
                                                   },
                                                 );
@@ -1688,8 +2069,10 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                 value: 'library',
                                                 child: Row(
                                                   children: [
-                                                    Icon(Icons.photo_library,
-                                                        color: Colors.grey),
+                                                    Icon(
+                                                      Icons.photo_library,
+                                                      color: Colors.grey,
+                                                    ),
                                                     SizedBox(width: 8),
                                                     Text('Select from Library'),
                                                   ],
@@ -1699,12 +2082,17 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                 value: 'clear',
                                                 child: Row(
                                                   children: [
-                                                    Icon(Icons.delete_outline,
-                                                        color: Colors.red),
+                                                    Icon(
+                                                      Icons.delete_outline,
+                                                      color: Colors.red,
+                                                    ),
                                                     SizedBox(width: 8),
-                                                    Text('Clear / Remove',
-                                                        style: TextStyle(
-                                                            color: Colors.red)),
+                                                    Text(
+                                                      'Clear / Remove',
+                                                      style: TextStyle(
+                                                        color: Colors.red,
+                                                      ),
+                                                    ),
                                                   ],
                                                 ),
                                               ),
@@ -1715,29 +2103,50 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                       const SizedBox(height: 16),
 
                                       // Visibility Settings
-                                      const Text('Visibility Settings',
-                                          style: TextStyle(
-                                              fontWeight: FontWeight.bold)),
+                                      const Text(
+                                        'Visibility Settings',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
                                       const SizedBox(height: 8),
-                                      
+
                                       // Show Before Slider
                                       Row(
                                         children: [
-                                          const Icon(Icons.visibility, size: 20, color: Colors.grey),
+                                          const Icon(
+                                            Icons.visibility,
+                                            size: 20,
+                                            color: Colors.grey,
+                                          ),
                                           const SizedBox(width: 8),
                                           Expanded(
                                             child: Column(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
                                               children: [
-                                                Text('Show on Notice Board: ${_noticeBoardShowBeforeMinutes >= 60 ? "${(_noticeBoardShowBeforeMinutes / 60).toStringAsFixed(1)} hours" : "$_noticeBoardShowBeforeMinutes mins"} before event'),
+                                                Text(
+                                                  'Show on Notice Board: ${_noticeBoardShowBeforeMinutes >= 60 ? "${(_noticeBoardShowBeforeMinutes / 60).toStringAsFixed(1)} hours" : "$_noticeBoardShowBeforeMinutes mins"} before event',
+                                                ),
                                                 Slider(
-                                                  value: _noticeBoardShowBeforeMinutes.toDouble().clamp(0, 1440), // Max 24 hours
+                                                  value:
+                                                      _noticeBoardShowBeforeMinutes
+                                                          .toDouble()
+                                                          .clamp(
+                                                            0,
+                                                            1440,
+                                                          ), // Max 24 hours
                                                   min: 0,
                                                   max: 1440,
                                                   divisions: 96, // 15 min steps
-                                                  label: '${(_noticeBoardShowBeforeMinutes / 60).toStringAsFixed(1)} hours',
+                                                  label:
+                                                      '${(_noticeBoardShowBeforeMinutes / 60).toStringAsFixed(1)} hours',
                                                   onChanged: (val) {
-                                                    setState(() => _noticeBoardShowBeforeMinutes = val.toInt());
+                                                    setState(
+                                                      () =>
+                                                          _noticeBoardShowBeforeMinutes =
+                                                              val.toInt(),
+                                                    );
                                                     _saveCurrentSlot();
                                                   },
                                                 ),
@@ -1746,25 +2155,43 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                           ),
                                         ],
                                       ),
-                                      
+
                                       // Hide After Slider
                                       Row(
                                         children: [
-                                          const Icon(Icons.visibility_off, size: 20, color: Colors.grey),
+                                          const Icon(
+                                            Icons.visibility_off,
+                                            size: 20,
+                                            color: Colors.grey,
+                                          ),
                                           const SizedBox(width: 8),
                                           Expanded(
                                             child: Column(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
                                               children: [
-                                                Text('Keep on Notice Board: ${_noticeBoardVisibilityAfterMinutes >= 60 ? "${(_noticeBoardVisibilityAfterMinutes / 60).toStringAsFixed(1)} hours" : "$_noticeBoardVisibilityAfterMinutes mins"} after event ends'),
+                                                Text(
+                                                  'Keep on Notice Board: ${_noticeBoardVisibilityAfterMinutes >= 60 ? "${(_noticeBoardVisibilityAfterMinutes / 60).toStringAsFixed(1)} hours" : "$_noticeBoardVisibilityAfterMinutes mins"} after event ends',
+                                                ),
                                                 Slider(
-                                                  value: _noticeBoardVisibilityAfterMinutes.toDouble().clamp(0, 1440), // Max 24 hours
+                                                  value:
+                                                      _noticeBoardVisibilityAfterMinutes
+                                                          .toDouble()
+                                                          .clamp(
+                                                            0,
+                                                            1440,
+                                                          ), // Max 24 hours
                                                   min: 0,
                                                   max: 1440,
                                                   divisions: 96, // 15 min steps
-                                                  label: '${(_noticeBoardVisibilityAfterMinutes / 60).toStringAsFixed(1)} hours',
+                                                  label:
+                                                      '${(_noticeBoardVisibilityAfterMinutes / 60).toStringAsFixed(1)} hours',
                                                   onChanged: (val) {
-                                                    setState(() => _noticeBoardVisibilityAfterMinutes = val.toInt());
+                                                    setState(
+                                                      () =>
+                                                          _noticeBoardVisibilityAfterMinutes =
+                                                              val.toInt(),
+                                                    );
                                                     _saveCurrentSlot();
                                                   },
                                                 ),
@@ -1786,26 +2213,14 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                           },
                                           icon: const Icon(Icons.visibility),
                                           label: const Text(
-                                              'Preview National Notice Board'),
+                                            'Preview National Notice Board',
+                                          ),
                                           style: OutlinedButton.styleFrom(
                                             padding: const EdgeInsets.all(16),
                                           ),
                                         ),
                                       ),
                                       const SizedBox(height: 16),
-
-                                      // Auto-Repeat
-                                      SwitchListTile(
-                                        value: _isRecurring,
-                                        onChanged: (val) {
-                                          setState(() => _isRecurring = val);
-                                          _saveCurrentSlot();
-                                        },
-                                        title: const Text('Auto-Repeat Daily'),
-                                        subtitle: const Text(
-                                            'Event repeats every day at this time'),
-                                        secondary: const Icon(Icons.repeat),
-                                      ),
 
                                       // Auto-Randomize
                                       SwitchListTile(
@@ -1815,9 +2230,11 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                           _saveCurrentSlot();
                                         },
                                         title: const Text(
-                                            'Auto-Randomize Content'),
+                                          'Auto-Randomize Content',
+                                        ),
                                         subtitle: const Text(
-                                            'Automatically pick new random content daily'),
+                                          'Automatically pick new random content daily',
+                                        ),
                                         secondary: const Icon(Icons.shuffle),
                                         activeThumbColor: Colors.orange,
                                       ),
@@ -1827,15 +2244,19 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                         value: _useTrendingIntent,
                                         onChanged: (val) {
                                           setState(
-                                              () => _useTrendingIntent = val);
+                                            () => _useTrendingIntent = val,
+                                          );
                                           _saveCurrentSlot();
                                         },
-                                        title:
-                                            const Text('Use Trending Intent'),
+                                        title: const Text(
+                                          'Use Trending Intent',
+                                        ),
                                         subtitle: const Text(
-                                            'Auto-fill with the most popular user intent from the last hour'),
-                                        secondary:
-                                            const Icon(Icons.trending_up),
+                                          'Auto-fill with the most popular user intent from the last hour',
+                                        ),
+                                        secondary: const Icon(
+                                          Icons.trending_up,
+                                        ),
                                         activeThumbColor: Colors.purple,
                                       ),
 
@@ -1847,11 +2268,14 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                           _saveCurrentSlot();
                                         },
                                         title: const Text(
-                                            'Send Push Notification'),
+                                          'Send Push Notification',
+                                        ),
                                         subtitle: const Text(
-                                            'Notify users when this event starts'),
+                                          'Notify users when this event starts',
+                                        ),
                                         secondary: const Icon(
-                                            Icons.notifications_active),
+                                          Icons.notifications_active,
+                                        ),
                                       ),
 
                                       const SizedBox(height: 32),
@@ -1877,10 +2301,13 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                             children: [
                               const Padding(
                                 padding: EdgeInsets.only(bottom: 16.0),
-                                child: Text('Device Preview',
-                                    style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.grey)),
+                                child: Text(
+                                  'Device Preview',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.grey,
+                                  ),
+                                ),
                               ),
                               Expanded(
                                 child: Center(
@@ -1892,14 +2319,17 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                         color: Colors.black,
                                         borderRadius: BorderRadius.circular(30),
                                         border: Border.all(
-                                            color: Colors.black, width: 8),
+                                          color: Colors.black,
+                                          width: 8,
+                                        ),
                                         boxShadow: [
                                           BoxShadow(
-                                            color:
-                                                Colors.black.withOpacity(0.2),
+                                            color: Colors.black.withOpacity(
+                                              0.2,
+                                            ),
                                             blurRadius: 20,
                                             offset: const Offset(0, 10),
-                                          )
+                                          ),
                                         ],
                                       ),
                                       child: ClipRRect(
@@ -1919,38 +2349,49 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                               _localVisualName
                                                                       ?.toLowerCase() ??
                                                                   '';
-                                                          final isLocalVideo = name
-                                                                  .endsWith(
-                                                                      '.mp4') ||
+                                                          final isLocalVideo =
                                                               name.endsWith(
-                                                                  '.mov') ||
-                                                              name.endsWith(
-                                                                  '.webm') ||
-                                                              name.endsWith(
-                                                                  '.mpeg4') ||
-                                                              name.endsWith(
-                                                                  '.mkv') ||
-                                                              name.endsWith(
-                                                                  '.avi');
+                                                                    '.mp4',
+                                                                  ) ||
+                                                                  name.endsWith(
+                                                                    '.mov',
+                                                                  ) ||
+                                                                  name.endsWith(
+                                                                    '.webm',
+                                                                  ) ||
+                                                                  name.endsWith(
+                                                                    '.mpeg4',
+                                                                  ) ||
+                                                                  name.endsWith(
+                                                                    '.mkv',
+                                                                  ) ||
+                                                                  name.endsWith(
+                                                                    '.avi',
+                                                                  );
                                                           final isPdf = name
                                                               .endsWith('.pdf');
-                                                          final isDoc = name
-                                                                  .endsWith(
-                                                                      '.ppt') ||
+                                                          final isDoc =
                                                               name.endsWith(
-                                                                  '.pptx') ||
-                                                              name.endsWith(
-                                                                  '.doc') ||
-                                                              name.endsWith(
-                                                                  '.docx');
+                                                                    '.ppt',
+                                                                  ) ||
+                                                                  name.endsWith(
+                                                                    '.pptx',
+                                                                  ) ||
+                                                                  name.endsWith(
+                                                                    '.doc',
+                                                                  ) ||
+                                                                  name.endsWith(
+                                                                    '.docx',
+                                                                  );
 
                                                           if (isLocalVideo) {
                                                             if (kIsWeb &&
                                                                 _localVideoViewId !=
                                                                     null) {
                                                               return HtmlElementView(
-                                                                  viewType:
-                                                                      _localVideoViewId!);
+                                                                viewType:
+                                                                    _localVideoViewId!,
+                                                              );
                                                             }
                                                             // Fallback for non-web or if view ID missing
                                                             return Container(
@@ -1963,35 +2404,42 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                                           .center,
                                                                   children: [
                                                                     const Icon(
-                                                                        Icons
-                                                                            .videocam,
-                                                                        color: Colors
-                                                                            .white54,
-                                                                        size:
-                                                                            48),
+                                                                      Icons
+                                                                          .videocam,
+                                                                      color: Colors
+                                                                          .white54,
+                                                                      size: 48,
+                                                                    ),
                                                                     const SizedBox(
-                                                                        height:
-                                                                            8),
+                                                                      height: 8,
+                                                                    ),
                                                                     const Text(
                                                                       'Video Selected',
-                                                                      style: TextStyle(
-                                                                          color: Colors
-                                                                              .white70,
-                                                                          fontSize:
-                                                                              12),
+                                                                      style:
+                                                                          TextStyle(
+                                                                        color: Colors
+                                                                            .white70,
+                                                                        fontSize:
+                                                                            12,
+                                                                      ),
                                                                     ),
                                                                     Padding(
-                                                                      padding: const EdgeInsets
-                                                                          .all(
-                                                                          8.0),
+                                                                      padding:
+                                                                          const EdgeInsets
+                                                                              .all(
+                                                                        8.0,
+                                                                      ),
                                                                       child:
                                                                           Text(
                                                                         _localVisualName ??
                                                                             'Unknown',
-                                                                        style: const TextStyle(
-                                                                            color:
-                                                                                Colors.white30,
-                                                                            fontSize: 10),
+                                                                        style:
+                                                                            const TextStyle(
+                                                                          color:
+                                                                              Colors.white30,
+                                                                          fontSize:
+                                                                              10,
+                                                                        ),
                                                                         textAlign:
                                                                             TextAlign.center,
                                                                         maxLines:
@@ -2012,41 +2460,51 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                               return Stack(
                                                                 children: [
                                                                   HtmlElementView(
-                                                                      viewType:
-                                                                          _localVideoViewId!),
+                                                                    viewType:
+                                                                        _localVideoViewId!,
+                                                                  ),
                                                                   Positioned(
                                                                     top: 8,
                                                                     right: 8,
                                                                     child:
                                                                         IconButton(
-                                                                      icon: const Icon(
-                                                                          Icons
-                                                                              .open_in_new,
-                                                                          color:
-                                                                              Colors.black),
+                                                                      icon:
+                                                                          const Icon(
+                                                                        Icons
+                                                                            .open_in_new,
+                                                                        color: Colors
+                                                                            .black,
+                                                                      ),
                                                                       tooltip:
                                                                           'Open PDF in New Tab',
                                                                       onPressed: () => html
                                                                           .window
                                                                           .open(
-                                                                              _localVideoUrl!,
-                                                                              '_blank'),
-                                                                      style: IconButton.styleFrom(
-                                                                          backgroundColor: Colors
-                                                                              .white
-                                                                              .withOpacity(0.7)),
+                                                                        _localVideoUrl!,
+                                                                        '_blank',
+                                                                      ),
+                                                                      style: IconButton
+                                                                          .styleFrom(
+                                                                        backgroundColor: Colors
+                                                                            .white
+                                                                            .withOpacity(
+                                                                          0.7,
+                                                                        ),
+                                                                      ),
                                                                     ),
                                                                   ),
                                                                 ],
                                                               );
                                                             }
                                                             return const Center(
-                                                                child: Icon(
-                                                                    Icons
-                                                                        .picture_as_pdf,
-                                                                    color: Colors
-                                                                        .white,
-                                                                    size: 48));
+                                                              child: Icon(
+                                                                Icons
+                                                                    .picture_as_pdf,
+                                                                color: Colors
+                                                                    .white,
+                                                                size: 48,
+                                                              ),
+                                                            );
                                                           } else if (isDoc) {
                                                             return Center(
                                                               child: Column(
@@ -2055,31 +2513,41 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                                         .center,
                                                                 children: [
                                                                   const Icon(
-                                                                      Icons
-                                                                          .description,
-                                                                      color: Colors
-                                                                          .white54,
-                                                                      size: 48),
+                                                                    Icons
+                                                                        .description,
+                                                                    color: Colors
+                                                                        .white54,
+                                                                    size: 48,
+                                                                  ),
                                                                   const SizedBox(
-                                                                      height:
-                                                                          8),
+                                                                    height: 8,
+                                                                  ),
                                                                   const Text(
-                                                                      'Document Selected',
-                                                                      style: TextStyle(
-                                                                          color:
-                                                                              Colors.white70)),
+                                                                    'Document Selected',
+                                                                    style:
+                                                                        TextStyle(
+                                                                      color: Colors
+                                                                          .white70,
+                                                                    ),
+                                                                  ),
                                                                   Padding(
                                                                     padding:
                                                                         const EdgeInsets
                                                                             .all(
-                                                                            8.0),
+                                                                      8.0,
+                                                                    ),
                                                                     child: Text(
                                                                       'Preview will be available after upload completes.',
-                                                                      style: TextStyle(
-                                                                          color: Colors.white.withOpacity(
-                                                                              0.5),
-                                                                          fontSize:
-                                                                              10),
+                                                                      style:
+                                                                          TextStyle(
+                                                                        color: Colors
+                                                                            .white
+                                                                            .withOpacity(
+                                                                          0.5,
+                                                                        ),
+                                                                        fontSize:
+                                                                            10,
+                                                                      ),
                                                                       textAlign:
                                                                           TextAlign
                                                                               .center,
@@ -2099,12 +2567,15 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                                 color: Colors
                                                                     .grey
                                                                     .shade800,
-                                                                child: const Center(
-                                                                    child: Icon(
-                                                                        Icons
-                                                                            .broken_image,
-                                                                        color: Colors
-                                                                            .white24)),
+                                                                child:
+                                                                    const Center(
+                                                                  child: Icon(
+                                                                    Icons
+                                                                        .broken_image,
+                                                                    color: Colors
+                                                                        .white24,
+                                                                  ),
+                                                                ),
                                                               ),
                                                             );
                                                           }
@@ -2127,11 +2598,11 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                                 child:
                                                                     const Center(
                                                                   child: Icon(
-                                                                      Icons
-                                                                          .image,
-                                                                      color: Colors
-                                                                          .white24,
-                                                                      size: 48),
+                                                                    Icons.image,
+                                                                    color: Colors
+                                                                        .white24,
+                                                                    size: 48,
+                                                                  ),
                                                                 ),
                                                               );
                                                             }
@@ -2140,52 +2611,63 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                             final isVideo = url
                                                                     .toLowerCase()
                                                                     .contains(
-                                                                        '.mp4') ||
+                                                                      '.mp4',
+                                                                    ) ||
                                                                 url
                                                                     .toLowerCase()
                                                                     .contains(
-                                                                        '.mov') ||
+                                                                      '.mov',
+                                                                    ) ||
                                                                 url
                                                                     .toLowerCase()
                                                                     .contains(
-                                                                        '.webm') ||
+                                                                      '.webm',
+                                                                    ) ||
                                                                 url
                                                                     .toLowerCase()
                                                                     .contains(
-                                                                        '.mpeg4');
+                                                                      '.mpeg4',
+                                                                    );
 
                                                             final isPdf = url
                                                                 .toLowerCase()
                                                                 .contains(
-                                                                    '.pdf');
+                                                                  '.pdf',
+                                                                );
                                                             final isDoc = url
                                                                     .toLowerCase()
                                                                     .contains(
-                                                                        '.ppt') ||
+                                                                      '.ppt',
+                                                                    ) ||
                                                                 url
                                                                     .toLowerCase()
                                                                     .contains(
-                                                                        '.pptx') ||
+                                                                      '.pptx',
+                                                                    ) ||
                                                                 url
                                                                     .toLowerCase()
                                                                     .contains(
-                                                                        '.doc') ||
+                                                                      '.doc',
+                                                                    ) ||
                                                                 url
                                                                     .toLowerCase()
                                                                     .contains(
-                                                                        '.docx');
+                                                                      '.docx',
+                                                                    );
 
                                                             if (isVideo) {
                                                               if (kIsWeb) {
+                                                                // Use a stable ID based on URL only, so typing duration doesn't reload video
                                                                 final viewId =
-                                                                    'remote-video-${url.hashCode}-${_durationController.text}';
+                                                                    'remote-video-${url.hashCode}';
                                                                 // ignore: undefined_prefixed_name
                                                                 ui_web
                                                                     .platformViewRegistry
                                                                     .registerViewFactory(
                                                                         viewId,
-                                                                        (int
-                                                                            viewId) {
+                                                                        (
+                                                                  int viewId,
+                                                                ) {
                                                                   final video = html
                                                                       .VideoElement()
                                                                     ..src = url
@@ -2204,21 +2686,23 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                                     ..style.height =
                                                                         '100%';
 
-                                                                  // Apply duration limit if set
-                                                                  final durationStr =
-                                                                      _durationController
-                                                                          .text;
-                                                                  final durationLimit =
-                                                                      int.tryParse(
-                                                                          durationStr);
-                                                                  if (durationLimit !=
-                                                                          null &&
-                                                                      durationLimit >
-                                                                          0) {
-                                                                    video
-                                                                        .onTimeUpdate
-                                                                        .listen(
-                                                                            (event) {
+                                                                  // Apply duration limit dynamically
+                                                                  video
+                                                                      .onTimeUpdate
+                                                                      .listen((
+                                                                    event,
+                                                                  ) {
+                                                                    final durationStr =
+                                                                        _durationController
+                                                                            .text;
+                                                                    final durationLimit =
+                                                                        int.tryParse(
+                                                                      durationStr,
+                                                                    );
+                                                                    if (durationLimit !=
+                                                                            null &&
+                                                                        durationLimit >
+                                                                            0) {
                                                                       if (video
                                                                               .currentTime >
                                                                           durationLimit) {
@@ -2227,13 +2711,14 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                                         video
                                                                             .play();
                                                                       }
-                                                                    });
-                                                                  }
+                                                                    }
+                                                                  });
                                                                   return video;
                                                                 });
                                                                 return HtmlElementView(
-                                                                    viewType:
-                                                                        viewId);
+                                                                  viewType:
+                                                                      viewId,
+                                                                );
                                                               }
                                                               return Container(
                                                                 color: Colors
@@ -2245,36 +2730,50 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                                             .center,
                                                                     children: [
                                                                       const Icon(
-                                                                          Icons
-                                                                              .videocam,
-                                                                          color: Colors
-                                                                              .white54,
-                                                                          size:
-                                                                              48),
+                                                                        Icons
+                                                                            .videocam,
+                                                                        color: Colors
+                                                                            .white54,
+                                                                        size:
+                                                                            48,
+                                                                      ),
                                                                       const SizedBox(
-                                                                          height:
-                                                                              8),
+                                                                        height:
+                                                                            8,
+                                                                      ),
                                                                       const Text(
                                                                         'Video Background Set',
-                                                                        style: TextStyle(
-                                                                            color:
-                                                                                Colors.white70,
-                                                                            fontSize: 12),
+                                                                        style:
+                                                                            TextStyle(
+                                                                          color:
+                                                                              Colors.white70,
+                                                                          fontSize:
+                                                                              12,
+                                                                        ),
                                                                       ),
                                                                       Padding(
-                                                                        padding: const EdgeInsets
-                                                                            .all(
-                                                                            8.0),
+                                                                        padding:
+                                                                            const EdgeInsets.all(
+                                                                          8.0,
+                                                                        ),
                                                                         child:
                                                                             Text(
                                                                           url
-                                                                              .split('/')
+                                                                              .split(
+                                                                                '/',
+                                                                              )
                                                                               .last
-                                                                              .split('?')
+                                                                              .split(
+                                                                                '?',
+                                                                              )
                                                                               .first, // Show filename
-                                                                          style: const TextStyle(
-                                                                              color: Colors.white30,
-                                                                              fontSize: 10),
+                                                                          style:
+                                                                              const TextStyle(
+                                                                            color:
+                                                                                Colors.white30,
+                                                                            fontSize:
+                                                                                10,
+                                                                          ),
                                                                           textAlign:
                                                                               TextAlign.center,
                                                                           maxLines:
@@ -2296,8 +2795,9 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                                     .platformViewRegistry
                                                                     .registerViewFactory(
                                                                         viewId,
-                                                                        (int
-                                                                            viewId) {
+                                                                        (
+                                                                  int viewId,
+                                                                ) {
                                                                   final element = html
                                                                       .ObjectElement()
                                                                     ..data = url
@@ -2314,39 +2814,52 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                                 return Stack(
                                                                   children: [
                                                                     HtmlElementView(
-                                                                        viewType:
-                                                                            viewId),
+                                                                      viewType:
+                                                                          viewId,
+                                                                    ),
                                                                     Positioned(
                                                                       top: 8,
                                                                       right: 8,
                                                                       child:
                                                                           IconButton(
-                                                                        icon: const Icon(
-                                                                            Icons
-                                                                                .open_in_new,
-                                                                            color:
-                                                                                Colors.black),
+                                                                        icon:
+                                                                            const Icon(
+                                                                          Icons
+                                                                              .open_in_new,
+                                                                          color:
+                                                                              Colors.black,
+                                                                        ),
                                                                         tooltip:
                                                                             'Open PDF in New Tab',
                                                                         onPressed:
                                                                             () =>
-                                                                                launchUrl(Uri.parse(url)),
-                                                                        style: IconButton.styleFrom(
-                                                                            backgroundColor:
-                                                                                Colors.white.withOpacity(0.7)),
+                                                                                launchUrl(
+                                                                          Uri.parse(
+                                                                            url,
+                                                                          ),
+                                                                        ),
+                                                                        style: IconButton
+                                                                            .styleFrom(
+                                                                          backgroundColor: Colors
+                                                                              .white
+                                                                              .withOpacity(
+                                                                            0.7,
+                                                                          ),
+                                                                        ),
                                                                       ),
                                                                     ),
                                                                   ],
                                                                 );
                                                               }
                                                               return const Center(
-                                                                  child: Icon(
-                                                                      Icons
-                                                                          .picture_as_pdf,
-                                                                      color: Colors
-                                                                          .white,
-                                                                      size:
-                                                                          48));
+                                                                child: Icon(
+                                                                  Icons
+                                                                      .picture_as_pdf,
+                                                                  color: Colors
+                                                                      .white,
+                                                                  size: 48,
+                                                                ),
+                                                              );
                                                             } else if (isDoc) {
                                                               if (kIsWeb) {
                                                                 final viewId =
@@ -2356,8 +2869,9 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                                     .platformViewRegistry
                                                                     .registerViewFactory(
                                                                         viewId,
-                                                                        (int
-                                                                            viewId) {
+                                                                        (
+                                                                  int viewId,
+                                                                ) {
                                                                   final iframe = html
                                                                       .IFrameElement()
                                                                     ..src =
@@ -2371,17 +2885,19 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                                   return iframe;
                                                                 });
                                                                 return HtmlElementView(
-                                                                    viewType:
-                                                                        viewId);
+                                                                  viewType:
+                                                                      viewId,
+                                                                );
                                                               }
                                                               return const Center(
-                                                                  child: Icon(
-                                                                      Icons
-                                                                          .description,
-                                                                      color: Colors
-                                                                          .white,
-                                                                      size:
-                                                                          48));
+                                                                child: Icon(
+                                                                  Icons
+                                                                      .description,
+                                                                  color: Colors
+                                                                      .white,
+                                                                  size: 48,
+                                                                ),
+                                                              );
                                                             }
 
                                                             return Image
@@ -2395,12 +2911,15 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                                 color: Colors
                                                                     .grey
                                                                     .shade800,
-                                                                child: const Center(
-                                                                    child: Icon(
-                                                                        Icons
-                                                                            .broken_image,
-                                                                        color: Colors
-                                                                            .white24)),
+                                                                child:
+                                                                    const Center(
+                                                                  child: Icon(
+                                                                    Icons
+                                                                        .broken_image,
+                                                                    color: Colors
+                                                                        .white24,
+                                                                  ),
+                                                                ),
                                                               ),
                                                             );
                                                           },
@@ -2422,16 +2941,18 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                           colors: [
                                                             Colors.black
                                                                 .withOpacity(
-                                                                    0.3),
+                                                              0.3,
+                                                            ),
                                                             Colors.transparent,
                                                             Colors.black
                                                                 .withOpacity(
-                                                                    0.8),
+                                                              0.8,
+                                                            ),
                                                           ],
                                                           stops: const [
                                                             0.0,
                                                             0.5,
-                                                            1.0
+                                                            1.0,
                                                           ],
                                                         ),
                                                       ),
@@ -2447,20 +2968,24 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                         padding:
                                                             const EdgeInsets
                                                                 .symmetric(
-                                                                horizontal: 12,
-                                                                vertical: 6),
+                                                          horizontal: 12,
+                                                          vertical: 6,
+                                                        ),
                                                         decoration:
                                                             BoxDecoration(
                                                           color: Colors.white
                                                               .withOpacity(0.2),
                                                           borderRadius:
                                                               BorderRadius
-                                                                  .circular(20),
+                                                                  .circular(
+                                                            20,
+                                                          ),
                                                           border: Border.all(
-                                                              color: Colors
-                                                                  .white
-                                                                  .withOpacity(
-                                                                      0.3)),
+                                                            color: Colors.white
+                                                                .withOpacity(
+                                                              0.3,
+                                                            ),
+                                                          ),
                                                         ),
                                                         child: Text(
                                                           _selectedSlotId!,
@@ -2499,9 +3024,10 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                                 FontWeight.bold,
                                                             shadows: [
                                                               Shadow(
-                                                                  blurRadius: 4,
-                                                                  color: Colors
-                                                                      .black)
+                                                                blurRadius: 4,
+                                                                color: Colors
+                                                                    .black,
+                                                              ),
                                                             ],
                                                           ),
                                                         ),
@@ -2509,7 +3035,8 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                             .text
                                                             .isNotEmpty) ...[
                                                           const SizedBox(
-                                                              height: 8),
+                                                            height: 8,
+                                                          ),
                                                           Text(
                                                             _intentController
                                                                 .text,
@@ -2520,10 +3047,10 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                               fontSize: 16,
                                                               shadows: [
                                                                 Shadow(
-                                                                    blurRadius:
-                                                                        4,
-                                                                    color: Colors
-                                                                        .black)
+                                                                  blurRadius: 4,
+                                                                  color: Colors
+                                                                      .black,
+                                                                ),
                                                               ],
                                                             ),
                                                             maxLines: 1,
@@ -2536,7 +3063,8 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                             .text
                                                             .isNotEmpty) ...[
                                                           const SizedBox(
-                                                              height: 4),
+                                                            height: 4,
+                                                          ),
                                                           Text(
                                                             _descriptionController
                                                                 .text,
@@ -2547,10 +3075,10 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                               fontSize: 12,
                                                               shadows: [
                                                                 Shadow(
-                                                                    blurRadius:
-                                                                        4,
-                                                                    color: Colors
-                                                                        .black)
+                                                                  blurRadius: 4,
+                                                                  color: Colors
+                                                                      .black,
+                                                                ),
                                                               ],
                                                             ),
                                                             maxLines: 2,
@@ -2563,27 +3091,33 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                             .text
                                                             .isNotEmpty) ...[
                                                           const SizedBox(
-                                                              height: 16),
+                                                            height: 16,
+                                                          ),
                                                           Row(
                                                             children: [
                                                               const Icon(
-                                                                  Icons
-                                                                      .music_note,
-                                                                  color: Colors
-                                                                      .white70,
-                                                                  size: 16),
+                                                                Icons
+                                                                    .music_note,
+                                                                color: Colors
+                                                                    .white70,
+                                                                size: 16,
+                                                              ),
                                                               const SizedBox(
-                                                                  width: 8),
+                                                                width: 8,
+                                                              ),
                                                               Expanded(
                                                                 child: Text(
                                                                   'Audio attached',
-                                                                  style: TextStyle(
-                                                                      color: Colors
-                                                                          .white
-                                                                          .withOpacity(
-                                                                              0.7),
-                                                                      fontSize:
-                                                                          12),
+                                                                  style:
+                                                                      TextStyle(
+                                                                    color: Colors
+                                                                        .white
+                                                                        .withOpacity(
+                                                                      0.7,
+                                                                    ),
+                                                                    fontSize:
+                                                                        12,
+                                                                  ),
                                                                 ),
                                                               ),
                                                             ],
@@ -2662,122 +3196,143 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                  const SizedBox(height: 20),
-                  Text(
-                    'National Notice Board',
-                    style: TextStyle(
-                      color: Colors.white.withOpacity(0.9),
-                      fontSize: 20,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 1.1,
+                    const SizedBox(height: 20),
+                    Text(
+                      'National Notice Board',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.9),
+                        fontSize: 20,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 1.1,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 12),
+                    const SizedBox(height: 12),
 
-                  // Next Local Event (Dynamic)
-                  _buildNoticeItem(
-                    icon: Icons.access_time,
-                    label: 'National Event',
-                    value: '$timeStr Today',
-                  ),
-                  const SizedBox(height: 8),
-
-                  // Event Description / Purpose
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.white.withOpacity(0.1)),
+                    // Next Local Event (Dynamic)
+                    _buildNoticeItem(
+                      icon: Icons.access_time,
+                      label: 'National Event',
+                      value: '$timeStr Today',
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          titleStr,
-                          style: const TextStyle(
+                    const SizedBox(height: 8),
+
+                    // Event Description / Purpose
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: Colors.white.withOpacity(0.1),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            titleStr,
+                            style: const TextStyle(
                               color: Colors.white,
                               fontSize: 14,
-                              fontWeight: FontWeight.w600),
-                        ),
-                        const SizedBox(height: 2),
-                        if (intentStr != 'Intent' && intentStr.isNotEmpty && descriptionStr.isNotEmpty)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 2.0),
-                            child: Text(
-                              intentStr,
-                              style: const TextStyle(
-                                  color: Colors.amber,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w500),
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
-                        Text(
-                          descriptionStr.isNotEmpty 
-                              ? descriptionStr 
-                              : (intentStr != 'Intent' && intentStr.isNotEmpty ? intentStr : 'Join us for a moment of shared intention...'),
-                          style: TextStyle(
-                              color: Colors.white.withOpacity(0.8),
-                              fontSize: 11),
-                          maxLines: 4,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-
-                  // Stats
-                  SizedBox(
-                    width: double.infinity,
-                    child: _buildStatCard(
-                        'Participants', '1,234', Icons.people),
-                  ),
-                  const SizedBox(height: 8),
-                  SizedBox(
-                    width: double.infinity,
-                    child: _buildStatCard(
-                        'Trending', 'Peace', Icons.trending_up),
-                  ),
-                  const SizedBox(height: 8),
-
-                  // National Users Stat
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(vertical: 6, horizontal: 10),
-                    decoration: BoxDecoration(
-                      color: Colors.blue.withOpacity(0.2),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Padding(
-                          padding: EdgeInsets.only(top: 2.0),
-                          child: Icon(Icons.public,
-                              color: Colors.lightBlueAccent, size: 14),
-                        ),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            '452 National users joined in this moment',
+                          const SizedBox(height: 2),
+                          if (intentStr != 'Intent' &&
+                              intentStr.isNotEmpty &&
+                              descriptionStr.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 2.0),
+                              child: Text(
+                                intentStr,
+                                style: const TextStyle(
+                                  color: Colors.amber,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          Text(
+                            descriptionStr.isNotEmpty
+                                ? descriptionStr
+                                : (intentStr != 'Intent' && intentStr.isNotEmpty
+                                    ? intentStr
+                                    : 'Join us for a moment of shared intention...'),
                             style: TextStyle(
+                              color: Colors.white.withOpacity(0.8),
+                              fontSize: 11,
+                            ),
+                            maxLines: 4,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+
+                    // Stats
+                    SizedBox(
+                      width: double.infinity,
+                      child: _buildStatCard(
+                        'Participants',
+                        '1,234',
+                        Icons.people,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      child: _buildStatCard(
+                        'Trending',
+                        'Peace',
+                        Icons.trending_up,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+
+                    // National Users Stat
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 6,
+                        horizontal: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Padding(
+                            padding: EdgeInsets.only(top: 2.0),
+                            child: Icon(
+                              Icons.public,
+                              color: Colors.lightBlueAccent,
+                              size: 14,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              '452 National users joined in this moment',
+                              style: TextStyle(
                                 color: Colors.white.withOpacity(0.9),
                                 fontSize: 10,
-                                height: 1.2),
-                            softWrap: true,
+                                height: 1.2,
+                              ),
+                              softWrap: true,
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
 
-                  const SizedBox(height: 20),
-                ],
+                    const SizedBox(height: 20),
+                  ],
+                ),
               ),
             ),
-          ),
           ),
         ],
       ),
@@ -2801,26 +3356,40 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                 : Colors.white.withOpacity(0.1),
             shape: BoxShape.circle,
           ),
-          child: Icon(icon,
-              color: isHighlight ? Colors.amber : Colors.white, size: 16), // Reduced from 20
+          child: Icon(
+            icon,
+            color: isHighlight ? Colors.amber : Colors.white,
+            size: 16,
+          ), // Reduced from 20
         ),
         const SizedBox(width: 8), // Reduced from 12
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(label,
-                  style: TextStyle(
-                      color: Colors.white.withOpacity(0.7), fontSize: 10)), // Reduced from 11
-              Text(value,
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 14, // Reduced from 16
-                      fontWeight: FontWeight.w600)),
+              Text(
+                label,
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.7),
+                  fontSize: 10,
+                ),
+              ), // Reduced from 11
+              Text(
+                value,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14, // Reduced from 16
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
               if (subValue != null)
-                Text(subValue,
-                    style: TextStyle(
-                        color: Colors.white.withOpacity(0.9), fontSize: 12)), // Reduced from 13
+                Text(
+                  subValue,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.9),
+                    fontSize: 12,
+                  ),
+                ), // Reduced from 13
             ],
           ),
         ),
@@ -2840,18 +3409,25 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
         children: [
           Icon(icon, color: Colors.white70, size: 16), // Reduced from 18
           const SizedBox(height: 4), // Reduced from 6
-          Text(value,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 16, // Reduced from 18
-                  fontWeight: FontWeight.w600)),
-          Text(label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                  color: Colors.white.withOpacity(0.6), fontSize: 10)), // Reduced from 11
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 16, // Reduced from 18
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.6),
+              fontSize: 10,
+            ),
+          ), // Reduced from 11
         ],
       ),
     );
@@ -2862,7 +3438,7 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
       'id': event.id,
       'title': event.title,
       'intent': event.intent,
-      'description': '', 
+      'description': '',
       'visualUrl': event.visualUrl,
       'soundUrl': event.soundUrl,
       'durationSeconds': event.durationSeconds,
@@ -2872,31 +3448,9 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
       'isRandomized': event.isRandomized,
       'useTrendingIntent': event.useTrendingIntent,
       'noticeBoardShowBeforeMinutes': event.noticeBoardShowBeforeMinutes,
-      'noticeBoardVisibilityAfterMinutes': event.noticeBoardVisibilityAfterMinutes,
+      'noticeBoardVisibilityAfterMinutes':
+          event.noticeBoardVisibilityAfterMinutes,
       'updatedAt': event.updatedAt,
     };
-  }
-
-  String _getWeekDateRange(int offset) {
-    // Basic helper to show formatted dates
-    final now = DateTime.now();
-    // Monday align logic
-    final today = DateTime(now.year, now.month, now.day);
-    final daysSinceMon = today.weekday - 1; 
-    final mon = today.subtract(Duration(days: daysSinceMon));
-    
-    final start = mon.add(Duration(days: 7 * offset));
-    final end = start.add(const Duration(days: 6));
-    
-    final f = DateFormat('MMM d');
-    return "${f.format(start)} - ${f.format(end)}";
-  }
-
-  void _rebuildScheduleData() {
-     setState(() {
-       _selectedSlotId = null;
-       _scheduledEventsData.clear();
-     });
-     _loadDraftFromLocal(); // Load data for the new week offset
   }
 }

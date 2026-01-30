@@ -4,7 +4,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:video_player/video_player.dart';
 import '../widgets/video_widgets.dart';
 // ignore: avoid_web_libraries_in_flutter
 // ignore: avoid_web_libraries_in_flutter
@@ -638,7 +637,7 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
                 ),
                 const SizedBox(height: 16),
                 DropdownButtonFormField<String>(
-                  value: _selectedSectionId,
+                  initialValue: _selectedSectionId,
                   decoration: const InputDecoration(
                     labelText: 'Section',
                     border: OutlineInputBorder(),
@@ -658,7 +657,7 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
                 
                  if (_selectedSectionId != null && availableSubcategories.isNotEmpty) ...[
                    DropdownButtonFormField<String>(
-                    value: availableSubcategories.contains(_selectedSubcategory) ? _selectedSubcategory : null,
+                    initialValue: availableSubcategories.contains(_selectedSubcategory) ? _selectedSubcategory : null,
                     decoration: const InputDecoration(labelText: 'Subcategory'),
                     items: [
                       const DropdownMenuItem(value: null, child: Text('None (General in Section)')),
@@ -889,7 +888,7 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
                 TextField(controller: _titleController, decoration: const InputDecoration(labelText: 'Title')),
                 const SizedBox(height: 16),
                 DropdownButtonFormField<String>(
-                  value: _selectedSectionId,
+                  initialValue: _selectedSectionId,
                   decoration: const InputDecoration(labelText: 'Section'),
                   items: [
                     const DropdownMenuItem(value: null, child: Text('None (General)')),
@@ -906,7 +905,7 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
                 
                  if (_selectedSectionId != null && availableSubcategories.isNotEmpty) ...[
                    DropdownButtonFormField<String>(
-                    value: availableSubcategories.contains(_selectedSubcategory) ? _selectedSubcategory : null,
+                    initialValue: availableSubcategories.contains(_selectedSubcategory) ? _selectedSubcategory : null,
                     decoration: const InputDecoration(labelText: 'Subcategory'),
                     items: [
                       const DropdownMenuItem(value: null, child: Text('None (General in Section)')),
@@ -1004,7 +1003,7 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
                   TextField(controller: _titleController, decoration: const InputDecoration(labelText: 'Title')),
                   const SizedBox(height: 16),
                   DropdownButtonFormField<String>(
-                    value: _selectedSectionId,
+                    initialValue: _selectedSectionId,
                     decoration: const InputDecoration(labelText: 'Section'),
                     items: [
                       const DropdownMenuItem(value: null, child: Text('User Topics Landing View Topics Landing View (General)')),
@@ -1021,7 +1020,7 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
                   
                   if (_selectedSectionId != null && availableSubcategories.isNotEmpty) ...[
                    DropdownButtonFormField<String>(
-                    value: availableSubcategories.contains(_selectedSubcategory) ? _selectedSubcategory : null,
+                    initialValue: availableSubcategories.contains(_selectedSubcategory) ? _selectedSubcategory : null,
                     decoration: const InputDecoration(labelText: 'Subcategory'),
                     items: [
                       const DropdownMenuItem(value: null, child: Text('None (General in Section)')),
@@ -1160,7 +1159,7 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
                 ),
                 const SizedBox(height: 16),
                 DropdownButtonFormField<String>(
-                  value: _selectedSectionId,
+                  initialValue: _selectedSectionId,
                   decoration: const InputDecoration(labelText: 'Section'),
                   items: [
                     const DropdownMenuItem(value: null, child: Text('None (General)')),
@@ -1177,7 +1176,7 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
                 
                 if (_selectedSectionId != null && availableSubcategories.isNotEmpty) ...[
                    DropdownButtonFormField<String>(
-                    value: availableSubcategories.contains(currentSubcategory) ? currentSubcategory : null,
+                    initialValue: availableSubcategories.contains(currentSubcategory) ? currentSubcategory : null,
                     decoration: const InputDecoration(labelText: 'Subcategory'),
                     items: [
                       const DropdownMenuItem(value: null, child: Text('None (General in Section)')),
@@ -1254,9 +1253,8 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
         Container(
           width: 300,
           color: Colors.white,
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          child: ListView(
+            padding: const EdgeInsets.all(16),
             children: [
               const Text('Content Manager', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
@@ -1333,49 +1331,46 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
               const Divider(height: 32),
               const Text('Preview Navigation:', style: TextStyle(fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
-              Expanded(
-                child: ListView(
+
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.home),
+                title: const Text('User Topics Landing View'),
+                selected: _previewSectionId == null,
+                selectedTileColor: Colors.indigo.withOpacity(0.1),
+                onTap: () => setState(() {
+                  _previewSectionId = null;
+                  _previewSubcategory = null;
+                }),
+              ),
+              ..._sections.map((section) {
+                final isSelected = _previewSectionId == section.id;
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     ListTile(
-                      leading: const Icon(Icons.home),
-                      title: const Text('User Topics Landing View'),
-                      selected: _previewSectionId == null,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(isSelected ? Icons.folder_open : Icons.folder),
+                      title: Text(section.title),
+                      selected: isSelected,
                       selectedTileColor: Colors.indigo.withOpacity(0.1),
                       onTap: () => setState(() {
-                        _previewSectionId = null;
+                        _previewSectionId = section.id;
                         _previewSubcategory = null;
                       }),
                     ),
-                    ..._sections.map((section) {
-                      final isSelected = _previewSectionId == section.id;
-                      return Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          ListTile(
-                            leading: Icon(isSelected ? Icons.folder_open : Icons.folder),
-                            title: Text(section.title),
-                            selected: isSelected,
-                            selectedTileColor: Colors.indigo.withOpacity(0.1),
-                            onTap: () => setState(() {
-                              _previewSectionId = section.id;
-                              _previewSubcategory = null;
-                            }),
-                          ),
-                          if (isSelected) 
-                            ...section.subcategories.map((sub) => ListTile(
-                              leading: const SizedBox(width: 24), // Indent
-                              contentPadding: const EdgeInsets.only(left: 32, right: 16),
-                              title: Text(sub, style: const TextStyle(fontSize: 14)),
-                              selected: _previewSubcategory == sub,
-                              selectedColor: Colors.purple,
-                              onTap: () => setState(() => _previewSubcategory = sub),
-                            )),
-                        ],
-                      );
-                    }),
+                    if (isSelected) 
+                      ...section.subcategories.map((sub) => ListTile(
+                        leading: const SizedBox(width: 24), // Indent
+                        contentPadding: const EdgeInsets.only(left: 32, right: 16),
+                        title: Text(sub, style: const TextStyle(fontSize: 14)),
+                        selected: _previewSubcategory == sub,
+                        selectedColor: Colors.purple,
+                        onTap: () => setState(() => _previewSubcategory = sub),
+                      )),
                   ],
-                ),
-              ),
+                );
+              }),
             ],
           ),
         ),
