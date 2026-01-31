@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import 'dart:async'; // Added for Timer
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../models/event.dart';
+import '../widgets/active_operators_card.dart'; // Added for Active Operators
 // import '../widgets/dashboard_clock.dart'; // Removed
 
 class DashboardTab extends StatefulWidget {
@@ -174,7 +175,7 @@ class _DashboardTabState extends State<DashboardTab> {
                 
                 // National Events Card (Right) - Replacing Published/Total
                 Expanded(
-                  flex: 5,
+                  flex: 4, // Reduced slightly to fit operators
                   child: _NationalEventsCard(
                     events: events,
                     selectedOffset: _selectedNationalOffset,
@@ -189,9 +190,17 @@ class _DashboardTabState extends State<DashboardTab> {
                 ),
 
                 const SizedBox(width: 16),
+
+                // Active Operators (New)
+                const Expanded(
+                  flex: 2,
+                  child: ActiveOperatorsCard(),
+                ),
+
+                const SizedBox(width: 16),
                 // Admin Alerts
                 Expanded(
-                  flex: 3, 
+                  flex: 2, 
                   child: const _AdminAlertsCard(),
                 ),
               ],

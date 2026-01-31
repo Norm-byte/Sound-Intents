@@ -29,6 +29,7 @@ import 'ui/notifications_screen.dart';
 import 'ui/widgets/locked_tab_wrapper.dart';
 import 'widgets/app_footer.dart';
 import 'widgets/session_timeout_manager.dart'; // Add Session Manager
+import 'services/lock_service.dart'; // Add Lock Service
 import 'build_info.dart';
 
 Future<void> main() async {
@@ -219,7 +220,7 @@ class _AdminHomePageState extends State<AdminHomePage>
   Stream<List<Event>>? _eventsStream;
   StreamSubscription<List<Event>>? _eventsSub;
   StreamSubscription<List<Event>>? _globalEventsSub;
-  Timer? _heartbeatTimer;
+  // Timer? _heartbeatTimer; // Moved to LockService
 
   List<Event> _scheduledEvents = [];
   List<Event> _globalEvents = [];
@@ -634,24 +635,11 @@ class _AdminHomePageState extends State<AdminHomePage>
     _repository = FirestoreEventRepository();
     _loadEvents();
     _initStream();
-    _startHeartbeat();
+    LockService().startService(); // Replace manual heartbeat
     AdminUserService().updateLastLoginNow();
   }
 
-  void _startHeartbeat() {
-    _heartbeatTimer = Timer.periodic(const Duration(minutes: 1), (timer) {
-      FirebaseFirestore.instance
-          .collection('admin_users')
-          .doc(widget.adminUser.uid)
-          .update({'lastActive': DateTime.now().toIso8601String()}).catchError(
-              (e) => debugPrint('Heartbeat failed: $e'));
-    });
-    // Fire immediately once
-    FirebaseFirestore.instance
-        .collection('admin_users')
-        .doc(widget.adminUser.uid)
-        .update({'lastActive': DateTime.now().toIso8601String()});
-  }
+  // _startHeartbeat removed - handled by LockService
 
   Future<void> _loadEvents() async {
     final saved = await _repository.loadEvents();
@@ -812,8 +800,9 @@ class _AdminHomePageState extends State<AdminHomePage>
   void dispose() {
     _eventsSub?.cancel();
     _globalEventsSub?.cancel();
-    _heartbeatTimer?.cancel();
+    // _heartbeatTimer?.cancel(); // Handled by LockService
     _tabController.dispose();
+    LockService().stopService();
     super.dispose();
   }
 }

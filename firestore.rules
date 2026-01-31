@@ -52,6 +52,21 @@ service cloud.firestore {
       
       allow delete: if isSuperAdmin();
     }
+
+    // Admin Locks - Traffic Control
+    match /admin_locks/{lockId} {
+      allow read, write: if isActiveAdmin();
+    }
+
+    // Admin Presence - Who is online
+    match /admin_presence/{userId} {
+      allow read, write: if true; // Fully open for dashboard functionality
+    }
+
+    // Support Inbox - Central Alert System
+    match /support_inbox/{document=**} {
+      allow read, write: if true; // Write: Users send alerts. Read: Admins view inbox. 
+    }
     
     // Admin access requests - users can create their own, super-admins can read/update all
     match /admin_access_requests/{requestId} {

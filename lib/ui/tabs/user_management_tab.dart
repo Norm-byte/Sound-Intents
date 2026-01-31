@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import '../../models/user_profile.dart';
+import '../../services/lock_service.dart';
+import '../../utils/quick_replies.dart';
 
 class UserManagementTab extends StatefulWidget {
   final String? initialUserId;
@@ -24,6 +26,15 @@ class _UserManagementTabState extends State<UserManagementTab> {
     if (widget.initialUserId != null) {
       _loadInitialUser();
     }
+  }
+
+  @override
+  void dispose() {
+    // Release any held lock
+    if (_selectedUser != null) {
+      LockService().releaseLock(_selectedUser!.id, 'user');
+    }
+    super.dispose();
   }
 
   @override
@@ -267,7 +278,41 @@ class _UserManagementTabState extends State<UserManagementTab> {
                         return _UserIndexCard(
                           user: user,
                           isSelected: isSelected,
-                          onTap: () {
+                          onTap: () async {
+                            if (_selectedUser?.id == user.id) return;
+
+                            // 1. Try to acquire lock
+                            try {
+                              final lockedBy = await LockService().acquireLock(user.id, 'user');
+                              
+                              if (lockedBy != null) {
+                                if (context.mounted) {
+                                  showDialog(
+                                    context: context,
+                                    builder: (ctx) => AlertDialog(
+                                      title: Row(children: [
+                                        const Icon(Icons.lock, color: Colors.orange), 
+                                        const SizedBox(width: 8), 
+                                        const Text('Locked'),
+                                      ]),
+                                      content: Text('This user is currently being processed by administrator "$lockedBy".\n\nPlease wait for them to finish.'),
+                                      actions: [
+                                        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+                                      ],
+                                    ),
+                                  );
+                                }
+                                return;
+                              }
+                            } catch (e) {
+                              debugPrint('Lock error (ignored): $e');
+                            }
+
+                            // 2. Release previous lock if exists
+                            if (_selectedUser != null) {
+                               LockService().releaseLock(_selectedUser!.id, 'user').catchError((_){});
+                            }
+
                             setState(() {
                               _selectedUser = user;
                               _initialDetailTabIndex = 0;
@@ -281,103 +326,140 @@ class _UserManagementTabState extends State<UserManagementTab> {
   }
 
   Widget _buildSupportInbox() {
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collectionGroup('messages')
-          .where('sender', isEqualTo: 'user')
-          .orderBy('timestamp', descending: true)
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          return Center(
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: SelectableText(
-                'Error loading messages:\n${snapshot.error}',
-                style: const TextStyle(color: Colors.red),
-                textAlign: TextAlign.center,
-              ),
-            ),
-          );
-        }
+    return Column(
+      children: [
+        // Header to distinguish from User List
+        Container(
+          padding: const EdgeInsets.all(12),
+          width: double.infinity,
+          color: Colors.indigo.shade50,
+          child: const Text('Support Inbox (Recent Thread Activity)', 
+            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.indigo)),
+        ),
+        Expanded(
+          child: StreamBuilder<QuerySnapshot>(
+            stream: FirebaseFirestore.instance
+                .collection('support_inbox') // Now using the summarized inbox
+                .orderBy('timestamp', descending: true)
+                .snapshots(),
+            builder: (context, snapshot) {
+              if (snapshot.hasError) {
+                return Center(child: Text('Error: ${snapshot.error}', style: const TextStyle(color: Colors.red)));
+              }
 
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
+              }
 
-        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.inbox, size: 64, color: Colors.grey.shade300),
-                const SizedBox(height: 16),
-                const Text('No new support messages'),
-              ],
-            ),
-          );
-        }
-
-        final messages = snapshot.data!.docs;
-
-        return ListView.separated(
-          padding: const EdgeInsets.all(16),
-          itemCount: messages.length,
-          separatorBuilder: (_, __) => const Divider(),
-          itemBuilder: (context, index) {
-            final msgDoc = messages[index];
-            final msg = msgDoc.data() as Map<String, dynamic>;
-            final timestamp = _safeDate(msg['timestamp']);
-            final userRef = msgDoc.reference.parent.parent; // users/{uid}
-
-            return FutureBuilder<DocumentSnapshot>(
-              future: userRef?.get(),
-              builder: (context, userSnapshot) {
-                final userName = userSnapshot.hasData && userSnapshot.data!.exists
-                    ? (userSnapshot.data!.data() as Map<String, dynamic>)['name'] ?? 'Unknown User'
-                    : 'Loading...';
-
-                return ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: Colors.indigo.shade100,
-                    child: const Icon(Icons.person, color: Colors.indigo),
-                  ),
-                  title: Row(
+              if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Expanded(child: Text(userName, style: const TextStyle(fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis)),
-                      if (timestamp != null)
-                        Text(
-                          DateFormat('MMM d, h:mm a').format(timestamp),
-                          style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
-                        ),
+                      Icon(Icons.inbox, size: 64, color: Colors.grey.shade300),
+                      const SizedBox(height: 16),
+                      const Text('Inbox Empty'),
                     ],
                   ),
-                  subtitle: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (msg['title'] != null)
-                        Text(msg['title'], style: const TextStyle(fontWeight: FontWeight.w600)),
-                      Text(msg['content'] ?? '', maxLines: 2, overflow: TextOverflow.ellipsis),
-                    ],
-                  ),
-                  onTap: () async {
-                    if (userSnapshot.hasData && userSnapshot.data!.exists) {
-                      final user = UserProfile.fromFirestore(
-                        userSnapshot.data!.id, 
-                        userSnapshot.data!.data() as Map<String, dynamic>
-                      );
-                      setState(() {
-                        _selectedUser = user;
-                        _initialDetailTabIndex = 2; // Switch to Communications tab
-                      });
-                    }
-                  },
                 );
-              },
-            );
-          },
-        );
-      },
+              }
+
+              final messages = snapshot.data!.docs;
+
+              return ListView.separated(
+                padding: const EdgeInsets.all(16),
+                itemCount: messages.length,
+                separatorBuilder: (_, __) => const Divider(),
+                itemBuilder: (context, index) {
+                  final msgDoc = messages[index];
+                  final msg = msgDoc.data() as Map<String, dynamic>;
+                  final timestamp = _safeDate(msg['timestamp']);
+                  
+                  // In the new system, document ID is the User ID
+                  final userId = msg['userId'] ?? msgDoc.id; 
+                  final userName = msg['userName'] ?? 'Unknown User';
+                  
+                  return ListTile(
+                    leading: CircleAvatar(
+                      backgroundColor: Colors.indigo.shade100,
+                      child: const Icon(Icons.person, color: Colors.indigo),
+                    ),
+                    title: Row(
+                      children: [
+                        Expanded(child: Text(userName, style: const TextStyle(fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis)),
+                        if (timestamp != null)
+                          Text(
+                            DateFormat('MMM d, h:mm a').format(timestamp),
+                            style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                          ),
+                      ],
+                    ),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                         Text(msg['content'] ?? 'New Message', maxLines: 2, overflow: TextOverflow.ellipsis),
+                      ],
+                    ),
+                    onTap: () async {
+                      // Fetch direct user reference
+                      final userDocRef = FirebaseFirestore.instance.collection('users').doc(userId);
+                      
+                      try {
+                          final userDoc = await userDocRef.get();
+                          if (!userDoc.exists) {
+                             if (context.mounted) {
+                               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('User profile not found.')));
+                             }
+                             return;
+                          }
+
+                          final userData = userDoc.data() as Map<String, dynamic>;
+                          final user = UserProfile.fromFirestore(userDoc.id, userData);
+                          
+                          // Lock Logic
+                          if (_selectedUser?.id != user.id) {
+                            // ... Locking logic ...
+                             if (_selectedUser != null) {
+                               LockService().releaseLock(_selectedUser!.id, 'user').catchError((e) {});
+                             }
+                          }
+
+                          setState(() {
+                            _selectedUser = user;
+                            _initialDetailTabIndex = 2; // Switch to Communications tab
+                          });
+                        } catch (e) {
+                          debugPrint('Error accessing user details: $e');
+                        }
+                    },
+                    trailing: IconButton(
+                      icon: const Icon(Icons.delete_outline, color: Colors.grey),
+                      tooltip: 'Clear from Inbox',
+                      onPressed: () async {
+                        final confirm = await showDialog<bool>(
+                          context: context,
+                          builder: (ctx) => AlertDialog(
+                            title: const Text('Remove from Inbox?'),
+                            content: const Text('This will remove the conversation from this list. The message history is still preserved in the user profile.'),
+                            actions: [
+                              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                              TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Remove', style: TextStyle(color: Colors.red))),
+                            ],
+                          ),
+                        );
+
+                        if (confirm == true) {
+                           await msgDoc.reference.delete();
+                        }
+                      },
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 }
@@ -396,74 +478,112 @@ class _UserIndexCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      elevation: isSelected ? 4 : 1,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(
-          color: isSelected ? Colors.indigo : Colors.transparent,
-          width: 2,
-        ),
-      ),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              CircleAvatar(
-                radius: 28,
-                backgroundColor: _statusColor(user.status).withOpacity(0.2),
-                child: Text(
-                  user.name.isNotEmpty ? user.name[0].toUpperCase() : '?',
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: _statusColor(user.status),
+    return StreamBuilder<String?>(
+      stream: LockService().watchLock(user.id, 'user'),
+      builder: (context, snapshot) {
+        final lockedBy = snapshot.data;
+        final isLocked = lockedBy != null;
+
+        return Card(
+          elevation: isSelected ? 4 : 1,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(
+              color: isLocked 
+                  ? Colors.orange.withOpacity(0.5) 
+                  : (isSelected ? Colors.indigo : Colors.transparent),
+              width: 2,
+            ),
+          ),
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(12),
+            child: Stack(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 28,
+                        backgroundColor: _statusColor(user.status).withOpacity(0.2),
+                        child: Text(
+                          user.name.isNotEmpty ? user.name[0].toUpperCase() : '?',
+                          style: TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                            color: _statusColor(user.status),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              user.name,
+                              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              user.email,
+                              style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                _StatusBadge(status: user.status),
+                                const SizedBox(width: 8),
+                                Icon(Icons.event, size: 14, color: Colors.grey.shade500),
+                                const SizedBox(width: 4),
+                                Text(
+                                  '${user.eventsJoined} events',
+                                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (!isLocked)
+                        Icon(
+                          Icons.chevron_right,
+                          color: isSelected ? Colors.indigo : Colors.grey.shade400,
+                        ),
+                    ],
                   ),
                 ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      user.name,
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                      overflow: TextOverflow.ellipsis,
+                if (isLocked)
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.shade100,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.orange),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.lock, size: 12, color: Colors.deepOrange),
+                          const SizedBox(width: 4),
+                          Text(
+                            lockedBy!,
+                            style: const TextStyle(fontSize: 10, color: Colors.deepOrange, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      user.email,
-                      style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        _StatusBadge(status: user.status),
-                        const SizedBox(width: 8),
-                        Icon(Icons.event, size: 14, color: Colors.grey.shade500),
-                        const SizedBox(width: 4),
-                        Text(
-                          '${user.eventsJoined} events',
-                          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              Icon(
-                Icons.chevron_right,
-                color: isSelected ? Colors.indigo : Colors.grey.shade400,
-              ),
-            ],
+                  ),
+              ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -676,13 +796,29 @@ class _UserDetailPanelState extends State<_UserDetailPanel> with SingleTickerPro
         title: Text('Send Message to ${widget.user.name}'),
         content: SizedBox(
           width: 420,
-          child: TextField(
-            controller: _noteController,
-            maxLines: 6,
-            decoration: const InputDecoration(
-              hintText: 'Type your message...',
-              border: OutlineInputBorder(),
-            ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+               TextButton.icon(
+                 icon: const Icon(Icons.flash_on, size: 16, color: Colors.amber),
+                 label: const Text('Quick Reply', style: TextStyle(color: Colors.amber)),
+                 style: TextButton.styleFrom(
+                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                 ),
+                 onPressed: () => _showQuickReplyPicker(context, _noteController),
+               ),
+               const SizedBox(height: 4),
+               TextField(
+                controller: _noteController,
+                maxLines: 6,
+                decoration: const InputDecoration(
+                  hintText: 'Type your message...',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
           ),
         ),
         actions: [
@@ -1343,6 +1479,11 @@ class _CommunicationsTabState extends State<_CommunicationsTab> {
                 child: TextField(
                   controller: _messageController,
                   decoration: InputDecoration(
+                    prefixIcon: IconButton(
+                       icon: const Icon(Icons.flash_on, color: Colors.amber),
+                       tooltip: 'Quick Reply',
+                       onPressed: () => _showQuickReplyPicker(context, _messageController),
+                    ),
                     hintText: 'Type a reply...',
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(24),
@@ -1518,4 +1659,52 @@ DateTime? _safeDate(dynamic val) {
   if (val is String) return DateTime.tryParse(val);
   return null;
 }
+
+void _showQuickReplyPicker(BuildContext context, TextEditingController controller) {
+  showDialog(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Row(children: [Icon(Icons.flash_on, color: Colors.amber), SizedBox(width: 8), Text('Quick Replies')]),
+      content: SizedBox(
+        width: 400,
+        height: 500,
+        child: ListView.separated(
+          itemCount: kQuickReplies.length,
+          separatorBuilder: (_, __) => const Divider(height: 1),
+          itemBuilder: (context, index) {
+            final reply = kQuickReplies[index];
+            return ListTile(
+              visualDensity: VisualDensity.compact,
+              title: Text(reply.text, style: const TextStyle(fontSize: 13)),
+              subtitle: Text(reply.category.toUpperCase(), style: TextStyle(fontSize: 10, color: Colors.indigo.shade300, fontWeight: FontWeight.bold)),
+              onTap: () {
+                 final text = reply.text;
+                 final selection = controller.selection;
+                 if (selection.isValid && selection.start >= 0) {
+                   final newText = controller.text.replaceRange(selection.start, selection.end, text);
+                   controller.value = TextEditingValue(
+                     text: newText,
+                     selection: TextSelection.collapsed(offset: selection.start + text.length),
+                   );
+                 } else {
+                    // Append if not empty, else replace
+                   if (controller.text.isNotEmpty) {
+                      controller.text = '${controller.text}\n$text';
+                   } else {
+                      controller.text = text;
+                   }
+                 }
+                Navigator.pop(ctx);
+              },
+            );
+          },
+        ),
+      ),
+       actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+      ],
+    ),
+  );
+}
+
 
