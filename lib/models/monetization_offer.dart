@@ -47,13 +47,15 @@ class MonetizationOffer {
 }
 
 class AppUsageLimits {
-  final int maxMonthlySends;
+  final int maxMonthlySends; // Deprecated, kept for backward compatibility if needed, but primary is now Daily
+  final int maxDailySends;   // New primary limit
   final int maxActiveForums;
   final int maxMediaStorageMb;
   final bool allowVideoUploads;
 
   AppUsageLimits({
-    this.maxMonthlySends = 50,
+    this.maxMonthlySends = 1500, // Approx 50/day * 30
+    this.maxDailySends = 50,
     this.maxActiveForums = 1,
     this.maxMediaStorageMb = 100,
     this.allowVideoUploads = false,
@@ -61,7 +63,8 @@ class AppUsageLimits {
 
   factory AppUsageLimits.fromMap(Map<String, dynamic> map) {
     return AppUsageLimits(
-      maxMonthlySends: map['maxMonthlySends'] ?? 50,
+      maxMonthlySends: map['maxMonthlySends'] ?? 1500,
+      maxDailySends: map['maxDailySends'] ?? 50,
       maxActiveForums: map['maxActiveForums'] ?? 1,
       maxMediaStorageMb: map['maxMediaStorageMb'] ?? 100,
       allowVideoUploads: map['allowVideoUploads'] ?? false,
@@ -71,6 +74,7 @@ class AppUsageLimits {
   Map<String, dynamic> toMap() {
     return {
       'maxMonthlySends': maxMonthlySends,
+      'maxDailySends': maxDailySends,
       'maxActiveForums': maxActiveForums,
       'maxMediaStorageMb': maxMediaStorageMb,
       'allowVideoUploads': allowVideoUploads,
