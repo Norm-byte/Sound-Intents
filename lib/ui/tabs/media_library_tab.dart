@@ -1158,27 +1158,24 @@ class _MediaCard extends StatelessWidget {
         color = Colors.grey;
     }
 
-    // Helper to check if it's an image
-    bool isImage = item.type == 'image';
-    if (!isImage) {
-      final String lowerName = item.name.toLowerCase();
-      final String lowerUrl = item.url.toLowerCase().split('?').first;
-      isImage = lowerName.endsWith('.jpg') || 
-                lowerName.endsWith('.jpeg') || 
-                lowerName.endsWith('.png') || 
-                lowerName.endsWith('.gif') || 
-                lowerName.endsWith('.webp') || 
-                lowerName.endsWith('.bmp') ||
-                lowerUrl.endsWith('.jpg') || 
-                lowerUrl.endsWith('.jpeg') || 
-                lowerUrl.endsWith('.png') || 
-                lowerUrl.endsWith('.gif') || 
-                lowerUrl.endsWith('.webp') || 
-                lowerUrl.endsWith('.bmp');
-    }
-
     // Helper to check if it's a video (including YouTube)
-    bool isVideo = item.type == 'video' || item.url.contains('youtube') || item.url.contains('youtu.be') || item.url.endsWith('.mp4') || item.url.endsWith('.mov');
+    bool isVideo = item.type == 'video' || item.url.contains('youtube') || item.url.contains('youtu.be') || item.url.endsWith('.mp4') || item.url.endsWith('.mov') || item.url.endsWith('.webm') || item.url.endsWith('.avi');
+
+    // Helper to check if it's an image that we can actually render in the browser
+    // Note: item.type might be 'image' for HEIC/TIFF, but browsers can't render those natively.
+    bool isRenderableImage = false;
+    final String lowerName = item.name.toLowerCase();
+    final String lowerUrl = item.url.toLowerCase().split('?').first;
+    
+    final renderableExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.wbmp', '.svg'];
+    
+    // Check extension
+    for (var ext in renderableExtensions) {
+      if (lowerName.endsWith(ext) || lowerUrl.endsWith(ext)) {
+        isRenderableImage = true;
+        break;
+      }
+    }
 
     // Try to build thumbnail content
     if (isVideo) {
@@ -1189,7 +1186,7 @@ class _MediaCard extends StatelessWidget {
           enablePreview: false, // Don't play on hover/tap, just show thumb
           autoPlay: false, // Don't autoplay grid
         );
-    } else if (isImage) {
+    } else if (isRenderableImage) {
       content = WebImage(
         imageUrl: item.url,
         fit: BoxFit.cover,

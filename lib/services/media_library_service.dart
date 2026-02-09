@@ -326,9 +326,9 @@ class MediaLibraryService {
 
   String _inferTypeFromName(String name) {
     final lower = name.toLowerCase();
-    if (lower.endsWith('.mp4') || lower.endsWith('.webm') || lower.endsWith('.mov') || lower.endsWith('.m4v') || lower.endsWith('.avi')) return 'video';
-    if (lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.gif') || lower.endsWith('.webp')) return 'image';
-    if (lower.endsWith('.mp3') || lower.endsWith('.wav') || lower.endsWith('.aac') || lower.endsWith('.m4a')) return 'audio';
+    if (lower.endsWith('.mp4') || lower.endsWith('.webm') || lower.endsWith('.mov') || lower.endsWith('.m4v') || lower.endsWith('.avi') || lower.endsWith('.mkv')) return 'video';
+    if (lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.gif') || lower.endsWith('.webp') || lower.endsWith('.bmp') || lower.endsWith('.wbmp') || lower.endsWith('.svg') || lower.endsWith('.heic') || lower.endsWith('.heif') || lower.endsWith('.tiff') || lower.endsWith('.tif')) return 'image';
+    if (lower.endsWith('.mp3') || lower.endsWith('.wav') || lower.endsWith('.aac') || lower.endsWith('.m4a') || lower.endsWith('.flac')) return 'audio';
     if (lower.endsWith('.pdf') || lower.endsWith('.doc') || lower.endsWith('.docx') || lower.endsWith('.ppt') || lower.endsWith('.pptx') || lower.endsWith('.txt')) return 'document';
     return 'other';
   }
@@ -344,6 +344,19 @@ class MediaLibraryService {
         return 'image/gif';
       case 'webp':
         return 'image/webp';
+      case 'bmp':
+        return 'image/bmp';
+      case 'wbmp':
+        return 'image/vnd.wap.wbmp';
+      case 'svg':
+        return 'image/svg+xml';
+      case 'heic':
+        return 'image/heic';
+      case 'heif':
+        return 'image/heif';
+      case 'tiff':
+      case 'tif':
+        return 'image/tiff';
       case 'mp3':
         return 'audio/mpeg';
       case 'wav':
@@ -352,12 +365,18 @@ class MediaLibraryService {
         return 'audio/aac';
       case 'm4a':
         return 'audio/mp4';
+      case 'flac':
+        return 'audio/flac';
       case 'mp4':
         return 'video/mp4';
       case 'mov':
         return 'video/quicktime';
       case 'webm':
         return 'video/webm';
+      case 'avi':
+        return 'video/x-msvideo';
+      case 'mkv':
+        return 'video/x-matroska';
       case 'pdf':
         return 'application/pdf';
       case 'doc':
