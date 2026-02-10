@@ -76,15 +76,17 @@ class MediaLibraryService {
     required Uint8List bytes,
     required String fileName,
     required String section,
+    Uint8List? thumbnailBytes,
   }) async {
     print('MediaLibraryService: Starting upload for $fileName (${bytes.lengthInBytes} bytes) to section $section');
     
     final fileExt = fileName.split('.').last;
     final type = _inferTypeFromName(fileName);
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
     
     // Upload to Storage
     final safeSection = section.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
-    final path = 'media/$safeSection/${DateTime.now().millisecondsSinceEpoch}_$fileName';
+    final path = 'media/$safeSection/${timestamp}_$fileName';
     
     final ref = FirebaseStorage.instance.ref().child(path);
     final metadata = SettableMetadata(contentType: _inferContentType(fileExt));
@@ -107,6 +109,23 @@ class MediaLibraryService {
       );
       print('MediaLibraryService: Got URL: $url');
 
+      String? thumbnailUrl;
+      if (thumbnailBytes != null) {
+        try {
+          print('MediaLibraryService: Uploading thumbnail...');
+          final thumbPath = 'thumbnails/$safeSection/thumb_${timestamp}_$fileName.jpg';
+          final thumbRef = FirebaseStorage.instance.ref().child(thumbPath);
+          final thumbMeta = SettableMetadata(contentType: 'image/jpeg');
+          
+          await thumbRef.putData(thumbnailBytes, thumbMeta);
+          thumbnailUrl = await thumbRef.getDownloadURL();
+          print('MediaLibraryService: Thumbnail uploaded.');
+        } catch (e) {
+          print('MediaLibraryService: Thumbnail upload failed: $e');
+           // Non-blocking, continue without thumbnail
+        }
+      }
+
       // Create Firestore Record
       final mediaItem = MediaItem(
         id: '', // Firestore will generate
@@ -115,6 +134,7 @@ class MediaLibraryService {
         path: path,
         type: type,
         section: section,
+        thumbnailUrl: thumbnailUrl,
         uploadedAt: DateTime.now(),
       );
 

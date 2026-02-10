@@ -7,6 +7,7 @@ class MediaItem {
   final String path;
   final String type; // 'video' | 'image' | 'audio' | 'other'
   final String section;
+  final String? thumbnailUrl;
   final DateTime uploadedAt;
 
   MediaItem({
@@ -16,6 +17,7 @@ class MediaItem {
     required this.path,
     required this.type,
     required this.section,
+    this.thumbnailUrl,
     required this.uploadedAt,
   });
 
@@ -28,6 +30,7 @@ class MediaItem {
       path: data['path'] ?? '',
       type: data['type'] ?? 'other',
       section: data['section'] ?? 'General',
+      thumbnailUrl: data['thumbnailUrl'],
       uploadedAt: (data['uploadedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
     );
   }
@@ -39,6 +42,7 @@ class MediaItem {
       'path': path,
       'type': type,
       'section': section,
+      'thumbnailUrl': thumbnailUrl,
       'uploadedAt': Timestamp.fromDate(uploadedAt),
     };
   }

@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../services/media_library_service.dart';
 import '../../models/media_item.dart';
+import '../../utils/thumbnail_generator.dart';
 import '../widgets/video_widgets.dart';
 import '../widgets/web_image.dart';
 
@@ -764,11 +765,25 @@ class _MediaLibraryTabState extends State<MediaLibraryTab> {
          // Fallback or error
          throw Exception('File content is empty or could not be read.');
       }
+
+      Uint8List? thumbnailBytes;
+      if (file.name.toLowerCase().endsWith('.mp4') || 
+          file.name.toLowerCase().endsWith('.mov') || 
+          file.name.toLowerCase().endsWith('.webm')) {
+        // Try to generate thumbnail for video
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Generating thumbnail...'), duration: Duration(seconds: 1)),
+          );
+        }
+        thumbnailBytes = await ThumbnailGenerator.generateVideoThumbnail(fileBytes);
+      }
       
       await _mediaService.uploadMedia(
         bytes: fileBytes,
         fileName: file.name,
         section: section,
+        thumbnailBytes: thumbnailBytes,
       );
       
       if (mounted) {
@@ -1178,8 +1193,27 @@ class _MediaCard extends StatelessWidget {
     }
 
     // Try to build thumbnail content
-    if (isVideo) {
-        // Use the smart VideoGridItem which handles YouTube Shorts/Standard and Uploads
+    if (item.thumbnailUrl != null && item.thumbnailUrl!.isNotEmpty) {
+      // Use pre-generated thumbnail if available
+      content = WebImage(
+        imageUrl: item.thumbnailUrl!,
+        fit: BoxFit.cover,
+      );
+      // Overlay play icon for video clarity
+      if (isVideo) {
+        content = Stack(
+          fit: StackFit.expand,
+          children: [
+            content,
+            Container(
+              color: Colors.black26,
+              child: const Center(child: Icon(Icons.play_circle_fill, size: 48, color: Colors.white)),
+            ),
+          ],
+        );
+      }
+    } else if (isVideo) {
+        // Use the smart VideoGridItem as fallback
         content = VideoGridItem(
           url: item.url,
           type: item.url.contains('youtu') ? 'youtube' : 'upload',
