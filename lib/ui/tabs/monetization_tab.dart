@@ -315,11 +315,11 @@ class _MonetizationTabState extends State<MonetizationTab> {
           TextField(
             controller: _rcIdController, 
             decoration: const InputDecoration(
-              labelText: 'RevenueCat Offering ID', 
-              hintText: 'e.g. harmony_standard_monthly',
-              helperText: 'Must match the ID created in RevenueCat Menu exactly.',
+              labelText: 'RevenueCat Entitlement Identifier', 
+              hintText: 'e.g. starter_access or unlimited_access',
+              helperText: 'Must match the Entitlement ID in RevenueCat (e.g. starter_access, unlimited_access).',
               border: OutlineInputBorder(),
-              prefixIcon: Icon(Icons.link),
+              prefixIcon: Icon(Icons.vpn_key),
             ),
           ),
         
