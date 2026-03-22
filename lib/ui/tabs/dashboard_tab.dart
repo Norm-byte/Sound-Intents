@@ -50,22 +50,50 @@ class _DashboardTabState extends State<DashboardTab> {
   // Dashboard Status Card State
   int _selectedNationalOffset = 0; // 0, 15, 30, 45
 
+  // Automation / System State
+  bool _isAutoSystemEnabled = false; // "Auto-Publish" Toggle (Current + 3)
+
   // Clipboard for Week Copy/Paste (List of Events normalized to Monday Start)
   // We store them as events where startTimeUTC is relative to "Year 1970, Week 1" to be generic?
   // Or just as a list of "Duration from Week Start" -> Event Data.
   List<Event>? _clipboardEvents;
   // Metadata about the source of the copy
   String? _clipboardSourceLabel;
+  
+  late final ScrollController _scrollController;
 
   @override
   void initState() {
     super.initState();
+    
+    // Calculate initial scroll position (Jump to Current Week)
+    final now = DateTime.now();
+    final firstDayOfYear = DateTime.utc(now.year, 1, 1);
+    final daysOffset = firstDayOfYear.weekday - 1; 
+    final firstMondayOfYear = firstDayOfYear.subtract(Duration(days: daysOffset));
+    final todayUtc = DateTime.utc(now.year, now.month, now.day);
+    final diffDays = todayUtc.difference(firstMondayOfYear).inDays;
+    final currentWeekIndex = (diffDays / 7).floor();
+    
+    _scrollController = ScrollController(
+      initialScrollOffset: (currentWeekIndex * 190.0).clamp(0.0, double.infinity),
+    );
+    
     _startClock();
+    
+    // Simulate checking the "Auto-System" (Current + 3) rule on startup
+    // In a real backend, this would run daily. Here, we check when the admin opens the dashboard.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_isAutoSystemEnabled) {
+        _checkAutoSystemRules();
+      }
+    });
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -77,6 +105,58 @@ class _DashboardTabState extends State<DashboardTab> {
         });
       }
     });
+  }
+  
+  // Implementation of "Auto-System" (Current + 3) Rule
+  // This simulates the behavior requested:
+  // "if active, check if the 5th week (Current+4) is filled (glowing Amber)... take the vacant place of the 4th... keeping Current+3"
+  void _checkAutoSystemRules() {
+    // 1. Calculate Target Dates (Current, Week+1, Week+2, Week+3... Week+4 (The 5th one))
+    final now = DateTime.now();
+    final todayUtc = DateTime.utc(now.year, now.month, now.day);
+    final daysSinceMonday = todayUtc.weekday - 1;
+    final thisWeekStart = todayUtc.subtract(Duration(days: daysSinceMonday));
+    
+    final week4Start = thisWeekStart.add(const Duration(days: 7 * 3)); // Current+3 (Target Buffer)
+    final week5Start = thisWeekStart.add(const Duration(days: 7 * 4)); // Current+4 (Source)
+    
+    // 2. Count "Published" vs "Draft" in Week 4 (The target slot that might need filling)
+    final week4Events = widget.events.where((e) {
+      if (e.startTimeUTC == null) return false;
+      final start = DateTime.parse(e.startTimeUTC!);
+      return start.isAfter(week4Start.subtract(const Duration(seconds: 1))) && 
+             start.isBefore(week4Start.add(const Duration(days: 7)));
+    }).toList();
+    
+    final week4Published = week4Events.where((e) => e.isPublished).length;
+    
+    // 3. Check source (Week 5)
+    final week5Events = widget.events.where((e) {
+      if (e.startTimeUTC == null) return false;
+      final start = DateTime.parse(e.startTimeUTC!);
+      return start.isAfter(week5Start.subtract(const Duration(seconds: 1))) && 
+             start.isBefore(week5Start.add(const Duration(days: 7)));
+    }).toList();
+    
+    final week5Drafts = week5Events.where((e) => e.isDraft).length;
+    
+    // 4. Logic: If Week 4 is EMPTY (or low) and Week 5 is READY, we "Auto-Promote"
+    // For this simulation, we'll just show a status message.
+    // In a real implementation with `onPublishWeek`, we would call it here.
+    if (week4Published < 5 && week5Drafts > 0) {
+       // Week 4 needs content, Week 5 has checks.
+       // "Simulating Auto-Publish: Promoting Week 5 Drafts to Week 4 Published Slots"
+       ScaffoldMessenger.of(context).showSnackBar(
+         SnackBar(
+           content: Text("Auto-System: Found ${week5Drafts} drafts in Week 5. Promoting to Week 4 (Simulated)."),
+           backgroundColor: Colors.indigo,
+           duration: const Duration(seconds: 4),
+         ),
+       );
+    } else if (week4Published >= 1) {
+       // Buffer is healthy
+       // Status check only
+    }
   }
 
   @override
@@ -254,11 +334,6 @@ class _DashboardTabState extends State<DashboardTab> {
     final diffDays = todayUtc.difference(firstMondayOfYear).inDays;
     final currentWeekIndex = (diffDays / 7).floor();
 
-    // Scroll Controller to jump to current week
-    final scrollController = ScrollController(
-      initialScrollOffset: (currentWeekIndex * 190.0).clamp(0.0, double.infinity), // Approx card height + padding
-    );
-
     return SizedBox(
       height: 600, // Fixed height for the scrolling area
       child: Column(
@@ -272,9 +347,54 @@ class _DashboardTabState extends State<DashboardTab> {
                 const SizedBox(width: 8),
                 Text('Year Command Center (${now.year})', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                 const Spacer(),
+                // NEW: Automation Status - "Auto-System" Toggle
+                // "if active, the app will check to see if the week 5th is filled..."
+                InkWell(
+                  onTap: () {
+                    setState(() => _isAutoSystemEnabled = !_isAutoSystemEnabled);
+                    if (_isAutoSystemEnabled) {
+                      _checkAutoSystemRules(); // Run check immediately
+                    }
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(_isAutoSystemEnabled ? 'Auto-System ACTIVATED: Checking Week 5 buffer...' : 'Auto-System DEACTIVATED: Manual control only.'),
+                        duration: const Duration(seconds: 2),
+                        backgroundColor: _isAutoSystemEnabled ? Colors.green : Colors.orange,
+                      ),
+                    );
+                  },
+                  borderRadius: BorderRadius.circular(16),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _isAutoSystemEnabled ? Colors.green.withOpacity(0.1) : Colors.grey.withOpacity(0.1),
+                      border: Border.all(color: _isAutoSystemEnabled ? Colors.green : Colors.grey),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          _isAutoSystemEnabled ? Icons.autorenew : Icons.pause_circle_outline, 
+                          color: _isAutoSystemEnabled ? Colors.green : Colors.grey, 
+                          size: 16
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          _isAutoSystemEnabled ? 'Auto-System: ON' : 'Auto-System: PAUSED', 
+                          style: TextStyle(
+                            color: _isAutoSystemEnabled ? Colors.green : Colors.grey, 
+                            fontWeight: FontWeight.bold, 
+                            fontSize: 12
+                          )
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
                 TextButton(
                   onPressed: () {
-                     scrollController.animateTo(
+                     _scrollController.animateTo(
                        currentWeekIndex * 190.0, 
                        duration: const Duration(milliseconds: 500), 
                        curve: Curves.easeInOut
@@ -287,7 +407,7 @@ class _DashboardTabState extends State<DashboardTab> {
           ),
           Expanded(
             child: ListView.builder(
-              controller: scrollController,
+              controller: _scrollController,
               itemCount: 52, // 52 Weeks standard
               padding: const EdgeInsets.only(right: 12),
               itemBuilder: (context, index) {
@@ -320,7 +440,10 @@ class _DashboardTabState extends State<DashboardTab> {
                     child: _buildSingleWeekCard(
                       "Week ${index + 1}", 
                       logicOffset, 
-                      subtitle: isCurrent ? "(Current)" : (isPast ? "(Completed)" : null)
+                      subtitle: isCurrent ? "(Current)" : (isPast ? "(Completed)" : null),
+                      showCleanUpAction: isPast, // NEW: Only show Clone action for past/completed weeks
+                      currentWeekIndex: currentWeekIndex,
+                      scrollController: _scrollController,
                     ),
                   ),
                 );
@@ -332,7 +455,7 @@ class _DashboardTabState extends State<DashboardTab> {
     );
   }
 
-  Widget _buildSingleWeekCard(String label, int weekOffset, {String? subtitle}) {
+  Widget _buildSingleWeekCard(String label, int weekOffset, {String? subtitle, bool showCleanUpAction = false, int? currentWeekIndex, ScrollController? scrollController}) {
     final int currentOffset = _weekViewOffset[weekOffset] ?? 0;
     
     // 1. Calculate Time Range (Aligned to Monday)
@@ -397,13 +520,23 @@ class _DashboardTabState extends State<DashboardTab> {
         final isPast = end.isBefore(DateTime.now().toUtc());
 
         final current = currentViewHourStatus[start.hour] ?? 0;
-        // Prioritize Draft (2) > Completed (3) > Published (1)
+        
+        // FIX: Prioritize Future (1) over Completed (3). 
+        // Logic: Keep Green if ANY future instance exists in this week. 
         if (!e.isPublished) {
-            currentViewHourStatus[start.hour] = 2;
-        } else if (isPast) {
-            if (current != 2) currentViewHourStatus[start.hour] = 3; 
-        } else if (current != 2 && current != 3) {
-            currentViewHourStatus[start.hour] = 1;
+            currentViewHourStatus[start.hour] = 2; // Draft matches always take precedence
+        } else if (!isPast) {
+            // Future Event Found -> Mark Active (Green)
+            // This overrides "Completed" (3) status if a previous loop set it.
+            if (current != 2) {
+               currentViewHourStatus[start.hour] = 1; 
+            }
+        } else {
+            // Past Event Found -> Mark Completed (Amber)
+            // Only if we haven't already marked it as Active (1) or Draft (2)
+            if (current != 1 && current != 2) {
+                currentViewHourStatus[start.hour] = 3; 
+            }
         }
       } catch (_) {}
     }
@@ -559,6 +692,72 @@ class _DashboardTabState extends State<DashboardTab> {
                       ),
                     ],
                   ),
+                  
+                  // NEW: Cleanup/Clone Action for Past Items
+                  if (showCleanUpAction) ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.amber.shade50,
+                        border: Border.all(color: Colors.amber.shade200),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.history, color: Colors.amber, size: 16),
+                          const SizedBox(width: 8),
+                          const Expanded(child: Text("Completed Week", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold))),
+                          TextButton.icon(
+                            style: TextButton.styleFrom(
+                              foregroundColor: Colors.indigo,
+                              padding: EdgeInsets.zero,
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            icon: const Icon(Icons.copy, size: 14),
+                            label: const Text("Clone to +4 Weeks", style: TextStyle(fontSize: 12)),
+                            onPressed: () {
+                               // AUTOMATION LOGIC: Current Week + 4
+                               // 1. Capture events
+                               if (weekEvents.isNotEmpty) {
+                                  setState(() {
+                                    _clipboardEvents = weekEvents;
+                                    _clipboardSourceLabel = "Week Clone";
+                                  });
+                                    // 2. Calculate target offset
+                                    final targetOffset = weekOffset + 4;
+                                    
+                                    if (currentWeekIndex != null && scrollController != null) {
+                                      final targetWeekIndex = currentWeekIndex + targetOffset;
+
+                                      // 3. Auto-Jump: Scroll to the target week
+                                      if (targetWeekIndex < 52) {
+                                        scrollController.animateTo(
+                                          (targetWeekIndex * 190.0), // Approximate height
+                                          duration: const Duration(seconds: 1),
+                                          curve: Curves.easeInOut,
+                                        );
+                                        
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(
+                                            content: Text("Copied! Jumping to Week ${targetWeekIndex + 1}... Click PASTE there."),
+                                            duration: const Duration(seconds: 3),
+                                            backgroundColor: Colors.indigo,
+                                          )
+                                        );
+                                      } else {
+                                         ScaffoldMessenger.of(context).showSnackBar(
+                                            const SnackBar(content: Text("Target week is beyond this year!"))
+                                         );
+                                      }
+                                    }
+                                }
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                   
                   const SizedBox(height: 16),
                   

@@ -1,7 +1,7 @@
 name: harmony_admin
 description: Admin Web for Harmony by Intent
 publish_to: none
-version: 0.0.1
+version: 0.1.0
 
 environment:
   sdk: ">=3.0.0 <4.0.0"

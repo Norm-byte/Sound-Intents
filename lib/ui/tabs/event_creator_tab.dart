@@ -11,6 +11,7 @@ import '../../models/event.dart';
 import '../../services/media_library_service.dart';
 import '../../repositories/firestore_event_repository.dart';
 import '../widgets/video_widgets.dart';
+import '../widgets/web_image.dart';
 
 class EventCreatorTab extends StatefulWidget {
   final DateTime? initialDate;
@@ -645,38 +646,42 @@ class _EventCreatorTabState extends State<EventCreatorTab>
                           final item = files[index];
                           
                           // Helper to check if it's an image
-                          bool isImage = item.type == 'image';
-                          if (!isImage) {
-                            final String lowerName = item.name.toLowerCase();
-                            final String lowerUrl = item.url.toLowerCase().split('?').first;
-                            isImage = lowerName.endsWith('.jpg') || 
-                                      lowerName.endsWith('.jpeg') || 
-                                      lowerName.endsWith('.png') || 
-                                      lowerName.endsWith('.gif') || 
-                                      lowerName.endsWith('.webp') || 
-                                      lowerName.endsWith('.bmp') ||
-                                      lowerUrl.endsWith('.jpg') || 
-                                      lowerUrl.endsWith('.jpeg') || 
-                                      lowerUrl.endsWith('.png') || 
-                                      lowerUrl.endsWith('.gif') || 
-                                      lowerUrl.endsWith('.webp') || 
-                                      lowerUrl.endsWith('.bmp');
+                          final String lowerName = item.name.toLowerCase();
+                          final String lowerUrl = item.url.toLowerCase().split('?').first;
+                          
+                          bool isRenderableImage = false;
+                          String? extension;
+                          final renderableExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.wbmp', '.svg'];
+                          for (var ext in renderableExtensions) {
+                            if (lowerName.endsWith(ext) || lowerUrl.endsWith(ext)) {
+                              isRenderableImage = true;
+                              extension = ext;
+                              break;
+                            }
                           }
                           
                           // Robust YouTube detection
-                          final urlLower = item.url.toLowerCase();
                           final isYoutube = item.type == 'youtube' || 
-                                          urlLower.contains('youtube') || 
-                                          urlLower.contains('youtu.be');
+                                          lowerUrl.contains('youtube') || 
+                                          lowerUrl.contains('youtu.be');
                                           
-                          final isVideo = item.type == 'video' || isYoutube || urlLower.endsWith('.mp4');
+                          final isVideo = item.type == 'video' || isYoutube || lowerUrl.endsWith('.mp4');
+                          
+                          // Detect File Type for Rich Preview
+                          if (!isRenderableImage && !isVideo) {
+                            if (lowerName.endsWith('.pdf') || lowerUrl.endsWith('.pdf')) extension = '.pdf';
+                            else if (lowerName.endsWith('.doc') || lowerUrl.endsWith('.doc') || lowerName.endsWith('.docx') || lowerUrl.endsWith('.docx')) extension = '.doc';
+                            else if (lowerName.endsWith('.ppt') || lowerUrl.endsWith('.ppt') || lowerName.endsWith('.pptx') || lowerUrl.endsWith('.pptx')) extension = '.ppt';
+                            else if (lowerName.endsWith('.xls') || lowerUrl.endsWith('.xls') || lowerName.endsWith('.xlsx') || lowerUrl.endsWith('.xlsx')) extension = '.xls';
+                            else if (lowerName.endsWith('.txt') || lowerUrl.endsWith('.txt')) extension = '.txt';
+                          }
                           
                           Widget content;
-                          if (isImage) {
-                            content = Image.network(
-                                item.url, 
+                          if (isRenderableImage) {
+                             // Use WebImage for better cross-origin image support
+                            content = WebImage(
+                                imageUrl: item.url, 
                                 fit: BoxFit.cover,
-                                errorBuilder: (context, error, stackTrace) => const Center(child: Icon(Icons.broken_image, color: Colors.grey)),
                             );
                           } else if (isVideo) {
                             // Use VideoGridItem for active preview
@@ -687,24 +692,49 @@ class _EventCreatorTabState extends State<EventCreatorTab>
                               autoPlay: false, // Disable autoplay to save resources
                             );
                           } else {
-                            // Robust Document Detection
-                            final lowerName = item.name.toLowerCase();
-                            final isPdf = item.type == 'pdf' || lowerName.endsWith('.pdf');
-                            final isDoc = item.type == 'doc' || item.type == 'document' || 
-                                          lowerName.endsWith('.doc') || lowerName.endsWith('.docx') ||
-                                          lowerName.endsWith('.ppt') || lowerName.endsWith('.pptx');
+                              // Rich File Type Preview
+                              Color fileColor = Colors.grey;
+                              IconData fileIcon = Icons.insert_drive_file;
+                              String label = extension?.replaceAll('.', '').toUpperCase() ?? item.type.toUpperCase();
+                              
+                              if (extension == '.pdf') {
+                                fileColor = Colors.red.shade400;
+                                fileIcon = Icons.picture_as_pdf;
+                              } else if (extension == '.doc') {
+                                fileColor = Colors.blue.shade600;
+                                fileIcon = Icons.description;
+                              } else if (extension == '.ppt') {
+                                fileColor = Colors.orange.shade600;
+                                fileIcon = Icons.slideshow;
+                              } else if (extension == '.xls') {
+                                fileColor = Colors.green.shade600;
+                                fileIcon = Icons.table_chart;
+                              } else if (item.type == 'audio') {
+                                fileColor = Colors.purple;
+                                fileIcon = Icons.audiotrack;
+                              }
 
-                            if (isPdf || isDoc) {
-                               content = const Center(child: Icon(Icons.description, size: 48, color: Colors.orange));
-                            } else {
-                              content = const Center(
-                                child: Icon(
-                                  Icons.audiotrack,
-                                  size: 48,
-                                  color: Colors.purple,
+                              content = Container(
+                                color: fileColor.withOpacity(0.15),
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(fileIcon, size: 48, color: fileColor),
+                                    const SizedBox(height: 8),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: fileColor,
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: Text(
+                                        label,
+                                        style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               );
-                            }
                           }
 
                           return InkWell(

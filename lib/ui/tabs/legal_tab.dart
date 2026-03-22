@@ -56,7 +56,7 @@ class _LegalTabState extends State<LegalTab> {
           .collection('admin_users')
           .doc(user.uid)
           .get();
-      
+
       _storedSecurityPassword = userDoc.data()?['security_password'];
 
       // 2. Get VIP Code
@@ -64,25 +64,23 @@ class _LegalTabState extends State<LegalTab> {
           .collection('vip_codes')
           .where('assignee', isEqualTo: user.email)
           .get();
-      
+
       if (vipQuery.docs.isNotEmpty) {
         final superAdminCode = vipQuery.docs.firstWhere(
-          (d) => d.data()['type'] == 'super_admin', 
-          orElse: () => vipQuery.docs.first
-        );
+            (d) => d.data()['type'] == 'super_admin',
+            orElse: () => vipQuery.docs.first);
         _storedVipCode = superAdminCode.data()['code'];
       }
 
       final directVipCode = userDoc.data()?['vipCode'];
       if (directVipCode != null) {
-         _storedDirectVipCode = directVipCode;
+        _storedDirectVipCode = directVipCode;
       }
 
       // Auto-unlock if no password set
       if (_storedSecurityPassword == null) {
         setState(() => _isLocked = false);
       }
-
     } catch (e) {
       debugPrint('Error loading lock state: $e');
     } finally {
@@ -93,11 +91,13 @@ class _LegalTabState extends State<LegalTab> {
   Future<void> _attemptUnlock() async {
     final input = _unlockController.text.trim();
     if (input.isEmpty) return;
-    
+
     bool unlocked = false;
-    if (_storedSecurityPassword != null && input == _storedSecurityPassword) unlocked = true;
+    if (_storedSecurityPassword != null && input == _storedSecurityPassword)
+      unlocked = true;
     if (_storedVipCode != null && input == _storedVipCode) unlocked = true;
-    if (_storedDirectVipCode != null && input == _storedDirectVipCode) unlocked = true;
+    if (_storedDirectVipCode != null && input == _storedDirectVipCode)
+      unlocked = true;
 
     if (!unlocked) {
       try {
@@ -108,7 +108,7 @@ class _LegalTabState extends State<LegalTab> {
             .where('status', isEqualTo: 'active')
             .limit(1)
             .get();
-            
+
         if (query.docs.isNotEmpty) {
           unlocked = true;
         }
@@ -140,7 +140,7 @@ class _LegalTabState extends State<LegalTab> {
       registerPdfViewFactory(viewType, embedUrl);
       return HtmlElementView(viewType: viewType);
     }
-    
+
     return SfPdfViewer.network(
       url,
     );
@@ -188,7 +188,7 @@ class _LegalTabState extends State<LegalTab> {
   Future<void> _publish(String docId) async {
     final doc = _documents.firstWhere((d) => d['id'] == docId);
     final url = _pdfUrls[docId];
-    
+
     if (url == null) return;
 
     try {
@@ -198,7 +198,7 @@ class _LegalTabState extends State<LegalTab> {
         'title': doc['title'],
         'hasCheckbox': doc['hasCheckbox'],
       }, SetOptions(merge: true));
-      
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('${doc['title']} updated successfully')),
@@ -211,7 +211,10 @@ class _LegalTabState extends State<LegalTab> {
 
   Future<void> _delete(String docId) async {
     try {
-      await FirebaseFirestore.instance.collection('app_config').doc(docId).delete();
+      await FirebaseFirestore.instance
+          .collection('app_config')
+          .doc(docId)
+          .delete();
       setState(() {
         _pdfUrls[docId] = null;
       });
@@ -304,18 +307,19 @@ class _LegalTabState extends State<LegalTab> {
               const SizedBox(height: 8),
               const Text('Select a document to view and edit.'),
               const SizedBox(height: 24),
-              
+
               // Document List
               Expanded(
                 child: ListView(
-                  children: _documents.map((doc) => _buildDocCard(doc)).toList(),
+                  children:
+                      _documents.map((doc) => _buildDocCard(doc)).toList(),
                 ),
               ),
 
               const Divider(height: 32),
-              
+
               // Action Buttons for Selected Doc
-              // ALWAYS SHOW BUTTONS regardless of whether a URL exists yet, 
+              // ALWAYS SHOW BUTTONS regardless of whether a URL exists yet,
               // so user can upload the first one.
               SizedBox(
                 width: double.infinity,
@@ -340,7 +344,8 @@ class _LegalTabState extends State<LegalTab> {
                 child: ElevatedButton.icon(
                   onPressed: () {
                     if (selectedUrl == null) {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please upload a PDF first.')));
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                          content: Text('Please upload a PDF first.')));
                       return;
                     }
                     _publish(_selectedDocId);
@@ -355,19 +360,21 @@ class _LegalTabState extends State<LegalTab> {
                 ),
               ),
               const SizedBox(height: 16),
-              
+
               SizedBox(
                 width: double.infinity,
                 child: OutlinedButton.icon(
                   onPressed: () {
                     if (selectedUrl == null) {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nothing to remove.')));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Nothing to remove.')));
                       return;
                     }
                     _delete(_selectedDocId);
                   },
                   icon: const Icon(Icons.delete_outline, color: Colors.red),
-                  label: const Text('Remove Document', style: TextStyle(color: Colors.red)),
+                  label: const Text('Remove Document',
+                      style: TextStyle(color: Colors.red)),
                   style: OutlinedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     side: const BorderSide(color: Colors.red),
@@ -404,9 +411,12 @@ class _LegalTabState extends State<LegalTab> {
                     backgroundColor: Colors.white,
                     appBar: AppBar(
                       backgroundColor: const Color(0xFF1A1A2E),
-                      title: Text(selectedDoc['title'], style: const TextStyle(color: Colors.white, fontSize: 18)),
+                      title: Text(selectedDoc['title'],
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 18)),
                       centerTitle: true,
-                      leading: const Icon(Icons.arrow_back, color: Colors.white),
+                      leading:
+                          const Icon(Icons.arrow_back, color: Colors.white),
                       elevation: 0,
                     ),
                     body: Stack(
@@ -423,17 +433,19 @@ class _LegalTabState extends State<LegalTab> {
                             child: Column(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                const Icon(Icons.picture_as_pdf, size: 64, color: Colors.grey),
+                                const Icon(Icons.picture_as_pdf,
+                                    size: 64, color: Colors.grey),
                                 const SizedBox(height: 16),
                                 Text(
                                   'No PDF Selected for\n${selectedDoc['title']}',
                                   textAlign: TextAlign.center,
-                                  style: const TextStyle(color: Colors.grey, fontSize: 16),
+                                  style: const TextStyle(
+                                      color: Colors.grey, fontSize: 16),
                                 ),
                               ],
                             ),
                           ),
-                        
+
                         // Conditional Checkbox Overlay (Only for Terms)
                         if (selectedDoc['id'] == 'terms')
                           Positioned(
@@ -455,7 +467,7 @@ class _LegalTabState extends State<LegalTab> {
                               child: Row(
                                 children: [
                                   Checkbox(
-                                    value: false, 
+                                    value: false,
                                     onChanged: (_) {},
                                     activeColor: Colors.indigo,
                                   ),
@@ -491,7 +503,9 @@ class _LegalTabState extends State<LegalTab> {
       margin: const EdgeInsets.only(bottom: 16),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: isSelected ? const BorderSide(color: Colors.indigo, width: 2) : BorderSide.none,
+        side: isSelected
+            ? const BorderSide(color: Colors.indigo, width: 2)
+            : BorderSide.none,
       ),
       child: InkWell(
         onTap: () => setState(() => _selectedDocId = doc['id']),
@@ -567,12 +581,15 @@ class _MediaPickerDialogState extends State<_MediaPickerDialog> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text('Select PDF from Media Library', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-                IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close)),
+                const Text('Select PDF from Media Library',
+                    style:
+                        TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close)),
               ],
             ),
             const SizedBox(height: 24),
-            
             Expanded(
               child: Row(
                 children: [
@@ -580,14 +597,17 @@ class _MediaPickerDialogState extends State<_MediaPickerDialog> {
                   Container(
                     width: 200,
                     decoration: BoxDecoration(
-                      border: Border(right: BorderSide(color: Colors.grey.shade300)),
+                      border: Border(
+                          right: BorderSide(color: Colors.grey.shade300)),
                     ),
                     child: StreamBuilder<List<String>>(
                       stream: _mediaService.getSectionsStream(),
                       builder: (context, snapshot) {
-                        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+                        if (!snapshot.hasData)
+                          return const Center(
+                              child: CircularProgressIndicator());
                         final sections = ['All', ...snapshot.data!];
-                        
+
                         return ListView.builder(
                           itemCount: sections.length,
                           itemBuilder: (context, index) {
@@ -597,40 +617,50 @@ class _MediaPickerDialogState extends State<_MediaPickerDialog> {
                               title: Text(section),
                               selected: isSelected,
                               selectedTileColor: Colors.indigo.shade50,
-                              onTap: () => setState(() => _selectedSection = section),
+                              onTap: () =>
+                                  setState(() => _selectedSection = section),
                             );
                           },
                         );
                       },
                     ),
                   ),
-                  
+
                   // Grid Content
                   Expanded(
                     child: StreamBuilder<List<MediaItem>>(
-                      stream: _mediaService.getMediaStream(section: _selectedSection),
+                      stream: _mediaService.getMediaStream(
+                          section: _selectedSection),
                       builder: (context, snapshot) {
-                        if (snapshot.hasError) return Center(child: Text('Error: ${snapshot.error}'));
-                        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-                        
+                        if (snapshot.hasError)
+                          return Center(
+                              child: Text('Error: ${snapshot.error}'));
+                        if (!snapshot.hasData)
+                          return const Center(
+                              child: CircularProgressIndicator());
+
                         final items = snapshot.data!;
                         // Filter for PDFs
-                        final pdfs = items.where((item) => 
-                          item.name.toLowerCase().endsWith('.pdf') || 
-                          item.type == 'pdf' ||
-                          item.url.contains('.pdf')
-                        ).toList();
-                        
+                        final pdfs = items
+                            .where((item) =>
+                                item.name.toLowerCase().endsWith('.pdf') ||
+                                item.type == 'pdf' ||
+                                item.url.contains('.pdf'))
+                            .toList();
+
                         if (pdfs.isEmpty) {
                           return Center(
                             child: Column(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                const Icon(Icons.picture_as_pdf, size: 64, color: Colors.grey),
+                                const Icon(Icons.picture_as_pdf,
+                                    size: 64, color: Colors.grey),
                                 const SizedBox(height: 16),
                                 Text('No PDFs found in "$_selectedSection"'),
                                 const SizedBox(height: 8),
-                                const Text('Try selecting "All" or uploading to "Blogs" first.', style: TextStyle(color: Colors.grey)),
+                                const Text(
+                                    'Try selecting "All" or uploading to "Blogs" first.',
+                                    style: TextStyle(color: Colors.grey)),
                               ],
                             ),
                           );
@@ -638,7 +668,8 @@ class _MediaPickerDialogState extends State<_MediaPickerDialog> {
 
                         return GridView.builder(
                           padding: const EdgeInsets.all(16),
-                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                          gridDelegate:
+                              const SliverGridDelegateWithFixedCrossAxisCount(
                             crossAxisCount: 4,
                             childAspectRatio: 0.8,
                             crossAxisSpacing: 16,
@@ -653,31 +684,38 @@ class _MediaPickerDialogState extends State<_MediaPickerDialog> {
                                 elevation: 2,
                                 clipBehavior: Clip.antiAlias,
                                 child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
                                   children: [
                                     Expanded(
                                       child: Container(
                                         color: Colors.red.shade50,
                                         child: const Center(
-                                          child: Icon(Icons.picture_as_pdf, size: 48, color: Colors.red),
+                                          child: Icon(Icons.picture_as_pdf,
+                                              size: 48, color: Colors.red),
                                         ),
                                       ),
                                     ),
                                     Padding(
                                       padding: const EdgeInsets.all(8.0),
                                       child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
                                         children: [
                                           Text(
                                             item.name,
                                             maxLines: 2,
                                             overflow: TextOverflow.ellipsis,
-                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                                            style: const TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 12),
                                           ),
                                           const SizedBox(height: 4),
                                           Text(
                                             item.section,
-                                            style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
+                                            style: TextStyle(
+                                                fontSize: 10,
+                                                color: Colors.grey.shade600),
                                           ),
                                         ],
                                       ),

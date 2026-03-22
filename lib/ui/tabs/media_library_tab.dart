@@ -3,6 +3,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 import '../../services/media_library_service.dart';
 import '../../models/media_item.dart';
 import '../../utils/thumbnail_generator.dart';
@@ -312,11 +313,10 @@ class _MediaLibraryTabState extends State<MediaLibraryTab> {
       itemBuilder: (context, index) {
         final item = items[index];
         return _MediaCard(
+          key: ValueKey(item.id),
           item: item,
           onTap: () => _showMediaDetails(item),
           onDelete: () => _confirmDelete(item),
-          onCopy: () => _showMoveMediaDialog(item, isCopy: true),
-          onMove: () => _showMoveMediaDialog(item, isCopy: false),
           onRename: () => _showRenameMediaDialog(item),
         );
       },
@@ -829,10 +829,26 @@ class _MediaLibraryTabState extends State<MediaLibraryTab> {
   }
 
   void _showMediaDetails(MediaItem item) {
+    // Robust Video Detection (Align with Grid Logic)
+    final urlLower = item.url.toLowerCase();
+    
+    // Clean URL to handle query parameters
+    final cleanUrl = urlLower.split('?').first;
+    
+    final isYoutube = item.type == 'youtube' || urlLower.contains('youtube') || urlLower.contains('youtu.be');
+    final isVideo = item.type == 'video' || isYoutube || 
+                   cleanUrl.endsWith('.mp4') || cleanUrl.endsWith('.mov') || 
+                   cleanUrl.endsWith('.webm') || cleanUrl.endsWith('.avi');
+
+    final isImage = item.type == 'image' || 
+                    cleanUrl.endsWith('.jpg') || cleanUrl.endsWith('.jpeg') || 
+                    cleanUrl.endsWith('.png') || cleanUrl.endsWith('.gif') || 
+                    cleanUrl.endsWith('.webp') || cleanUrl.endsWith('.bmp');
+                    
+    final isPdf = item.type == 'pdf' || cleanUrl.endsWith('.pdf');
+
     // If it's a video, play it directly
-    if (item.type == 'video') {
-      final isYoutube = item.url.contains('youtube.com') || item.url.contains('youtu.be');
-      
+    if (isVideo) {
       showDialog(
         context: context,
         builder: (context) => Dialog(
@@ -850,6 +866,76 @@ class _MediaLibraryTabState extends State<MediaLibraryTab> {
                 child: IconButton(
                   icon: const Icon(Icons.close, color: Colors.white, size: 30),
                   onPressed: () => Navigator.pop(context),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+      return;
+    }
+
+    // Interactive Image Preview
+    if (isImage) {
+      showDialog(
+        context: context,
+        builder: (context) => Dialog(
+          backgroundColor: Colors.black,
+          insetPadding: EdgeInsets.zero,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              InteractiveViewer(
+                child: WebImage(
+                  imageUrl: item.url,
+                  fit: BoxFit.contain,
+                ),
+              ),
+              Positioned(
+                top: 40,
+                right: 20,
+                child: IconButton(
+                  icon: const Icon(Icons.close, color: Colors.white, size: 30),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+      return;
+    }
+
+    // PDF Preview
+    if (isPdf) {
+      showDialog(
+        context: context,
+        builder: (context) => Dialog(
+          insetPadding: const EdgeInsets.all(24),
+          child: Stack(
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 50),
+                child: SfPdfViewer.network(
+                  item.url,
+                  canShowScrollHead: true,
+                  canShowScrollStatus: true,
+                ),
+              ),
+              Positioned(
+                top: 8,
+                right: 8,
+                child: IconButton(
+                  icon: const Icon(Icons.close, color: Colors.black, size: 30),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ),
+              Positioned(
+                top: 16,
+                left: 16,
+                child: Text(
+                  item.name,
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                 ),
               ),
             ],
@@ -878,22 +964,6 @@ class _MediaLibraryTabState extends State<MediaLibraryTab> {
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('Close'),
-          ),
-          TextButton.icon(
-            onPressed: () {
-              Navigator.pop(context);
-              _showMoveMediaDialog(item, isCopy: true);
-            },
-            icon: const Icon(Icons.file_copy),
-            label: const Text('Copy to...'),
-          ),
-          TextButton.icon(
-            onPressed: () {
-              Navigator.pop(context);
-              _showMoveMediaDialog(item, isCopy: false);
-            },
-            icon: const Icon(Icons.drive_file_move),
-            label: const Text('Move'),
           ),
           TextButton.icon(
             onPressed: () {
@@ -1102,45 +1172,16 @@ class _MediaCard extends StatelessWidget {
   final MediaItem item;
   final VoidCallback onTap;
   final VoidCallback onDelete;
-  final VoidCallback onCopy;
-  final VoidCallback onMove;
   final VoidCallback onRename;
 
+
   const _MediaCard({
+    super.key,
     required this.item, 
     required this.onTap, 
     required this.onDelete,
-    required this.onCopy,
-    required this.onMove,
     required this.onRename,
   });
-
-  String? _getYoutubeId(String url) {
-    try {
-      final uri = Uri.parse(url);
-      if (uri.host.contains('youtu.be')) {
-        return uri.pathSegments.first;
-      }
-      if (uri.host.contains('youtube.com')) {
-        return uri.queryParameters['v'];
-      }
-    } catch (_) {}
-    return null;
-  }
-
-  String? _getYoutubeThumbnail(String url) {
-    try {
-      final uri = Uri.parse(url);
-      if (uri.host.contains('youtube.com')) {
-        return 'https://img.youtube.com/vi/${uri.queryParameters['v']}/0.jpg';
-      } else if (uri.host.contains('youtu.be')) {
-        return 'https://img.youtube.com/vi/${uri.pathSegments.first}/0.jpg';
-      }
-    } catch (e) {
-      return null;
-    }
-    return null;
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -1185,11 +1226,22 @@ class _MediaCard extends StatelessWidget {
     final renderableExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.wbmp', '.svg'];
     
     // Check extension
+    String? extension;
     for (var ext in renderableExtensions) {
       if (lowerName.endsWith(ext) || lowerUrl.endsWith(ext)) {
         isRenderableImage = true;
+        extension = ext;
         break;
       }
+    }
+
+    // Try to detect other extensions for rich preview
+    if (!isRenderableImage) {
+      if (lowerName.endsWith('.pdf') || lowerUrl.endsWith('.pdf')) extension = '.pdf';
+      else if (lowerName.endsWith('.doc') || lowerUrl.endsWith('.doc') || lowerName.endsWith('.docx') || lowerUrl.endsWith('.docx')) extension = '.doc';
+      else if (lowerName.endsWith('.ppt') || lowerUrl.endsWith('.ppt') || lowerName.endsWith('.pptx') || lowerUrl.endsWith('.pptx')) extension = '.ppt';
+      else if (lowerName.endsWith('.xls') || lowerUrl.endsWith('.xls') || lowerName.endsWith('.xlsx') || lowerUrl.endsWith('.xlsx')) extension = '.xls';
+      else if (lowerName.endsWith('.txt') || lowerUrl.endsWith('.txt')) extension = '.txt';
     }
 
     // Try to build thumbnail content
@@ -1226,71 +1278,120 @@ class _MediaCard extends StatelessWidget {
         fit: BoxFit.cover,
       );
     } else {
-      content = Center(child: Icon(icon, size: 48, color: color.withOpacity(0.5)));
-    }
+      // Rich File Type Preview
+      Color fileColor = color;
+      IconData fileIcon = icon;
+      String label = extension?.replaceAll('.', '').toUpperCase() ?? item.type.toUpperCase();
+      
+      if (extension == '.pdf') {
+        fileColor = Colors.red.shade400;
+        fileIcon = Icons.picture_as_pdf;
+      } else if (extension == '.doc') {
+        fileColor = Colors.blue.shade600;
+        fileIcon = Icons.description;
+      } else if (extension == '.ppt') {
+        fileColor = Colors.orange.shade600;
+        fileIcon = Icons.slideshow;
+      } else if (extension == '.xls') {
+        fileColor = Colors.green.shade600;
+        fileIcon = Icons.table_chart;
+      }
 
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: Stack(
+      content = Container(
+        color: fileColor.withOpacity(0.15),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(
-                  child: Container(
-                    color: color.withOpacity(0.1),
-                    child: content,
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        item.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      Text(
-                        item.section,
-                        style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            Positioned(
-              top: 0,
-              right: 0,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.7),
-                  borderRadius: const BorderRadius.only(bottomLeft: Radius.circular(8)),
-                ),
-                child: PopupMenuButton<String>(
-                  icon: const Icon(Icons.more_vert, size: 20),
-                  onSelected: (value) {
-                    if (value == 'rename') onRename();
-                    if (value == 'copy') onCopy();
-                    if (value == 'move') onMove();
-                    if (value == 'delete') onDelete();
-                  },
-                  itemBuilder: (context) => [
-                    const PopupMenuItem(value: 'rename', child: Text('Rename')),
-                    const PopupMenuItem(value: 'copy', child: Text('Copy to...')),
-                    const PopupMenuItem(value: 'move', child: Text('Move to...')),
-                    const PopupMenuItem(value: 'delete', child: Text('Delete', style: TextStyle(color: Colors.red))),
-                  ],
-                ),
+            Icon(fileIcon, size: 48, color: fileColor),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: fileColor,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                label,
+                style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
               ),
             ),
           ],
         ),
+      );
+    }
+
+    // Wrap InkWell in Material to ensure splash effects are visible
+    // and use ignorePointer for the content if it's a web view to prevent it from stealing clicks
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        children: [
+          // Content Layer
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: Container(
+                  color: color.withOpacity(0.1),
+                  child: IgnorePointer(child: content),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    Text(
+                      item.section,
+                      style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          // Interaction Layer - Full Cover InkWell
+          Positioned.fill(
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: onTap,
+                splashColor: Colors.black12,
+                highlightColor: Colors.black12,
+                hoverColor: Colors.black.withOpacity(0.05),
+              ),
+            ),
+          ),
+          
+          // Action Button Layer (More Vert)
+          Positioned(
+            top: 0,
+            right: 0,
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.7),
+                borderRadius: const BorderRadius.only(bottomLeft: Radius.circular(8)),
+              ),
+              child: PopupMenuButton<String>(
+                icon: const Icon(Icons.more_vert, size: 20),
+                onSelected: (value) {
+                  if (value == 'rename') onRename();
+                  if (value == 'delete') onDelete();
+                },
+                itemBuilder: (context) => [
+                  const PopupMenuItem(value: 'rename', child: Text('Rename')),
+                  const PopupMenuItem(value: 'delete', child: Text('Delete', style: TextStyle(color: Colors.red))),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
