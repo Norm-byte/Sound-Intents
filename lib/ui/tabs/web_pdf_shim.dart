@@ -9,7 +9,8 @@ void registerPdfViewFactory(String viewType, String url) {
       ..src = url
       ..style.border = 'none'
       ..style.width = '100%'
-      ..style.height = '100%';
+      ..style.height = '100%'
+      ..style.display = 'block'; // Ensure block display to fill container
     return iframe;
   });
 }

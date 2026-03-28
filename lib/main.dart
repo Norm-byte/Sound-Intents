@@ -389,7 +389,9 @@ class _AdminHomePageState extends State<AdminHomePage>
   Future<void> _handlePublishWeek(int weekOffset) async {
     final now = DateTime.now().toUtc();
     final today = DateTime.utc(now.year, now.month, now.day);
-    final weekStart = today.add(Duration(days: 7 * weekOffset));
+    final daysSinceMonday = today.weekday - 1;
+    final thisWeekMonday = today.subtract(Duration(days: daysSinceMonday));
+    final weekStart = thisWeekMonday.add(Duration(days: 7 * weekOffset));
     final weekEnd = weekStart.add(const Duration(days: 7));
 
     // Filter events to publish
@@ -402,8 +404,7 @@ class _AdminHomePageState extends State<AdminHomePage>
       final inRange =
           start.isAfter(weekStart.subtract(const Duration(seconds: 1))) &&
               start.isBefore(weekEnd);
-      final isRecurring = e.isRecurring == true;
-      return inRange || isRecurring;
+      return inRange;
     }).toList();
 
     if (eventsToPublish.isEmpty) {

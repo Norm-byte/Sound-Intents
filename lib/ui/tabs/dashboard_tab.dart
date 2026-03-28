@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'dart:async'; // Added for Timer
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../models/event.dart';
 import '../widgets/active_operators_card.dart'; // Added for Active Operators
 // import '../widgets/dashboard_clock.dart'; // Removed
@@ -53,13 +54,6 @@ class _DashboardTabState extends State<DashboardTab> {
   // Automation / System State
   bool _isAutoSystemEnabled = false; // "Auto-Publish" Toggle (Current + 3)
 
-  // Clipboard for Week Copy/Paste (List of Events normalized to Monday Start)
-  // We store them as events where startTimeUTC is relative to "Year 1970, Week 1" to be generic?
-  // Or just as a list of "Duration from Week Start" -> Event Data.
-  List<Event>? _clipboardEvents;
-  // Metadata about the source of the copy
-  String? _clipboardSourceLabel;
-  
   late final ScrollController _scrollController;
 
   @override
@@ -80,14 +74,27 @@ class _DashboardTabState extends State<DashboardTab> {
     );
     
     _startClock();
-    
-    // Simulate checking the "Auto-System" (Current + 3) rule on startup
-    // In a real backend, this would run daily. Here, we check when the admin opens the dashboard.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_isAutoSystemEnabled) {
-        _checkAutoSystemRules();
+
+    // Load persisted state for Auto-System
+    _loadAutoSystemState();
+  }
+
+  Future<void> _loadAutoSystemState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final enabled = prefs.getBool('auto_system_enabled') ?? true;
+      if (mounted) {
+        setState(() => _isAutoSystemEnabled = enabled);
+        if (enabled) {
+          // Delay to ensure frame is ready for SnackBars etc.
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+             _checkAutoSystemRules();
+          });
+        }
       }
-    });
+    } catch (e) {
+      debugPrint('Error loading auto-system state: $e');
+    }
   }
 
   @override
@@ -110,53 +117,64 @@ class _DashboardTabState extends State<DashboardTab> {
   // Implementation of "Auto-System" (Current + 3) Rule
   // This simulates the behavior requested:
   // "if active, check if the 5th week (Current+4) is filled (glowing Amber)... take the vacant place of the 4th... keeping Current+3"
+  // Auto-System: "Current week published + Next week as draft"
+  // - If we have crossed into a new week and drafts exist for it → auto-publish them.
+  // - If next week is empty → auto-copy current week events as unpublished draft.
+  // - Never more than 1 published week at a time, preventing duplicate notice boards.
   void _checkAutoSystemRules() {
-    // 1. Calculate Target Dates (Current, Week+1, Week+2, Week+3... Week+4 (The 5th one))
     final now = DateTime.now();
     final todayUtc = DateTime.utc(now.year, now.month, now.day);
     final daysSinceMonday = todayUtc.weekday - 1;
     final thisWeekStart = todayUtc.subtract(Duration(days: daysSinceMonday));
-    
-    final week4Start = thisWeekStart.add(const Duration(days: 7 * 3)); // Current+3 (Target Buffer)
-    final week5Start = thisWeekStart.add(const Duration(days: 7 * 4)); // Current+4 (Source)
-    
-    // 2. Count "Published" vs "Draft" in Week 4 (The target slot that might need filling)
-    final week4Events = widget.events.where((e) {
+    final nextWeekStart = thisWeekStart.add(const Duration(days: 7));
+    final nextNextWeekStart = nextWeekStart.add(const Duration(days: 7));
+
+    // Events whose startTimeUTC falls in next week's range
+    final nextWeekEvents = widget.events.where((e) {
       if (e.startTimeUTC == null) return false;
       final start = DateTime.parse(e.startTimeUTC!);
-      return start.isAfter(week4Start.subtract(const Duration(seconds: 1))) && 
-             start.isBefore(week4Start.add(const Duration(days: 7)));
+      return !start.isBefore(nextWeekStart) && start.isBefore(nextNextWeekStart);
     }).toList();
-    
-    final week4Published = week4Events.where((e) => e.isPublished).length;
-    
-    // 3. Check source (Week 5)
-    final week5Events = widget.events.where((e) {
-      if (e.startTimeUTC == null) return false;
-      final start = DateTime.parse(e.startTimeUTC!);
-      return start.isAfter(week5Start.subtract(const Duration(seconds: 1))) && 
-             start.isBefore(week5Start.add(const Duration(days: 7)));
-    }).toList();
-    
-    final week5Drafts = week5Events.where((e) => e.isDraft).length;
-    
-    // 4. Logic: If Week 4 is EMPTY (or low) and Week 5 is READY, we "Auto-Promote"
-    // For this simulation, we'll just show a status message.
-    // In a real implementation with `onPublishWeek`, we would call it here.
-    if (week4Published < 5 && week5Drafts > 0) {
-       // Week 4 needs content, Week 5 has checks.
-       // "Simulating Auto-Publish: Promoting Week 5 Drafts to Week 4 Published Slots"
-       ScaffoldMessenger.of(context).showSnackBar(
-         SnackBar(
-           content: Text("Auto-System: Found ${week5Drafts} drafts in Week 5. Promoting to Week 4 (Simulated)."),
-           backgroundColor: Colors.indigo,
-           duration: const Duration(seconds: 4),
-         ),
-       );
-    } else if (week4Published >= 1) {
-       // Buffer is healthy
-       // Status check only
+
+    final nextWeekDrafts = nextWeekEvents.where((e) => e.isDraft == true).toList();
+    final nextWeekPublished = nextWeekEvents.where((e) => e.isPublished == true).toList();
+
+    // STEP 1: We have crossed into what was "next week" — publish those drafts now.
+    if (!todayUtc.isBefore(nextWeekStart) && nextWeekDrafts.isNotEmpty) {
+      widget.onPublishWeek?.call(0); // offset 0 = current week (formerly next week)
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Auto-System: Published ${nextWeekDrafts.length} events for the new week.'),
+        backgroundColor: Colors.green,
+        duration: const Duration(seconds: 4),
+      ));
+      return;
     }
+
+    // STEP 2: Next week has no content yet — auto-create draft from current week.
+    if (nextWeekDrafts.isEmpty && nextWeekPublished.isEmpty) {
+      final currentWeekEvents = widget.events.where((e) {
+        if (e.startTimeUTC == null) return false;
+        final start = DateTime.parse(e.startTimeUTC!);
+        return !start.isBefore(thisWeekStart) && start.isBefore(nextWeekStart) && e.isPublished == true;
+      }).toList();
+
+      if (currentWeekEvents.isNotEmpty) {
+        _handleDirectCopyPaste(currentWeekEvents, nextWeekStart, 'Next Week (Auto-Draft)');
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Auto-System: Created ${currentWeekEvents.length} draft events for next week.'),
+          backgroundColor: Colors.amber.shade800,
+          duration: const Duration(seconds: 4),
+        ));
+      }
+      return;
+    }
+
+    // STEP 3: Next week already has a draft — all is well.
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('Auto-System: Next week has ${nextWeekDrafts.length} draft(s) ready to go.'),
+      backgroundColor: Colors.indigo,
+      duration: const Duration(seconds: 3),
+    ));
   }
 
   @override
@@ -316,20 +334,9 @@ class _DashboardTabState extends State<DashboardTab> {
     
     // 1. Calculate Current Week Info
     final now = DateTime.now();
-    // Get the first monday of the year? Or just start Jan 1st?
-    // User logic: "Jan 1st would obviously be week1"
-    // We'll align cards to Week Blocks starting from Jan 1st?
-    // But usually weeks start on Monday. The existing logic used "Today + Offset".
-    // Let's standardise on ISO 8601 weeks (Monday start) or simple "Jan 1 + 7 days".
-    // Sticking to Monday-based weeks is safer for a "Schedule".
-    
-    // Let's align to the *current year's* structure.
     final firstDayOfYear = DateTime.utc(now.year, 1, 1);
-    final daysOffset = firstDayOfYear.weekday - 1; // 0=Mon, 6=Sun
+    final daysOffset = firstDayOfYear.weekday - 1; 
     final firstMondayOfYear = firstDayOfYear.subtract(Duration(days: daysOffset));
-    
-    // Calculate current week index (0-based)
-    // We treat the week containing "Today" as the current week.
     final todayUtc = DateTime.utc(now.year, now.month, now.day);
     final diffDays = todayUtc.difference(firstMondayOfYear).inDays;
     final currentWeekIndex = (diffDays / 7).floor();
@@ -350,18 +357,26 @@ class _DashboardTabState extends State<DashboardTab> {
                 // NEW: Automation Status - "Auto-System" Toggle
                 // "if active, the app will check to see if the week 5th is filled..."
                 InkWell(
-                  onTap: () {
-                    setState(() => _isAutoSystemEnabled = !_isAutoSystemEnabled);
+                  onTap: () async {
+                    final newValue = !_isAutoSystemEnabled;
+                    setState(() => _isAutoSystemEnabled = newValue);
+                    
+                    // Persist state
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setBool('auto_system_enabled', newValue);
+
                     if (_isAutoSystemEnabled) {
                       _checkAutoSystemRules(); // Run check immediately
                     }
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(_isAutoSystemEnabled ? 'Auto-System ACTIVATED: Checking Week 5 buffer...' : 'Auto-System DEACTIVATED: Manual control only.'),
-                        duration: const Duration(seconds: 2),
-                        backgroundColor: _isAutoSystemEnabled ? Colors.green : Colors.orange,
-                      ),
-                    );
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(_isAutoSystemEnabled ? 'Auto-System ACTIVATED: Managing current week + next week draft...' : 'Auto-System DEACTIVATED: Manual control only.'),
+                          duration: const Duration(seconds: 2),
+                          backgroundColor: _isAutoSystemEnabled ? Colors.green : Colors.orange,
+                        ),
+                      );
+                    }
                   },
                   borderRadius: BorderRadius.circular(16),
                   child: Container(
@@ -413,6 +428,7 @@ class _DashboardTabState extends State<DashboardTab> {
               itemBuilder: (context, index) {
                 // Calculate Week Date Range
                 final weekStart = firstMondayOfYear.add(Duration(days: 7 * index));
+                // ignore: unused_local_variable
                 final weekEnd = weekStart.add(const Duration(days: 7));
                 
                 final isPast = index < currentWeekIndex;
@@ -455,6 +471,7 @@ class _DashboardTabState extends State<DashboardTab> {
     );
   }
 
+
   Widget _buildSingleWeekCard(String label, int weekOffset, {String? subtitle, bool showCleanUpAction = false, int? currentWeekIndex, ScrollController? scrollController}) {
     final int currentOffset = _weekViewOffset[weekOffset] ?? 0;
     
@@ -482,7 +499,7 @@ class _DashboardTabState extends State<DashboardTab> {
         final start = DateTime.parse(e.startTimeUTC!);
         final inRange = start.isAfter(weekStart.subtract(const Duration(seconds: 1))) && 
                         start.isBefore(weekEnd);
-        return inRange || (e.isRecurring == true);
+        return inRange;
       } catch (_) { return false; }
     }).toList();
 
@@ -502,8 +519,9 @@ class _DashboardTabState extends State<DashboardTab> {
     }
 
     // 3. Build dots for the CURRENTLY selected offset view
-    // Map hour (0-23) to status: 0=Empty, 1=Published, 2=Draft, 3=Completed (Amber)
+    // Map hour (0-23) to status: 0=Empty, 1=Published, 2=Draft, 3=Completed
     Map<int, int> currentViewHourStatus = {};
+    final isPastWeek = weekOffset < 0;
     
     // Filter events again for the *selected* view (currentOffset)
     final eventsInCurrentView = weekEvents.where((e) {
@@ -516,27 +534,15 @@ class _DashboardTabState extends State<DashboardTab> {
     for (var e in eventsInCurrentView) {
       try {
         final start = DateTime.parse(e.startTimeUTC!);
-        final end = start.add(Duration(seconds: e.durationSeconds ?? 900));
-        final isPast = end.isBefore(DateTime.now().toUtc());
-
         final current = currentViewHourStatus[start.hour] ?? 0;
-        
-        // FIX: Prioritize Future (1) over Completed (3). 
-        // Logic: Keep Green if ANY future instance exists in this week. 
+
+        // Prioritize Draft (2) > Completed (3) > Published (1)
         if (!e.isPublished) {
-            currentViewHourStatus[start.hour] = 2; // Draft matches always take precedence
-        } else if (!isPast) {
-            // Future Event Found -> Mark Active (Green)
-            // This overrides "Completed" (3) status if a previous loop set it.
-            if (current != 2) {
-               currentViewHourStatus[start.hour] = 1; 
-            }
+          currentViewHourStatus[start.hour] = 2;
+        } else if (isPastWeek) {
+          if (current != 2) currentViewHourStatus[start.hour] = 3;
         } else {
-            // Past Event Found -> Mark Completed (Amber)
-            // Only if we haven't already marked it as Active (1) or Draft (2)
-            if (current != 1 && current != 2) {
-                currentViewHourStatus[start.hour] = 3; 
-            }
+          if (current != 2 && current != 3) currentViewHourStatus[start.hour] = 1;
         }
       } catch (_) {}
     }
@@ -595,16 +601,12 @@ class _DashboardTabState extends State<DashboardTab> {
                               if (widget.onClearWeek != null) widget.onClearWeek!(weekOffset, currentOffset);
                             },
                           ),
-                          // Dropdown for Week Actions (Copy / Paste)
+                          // Dropdown for Week Actions
                           PopupMenuButton<String>(
                             icon: const Icon(Icons.more_vert, color: Colors.grey),
                             tooltip: 'Week Actions',
                             onSelected: (value) async {
-                               if (value == 'copy') {
-                                 _handleCopyWeek(weekEvents, label, weekStart);
-                               } else if (value == 'paste') {
-                                 _handlePasteWeek(weekStart, label);
-                               } else if (value == 'copy_to') {
+                               if (value == 'copy_to') {
                                  // Show Copy To Dialog
                                  final targetWeekStr = await _showCopyToDialog(context, weekStart.year);
                                  if (targetWeekStr != null) {
@@ -629,16 +631,6 @@ class _DashboardTabState extends State<DashboardTab> {
                             itemBuilder: (BuildContext context) {
                               return [
                                 const PopupMenuItem(
-                                  value: 'copy',
-                                  child: Row(
-                                    children: [
-                                      Icon(Icons.copy, size: 18, color: Colors.grey),
-                                      SizedBox(width: 8),
-                                      Text('Copy This Week'),
-                                    ],
-                                  ),
-                                ),
-                                const PopupMenuItem(
                                   value: 'copy_to',
                                   child: Row(
                                     children: [
@@ -648,46 +640,35 @@ class _DashboardTabState extends State<DashboardTab> {
                                     ],
                                   ),
                                 ),
-                                PopupMenuItem(
-                                  value: 'paste',
-                                  enabled: _clipboardEvents != null && _clipboardEvents!.isNotEmpty,
-                                  child: Row(
-                                    children: [
-                                      Icon(Icons.paste, size: 18, color: Colors.indigo),
-                                      SizedBox(width: 8),
-                                      Text(_clipboardEvents != null 
-                                         ? 'Paste (${_clipboardEvents!.length} events)' 
-                                         : 'Paste Week'),
-                                    ],
-                                  ),
-                                ),
                               ];
                             },
                           ),
-                          const SizedBox(width: 8),
-                          ElevatedButton(
-                            onPressed: () {
-                                if (widget.onPublishWeek != null) widget.onPublishWeek!(weekOffset);
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text("Publishing $label..."))
-                                );
-                            },
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: anyDraftsInWeek ? Colors.amber.shade800 : Colors.blue, // Amber for drafts
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          if (anyDraftsInWeek) ...[
+                            const SizedBox(width: 8),
+                            ElevatedButton(
+                              onPressed: () {
+                                  if (widget.onPublishWeek != null) widget.onPublishWeek!(weekOffset);
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text("Publishing $label..."))
+                                  );
+                              },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.amber.shade800,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                              ),
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Padding(
+                                    padding: EdgeInsets.only(right: 6.0),
+                                    child: Icon(Icons.warning_amber_rounded, size: 16),
+                                  ),
+                                  Text("Publish Drafts", style: TextStyle(fontWeight: FontWeight.bold)),
+                                ],
+                              ),
                             ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                if (anyDraftsInWeek) const Padding(
-                                  padding: EdgeInsets.only(right: 6.0),
-                                  child: Icon(Icons.warning_amber_rounded, size: 16),
-                                ),
-                                Text(anyDraftsInWeek ? "Publish Drafts" : "Sync", style: const TextStyle(fontWeight: FontWeight.bold)),
-                              ],
-                            ),
-                          ),
+                          ],
                         ],
                       ),
                     ],
@@ -720,10 +701,6 @@ class _DashboardTabState extends State<DashboardTab> {
                                // AUTOMATION LOGIC: Current Week + 4
                                // 1. Capture events
                                if (weekEvents.isNotEmpty) {
-                                  setState(() {
-                                    _clipboardEvents = weekEvents;
-                                    _clipboardSourceLabel = "Week Clone";
-                                  });
                                     // 2. Calculate target offset
                                     final targetOffset = weekOffset + 4;
                                     
@@ -774,11 +751,11 @@ class _DashboardTabState extends State<DashboardTab> {
                       itemCount: 24,
                       itemBuilder: (context, index) {
                          final status = currentViewHourStatus[index] ?? 0;
-                         // 1: Published (Green), 2: Draft (Amber/Orange), 3: Completed (AmberSolid)
+                         // 1: Published (Green), 2: Draft (Amber/Orange), 3: Completed (Amber)
                          Color dotColor = Colors.grey[300]!;
                          if (status == 1) dotColor = Colors.greenAccent[400]!;
                          if (status == 2) dotColor = Colors.orangeAccent;
-                         if (status == 3) dotColor = Colors.amber; // Past/Completed
+                         if (status == 3) dotColor = Colors.amber;
                          
                          // Visual tweaks for empty state
                          if (status == 0) dotColor = Colors.grey.shade100;
@@ -896,9 +873,63 @@ class _DashboardTabState extends State<DashboardTab> {
         return;
      }
 
-     // Temporary store to leverage existing paste logic
-     _clipboardEvents = srcEvents.map((e) => e).toList();
-     _handlePasteWeek(targetWeekStart, targetLabel);
+     final newEvents = _cloneEventsToWeek(srcEvents, targetWeekStart);
+     if (newEvents.isEmpty) {
+       ScaffoldMessenger.of(context).showSnackBar(
+         const SnackBar(content: Text("No events were copied.")),
+       );
+       return;
+     }
+
+     if (widget.onImportEvents != null) {
+       widget.onImportEvents!(newEvents);
+       ScaffoldMessenger.of(context).showSnackBar(
+         SnackBar(
+           content: Text("Pasted ${newEvents.length} drafts into $targetLabel"),
+           backgroundColor: Colors.amber.shade800,
+         ),
+       );
+     }
+  }
+
+  List<Event> _cloneEventsToWeek(List<Event> srcEvents, DateTime targetWeekStart) {
+    if (srcEvents.isEmpty) return [];
+
+    final first = DateTime.parse(srcEvents.first.startTimeUTC!);
+    final daysSinceMon = first.weekday - 1;
+    final sourceWeekStart = DateTime.utc(first.year, first.month, first.day)
+        .subtract(Duration(days: daysSinceMon));
+
+    final daysDiff = targetWeekStart.difference(sourceWeekStart).inDays;
+    final List<Event> newEvents = [];
+
+    for (final srcEvent in srcEvents) {
+      try {
+        final srcStart = DateTime.parse(srcEvent.startTimeUTC!);
+        final newStart = srcStart.add(Duration(days: daysDiff));
+
+        // New ID per copied slot+date, preserving all other event payload fields.
+        final slot =
+            '${newStart.hour.toString().padLeft(2, '0')}${newStart.minute.toString().padLeft(2, '0')}';
+        final dateSuffix =
+            '${newStart.year}${newStart.month.toString().padLeft(2, '0')}${newStart.day.toString().padLeft(2, '0')}';
+        final newId = 'copy_${slot}_$dateSuffix';
+
+        newEvents.add(
+          srcEvent.copyWith(
+            id: newId,
+            startTimeUTC: newStart.toIso8601String(),
+            isPublished: false,
+            isDraft: true,
+            updatedAt: DateTime.now().toIso8601String(),
+          ),
+        );
+      } catch (e) {
+        debugPrint("Error copying event: $e");
+      }
+    }
+
+    return newEvents;
   }
 
   Future<String?> _showCopyToDialog(BuildContext context, int year) async {
@@ -930,101 +961,6 @@ class _DashboardTabState extends State<DashboardTab> {
         );
       },
     );
-  }
-
-  void _handleCopyWeek(List<Event> weekEvents, String label, DateTime weekStart) {
-    if (weekEvents.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("No events to copy in this week.")));
-      return;
-    }
-    
-    // Store events relative to the week start
-    // We clone them to prevent reference issues
-    setState(() {
-      _clipboardEvents = weekEvents.map((e) => e).toList();
-      _clipboardSourceLabel = label;
-    });
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text("Copied ${weekEvents.length} events from $label"), 
-        backgroundColor: Colors.indigo
-      )
-    );
-  }
-
-  void _handlePasteWeek(DateTime targetWeekStart, String targetLabel) {
-    if (_clipboardEvents == null || _clipboardEvents!.isEmpty) return;
-    
-    // Calculate the time difference between the *source week start* and the *target week start*?
-    // Actually, we need to know the Source Week Start to calculate the relative offsets.
-    // BUT, we didn't store the source week start. 
-    // Easier: We look at the first event in the clipboard, find its Day of Week and Time, and replicate that.
-    
-    // Let's assume the passed `_clipboardEvents` contain their original `startTimeUTC`.
-    // We need to find the "base Monday" of the source week.
-    if (_clipboardEvents!.isEmpty) return;
-    
-    // Heuristic: Find the earliest event to determine standard offset?
-    // Better: Just take the first event, find its Monday, calculate offset.
-    // NOTE: All events in `_clipboardEvents` are from the SAME week (filtered in `_buildSingleWeekCard`).
-    
-    final first = DateTime.parse(_clipboardEvents!.first.startTimeUTC!);
-    final daysSinceMon = first.weekday - 1;
-    final sourceWeekStart = DateTime.utc(first.year, first.month, first.day).subtract(Duration(days: daysSinceMon));
-    
-    final timeDiffCallback = targetWeekStart.difference(sourceWeekStart);
-    final int daysDiff = timeDiffCallback.inDays; // Should be multiple of 7
-    
-    List<Event> newEvents = [];
-    
-    for (var srcEvent in _clipboardEvents!) {
-      try {
-        final srcStart = DateTime.parse(srcEvent.startTimeUTC!);
-        // Add the difference
-        final newStart = srcStart.add(Duration(days: daysDiff));
-        
-        // Create new Event
-        // ID must be unique. Let's let the backend or `Event` constructor handle it, 
-        // or generate a temp one.
-        final newEvent = Event(
-          id: 'copy_${DateTime.now().millisecondsSinceEpoch}_${srcEvent.id}', // Temp ID
-          title: srcEvent.title,
-          intent: srcEvent.intent,
-          visualUrl: srcEvent.visualUrl,
-          soundUrl: srcEvent.soundUrl,
-          startTimeUTC: newStart.toIso8601String(),
-          durationSeconds: srcEvent.durationSeconds,
-          isPublished: false, // PASTE AS DRAFT
-          isDraft: true,
-          type: srcEvent.type,
-          noticeBoardBgImage: srcEvent.noticeBoardBgImage,
-          noticeBoardBgColor: srcEvent.noticeBoardBgColor,
-          autoNotify: srcEvent.autoNotify,
-          isRecurring: srcEvent.isRecurring,
-          isRandomized: srcEvent.isRandomized,
-          useTrendingIntent: srcEvent.useTrendingIntent,
-          noticeBoardShowBeforeMinutes: srcEvent.noticeBoardShowBeforeMinutes,
-          noticeBoardVisibilityAfterMinutes: srcEvent.noticeBoardVisibilityAfterMinutes,
-          updatedAt: DateTime.now().toIso8601String(),
-          // Legacy/Other fields
-          learnMoreShowViewer: srcEvent.learnMoreShowViewer,
-        );
-        newEvents.add(newEvent);
-      } catch (e) {
-        debugPrint("Error pasting event: $e");
-      }
-    }
-    
-    if (widget.onImportEvents != null) {
-      widget.onImportEvents!(newEvents);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("Pasted ${newEvents.length} drafts into $targetLabel"),
-          backgroundColor: Colors.amber.shade800
-        )
-      );
-    }
   }
 
   Widget _buildSchedulerStatus(BuildContext context) {

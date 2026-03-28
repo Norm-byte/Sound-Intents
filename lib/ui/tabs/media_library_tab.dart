@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
+import 'web_pdf_shim.dart' if (dart.library.io) 'web_pdf_shim_stub.dart';
 import '../../services/media_library_service.dart';
 import '../../models/media_item.dart';
 import '../../utils/thumbnail_generator.dart';
@@ -546,17 +547,9 @@ class _MediaLibraryTabState extends State<MediaLibraryTab> {
                         ),
                       ),
                     ),
+
                     const SizedBox(width: 8),
-                    IconButton(
-                      icon: const Icon(Icons.open_in_new, color: Colors.red),
-                      tooltip: 'Open YouTube',
-                      onPressed: () async {
-                        final Uri url = Uri.parse('https://www.youtube.com');
-                        if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
-                          if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Could not launch YouTube')));
-                        }
-                      },
-                    ),
+
                   ],
                 ),
                 const SizedBox(height: 16),
@@ -773,10 +766,18 @@ class _MediaLibraryTabState extends State<MediaLibraryTab> {
         // Try to generate thumbnail for video
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Generating thumbnail...'), duration: Duration(seconds: 1)),
+            const SnackBar(content: Text('Generating video thumbnail...'), duration: Duration(seconds: 1)),
           );
         }
         thumbnailBytes = await ThumbnailGenerator.generateVideoThumbnail(fileBytes);
+      } else if (file.name.toLowerCase().endsWith('.pdf')) {
+        // Try to generate thumbnail for PDF
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Generating PDF thumbnail...'), duration: Duration(seconds: 1)),
+          );
+        }
+        thumbnailBytes = await ThumbnailGenerator.generatePdfThumbnail(fileBytes);
       }
       
       await _mediaService.uploadMedia(
@@ -846,8 +847,175 @@ class _MediaLibraryTabState extends State<MediaLibraryTab> {
                     cleanUrl.endsWith('.webp') || cleanUrl.endsWith('.bmp');
                     
     final isPdf = item.type == 'pdf' || cleanUrl.endsWith('.pdf');
+    final isDoc = item.type == 'document' || 
+                  cleanUrl.endsWith('.doc') || cleanUrl.endsWith('.docx') || 
+                  cleanUrl.endsWith('.ppt') || cleanUrl.endsWith('.pptx') || 
+                  cleanUrl.endsWith('.pptm') || cleanUrl.endsWith('.xls') || 
+                  cleanUrl.endsWith('.xlsx') || cleanUrl.endsWith('.txt');
 
-    // If it's a video, play it directly
+    // Unified Document Viewer (PDF)
+    if (isPdf) {
+      final viewType = 'pdf-view-${item.id}-${DateTime.now().millisecondsSinceEpoch}';
+      // Use native browser PDF viewer via IFrame
+      // Append toolbar=0 to try and hide the toolbar (works in some browsers)
+      final pdfUrl = '${item.url}#toolbar=0&navpanes=0&scrollbar=0';
+      registerPdfViewFactory(viewType, pdfUrl);
+
+      showDialog(
+        context: context,
+        builder: (context) {
+          final size = MediaQuery.of(context).size;
+          final screenWidth = size.width;
+          final screenHeight = size.height;
+
+          return Dialog(
+            insetPadding: const EdgeInsets.all(24),
+            backgroundColor: Colors.transparent,
+            child: Container(
+              width: screenWidth * 0.9,
+              height: screenHeight * 0.9,
+              constraints: BoxConstraints(maxWidth: screenWidth * 0.9, maxHeight: screenHeight * 0.9),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Header
+                  Container(
+                    decoration: const BoxDecoration(
+                      color: Colors.black,
+                      borderRadius: BorderRadius.only(
+                        topLeft: Radius.circular(8),
+                        topRight: Radius.circular(8),
+                      ),
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            item.name,
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close, color: Colors.white),
+                          onPressed: () => Navigator.pop(context),
+                          tooltip: 'Close Preview',
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Content
+                  Expanded(
+                    child: Container(
+                      decoration: const BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.only(
+                          bottomLeft: Radius.circular(8),
+                          bottomRight: Radius.circular(8),
+                        ),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: const BorderRadius.only(
+                          bottomLeft: Radius.circular(8),
+                          bottomRight: Radius.circular(8),
+                        ),
+                        child: HtmlElementView(viewType: viewType),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      );
+      return;
+    }
+
+    // Docs Viewer (Word, PPT, etc.)
+    if (isDoc) {
+      final viewType = 'doc-view-${item.id}-${DateTime.now().millisecondsSinceEpoch}';
+      // Use Google Docs Viewer for compatibility
+      final viewerUrl = 'https://docs.google.com/gview?url=${Uri.encodeComponent(item.url)}&embedded=true';
+      
+      registerPdfViewFactory(viewType, viewerUrl);
+      
+      showDialog(
+        context: context,
+        builder: (context) {
+          final size = MediaQuery.of(context).size;
+          final screenWidth = size.width;
+          final screenHeight = size.height;
+
+          return Dialog(
+            insetPadding: const EdgeInsets.all(24),
+            backgroundColor: Colors.transparent,
+            child: Container(
+              width: screenWidth * 0.9,
+              height: screenHeight * 0.9,
+              constraints: BoxConstraints(maxWidth: screenWidth * 0.9, maxHeight: screenHeight * 0.9),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                   // Header
+                  Container(
+                    decoration: const BoxDecoration(
+                      color: Colors.black,
+                      borderRadius: BorderRadius.only(
+                        topLeft: Radius.circular(8),
+                        topRight: Radius.circular(8),
+                      ),
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            item.name,
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close, color: Colors.white),
+                          onPressed: () => Navigator.pop(context),
+                          tooltip: 'Close Preview',
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Content
+                  Expanded(
+                    child: Container(
+                      decoration: const BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.only(
+                          bottomLeft: Radius.circular(8),
+                          bottomRight: Radius.circular(8),
+                        ),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: const BorderRadius.only(
+                          bottomLeft: Radius.circular(8),
+                          bottomRight: Radius.circular(8),
+                        ),
+                        child: HtmlElementView(viewType: viewType),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      );
+      return;
+    }
+
+    // Interactive Video Player
     if (isVideo) {
       showDialog(
         context: context,
@@ -856,16 +1024,24 @@ class _MediaLibraryTabState extends State<MediaLibraryTab> {
           insetPadding: EdgeInsets.zero,
           child: Stack(
             alignment: Alignment.center,
+            fit: StackFit.expand,
             children: [
               isYoutube 
-                ? YouTubePlayerWidget(videoId: _getYoutubeId(item.url) ?? '')
-                : FullVideoPlayer(url: item.url),
+                ? Center(child: YouTubePlayerWidget(videoId: _getYoutubeId(item.url) ?? ''))
+                : Center(child: FullVideoPlayer(url: item.url)),
               Positioned(
-                top: 40,
+                top: 20,
                 right: 20,
-                child: IconButton(
-                  icon: const Icon(Icons.close, color: Colors.white, size: 30),
-                  onPressed: () => Navigator.pop(context),
+                child: SafeArea(
+                  child: CircleAvatar(
+                    backgroundColor: Colors.black54,
+                    radius: 20,
+                    child: IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white, size: 24),
+                      onPressed: () => Navigator.pop(context),
+                      tooltip: 'Close',
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -894,9 +1070,12 @@ class _MediaLibraryTabState extends State<MediaLibraryTab> {
               Positioned(
                 top: 40,
                 right: 20,
-                child: IconButton(
-                  icon: const Icon(Icons.close, color: Colors.white, size: 30),
-                  onPressed: () => Navigator.pop(context),
+                child: CircleAvatar(
+                  backgroundColor: Colors.black54,
+                  child: IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white, size: 24),
+                    onPressed: () => Navigator.pop(context),
+                  ),
                 ),
               ),
             ],
@@ -906,44 +1085,7 @@ class _MediaLibraryTabState extends State<MediaLibraryTab> {
       return;
     }
 
-    // PDF Preview
-    if (isPdf) {
-      showDialog(
-        context: context,
-        builder: (context) => Dialog(
-          insetPadding: const EdgeInsets.all(24),
-          child: Stack(
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(top: 50),
-                child: SfPdfViewer.network(
-                  item.url,
-                  canShowScrollHead: true,
-                  canShowScrollStatus: true,
-                ),
-              ),
-              Positioned(
-                top: 8,
-                right: 8,
-                child: IconButton(
-                  icon: const Icon(Icons.close, color: Colors.black, size: 30),
-                  onPressed: () => Navigator.pop(context),
-                ),
-              ),
-              Positioned(
-                top: 16,
-                left: 16,
-                child: Text(
-                  item.name,
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-      return;
-    }
+
 
     showDialog(
       context: context,
@@ -1239,7 +1381,7 @@ class _MediaCard extends StatelessWidget {
     if (!isRenderableImage) {
       if (lowerName.endsWith('.pdf') || lowerUrl.endsWith('.pdf')) extension = '.pdf';
       else if (lowerName.endsWith('.doc') || lowerUrl.endsWith('.doc') || lowerName.endsWith('.docx') || lowerUrl.endsWith('.docx')) extension = '.doc';
-      else if (lowerName.endsWith('.ppt') || lowerUrl.endsWith('.ppt') || lowerName.endsWith('.pptx') || lowerUrl.endsWith('.pptx')) extension = '.ppt';
+      else if (lowerName.endsWith('.ppt') || lowerUrl.endsWith('.ppt') || lowerName.endsWith('.pptx') || lowerUrl.endsWith('.pptx') || lowerName.endsWith('.pptm') || lowerUrl.endsWith('.pptm')) extension = '.ppt';
       else if (lowerName.endsWith('.xls') || lowerUrl.endsWith('.xls') || lowerName.endsWith('.xlsx') || lowerUrl.endsWith('.xlsx')) extension = '.xls';
       else if (lowerName.endsWith('.txt') || lowerUrl.endsWith('.txt')) extension = '.txt';
     }

@@ -115,16 +115,24 @@ class _VideoGridItemState extends State<VideoGridItem> {
         insetPadding: EdgeInsets.zero,
         child: Stack(
           alignment: Alignment.center,
+          fit: StackFit.expand, // Ensure stack fills dialog
           children: [
             isYoutube 
-              ? YouTubePlayerWidget(videoId: _getYoutubeId(widget.url) ?? '')
-              : FullVideoPlayer(url: widget.url),
+              ? Center(child: YouTubePlayerWidget(videoId: _getYoutubeId(widget.url) ?? ''))
+              : Center(child: FullVideoPlayer(url: widget.url)),
             Positioned(
-              top: 40,
+              top: 20,
               right: 20,
-              child: IconButton(
-                icon: const Icon(Icons.close, color: Colors.white, size: 30),
-                onPressed: () => Navigator.pop(context),
+              child: SafeArea(
+                child: CircleAvatar(
+                  backgroundColor: Colors.black54,
+                  radius: 24,
+                  child: IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white, size: 28),
+                    onPressed: () => Navigator.pop(context),
+                    tooltip: 'Close',
+                  ),
+                ),
               ),
             ),
           ],
@@ -212,7 +220,7 @@ class YouTubePlayerWidget extends StatelessWidget {
     // ignore: undefined_prefixed_name
     ui_web.platformViewRegistry.registerViewFactory(viewId, (int viewId) {
       final iframe = html.IFrameElement()
-        ..src = 'https://www.youtube.com/embed/$videoId?autoplay=1'
+        ..src = 'https://www.youtube.com/embed/$videoId?autoplay=1&modestbranding=1&rel=0&showinfo=0'
         ..style.border = 'none'
         ..allow = 'autoplay; encrypted-media; picture-in-picture';
       return iframe;

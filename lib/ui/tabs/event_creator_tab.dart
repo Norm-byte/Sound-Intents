@@ -1798,12 +1798,13 @@ class _EventCreatorTabState extends State<EventCreatorTab>
                         // ignore: undefined_prefixed_name
                         ui_web.platformViewRegistry.registerViewFactory(viewId,
                             (int viewId) {
-                          final element = html.ObjectElement()
-                            ..data = url
-                            ..type = 'application/pdf'
+                          final element = html.IFrameElement()
+                            ..src = '$url#toolbar=0&navpanes=0&scrollbar=0&view=FitH'
                             ..style.border = 'none'
                             ..style.width = '100%'
-                            ..style.height = '100%';
+                            ..style.height = '100%'
+                            ..style.display = 'block'
+                            ..style.overflowX = 'hidden'; // Prevent minor horizontal scrolling
                           return element;
                         });
                         return Stack(
@@ -2270,12 +2271,13 @@ class _EventCreatorTabState extends State<EventCreatorTab>
                       // ignore: undefined_prefixed_name
                       ui_web.platformViewRegistry.registerViewFactory(viewId,
                           (int viewId) {
-                        final element = html.ObjectElement()
-                          ..data = url
-                          ..type = 'application/pdf'
+                        final element = html.IFrameElement()
+                          ..src = '$url#toolbar=0&navpanes=0&scrollbar=0&view=FitH'
                           ..style.border = 'none'
                           ..style.width = '100%'
-                          ..style.height = '100%';
+                          ..style.height = '100%'
+                          ..style.display = 'block'
+                          ..style.overflowX = 'hidden'; // Prevent minor horizontal scrolling
                         return element;
                       });
                       return Stack(

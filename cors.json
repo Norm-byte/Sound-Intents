@@ -1,7 +1,8 @@
 [
   {
     "origin": ["*"],
-    "method": ["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS"],
+    "method": ["GET", "HEAD", "PUT", "POST", "DELETE", "OPTIONS"],
+    "responseHeader": ["Authorization", "Content-Type", "Content-Length", "Content-Range", "User-Agent", "Access-Control-Allow-Origin", "ETag", "Accept-Ranges", "Content-Encoding", "Content-Transfer-Encoding", "X-Firebase-Storage-Version", "x-goog-resumable"],
     "maxAgeSeconds": 3600
   }
 ]
