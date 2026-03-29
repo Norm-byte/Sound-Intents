@@ -536,10 +536,11 @@ class _DashboardTabState extends State<DashboardTab> {
         final start = DateTime.parse(e.startTimeUTC!);
         final current = currentViewHourStatus[start.hour] ?? 0;
 
-        // Prioritize Draft (2) > Completed (3) > Published (1)
+        // Prioritize Draft (2) > Completed/Amber (3) > Published (1)
         if (!e.isPublished) {
           currentViewHourStatus[start.hour] = 2;
-        } else if (isPastWeek) {
+        } else if (isPastWeek || (start.weekday == DateTime.sunday && start.isBefore(now))) {
+          // Past week OR Sunday slot that has already passed → amber
           if (current != 2) currentViewHourStatus[start.hour] = 3;
         } else {
           if (current != 2 && current != 3) currentViewHourStatus[start.hour] = 1;
