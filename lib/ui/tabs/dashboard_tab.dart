@@ -815,9 +815,10 @@ class _DashboardTabState extends State<DashboardTab> {
                               if (widget.onPublishWeek != null) {
                                 widget.onPublishWeek!(weekOffset, currentOffset);
                               }
+                              final laneLabel = ':${currentOffset.toString().padLeft(2, '0')}';
                               final msg = anyDraftsInWeek
-                                  ? "Publishing drafts in $label..."
-                                  : "Re-publishing $label to Firestore...";
+                                  ? "Publishing drafts in $label lane $laneLabel..."
+                                  : "Re-publishing $label lane $laneLabel to Firestore...";
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(content: Text(msg)),
                               );
@@ -855,8 +856,8 @@ class _DashboardTabState extends State<DashboardTab> {
                                   !anyEventsInWeek
                                       ? "No Events"
                                       : (anyDraftsInWeek
-                                      ? "Publish Drafts"
-                                      : "Publish Week"),
+                                      ? "Publish Draft Lane"
+                                      : "Publish Lane"),
                                   style: const TextStyle(
                                     fontWeight: FontWeight.bold,
                                   ),
