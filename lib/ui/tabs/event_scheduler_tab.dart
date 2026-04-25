@@ -40,6 +40,15 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
   String? _selectedSlotId; // e.g., "14:30"
   int _selectedWeekOffset = 0; // 0 = Current, 1 = Next Week, etc.
 
+  // Tracks slots explicitly cleared by the user so the grid suppresses live events
+  // for those slots even if Firestore deletion hasn't propagated yet.
+  Set<String> _deletedSlots = {};
+
+  // True when the currently-selected slot was loaded purely from liveEvents
+  // (not from a local draft). Prevents auto-saving liveEvent data back into
+  // local draft simply because the user clicked somewhere else.
+  bool _currentSlotFromLiveOnly = false;
+
   // Weekly Drafts
   // Keeps track of drafts for each week offset, so switching weeks doesn't lose work.
   // Key: weekOffset, Value: Map of "HH:mm" -> Event Data
@@ -260,6 +269,16 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
           _scheduledEventsData.clear();
         });
       }
+      // Restore deleted slots marker
+      final deletedString = prefs.getString(
+        'eventSchedulerDeletedSlotsV1_Week$_selectedWeekOffset',
+      );
+      setState(() {
+        _deletedSlots = deletedString != null
+            ? Set<String>.from(
+                (jsonDecode(deletedString) as List).cast<String>())
+            : {};
+      });
     } catch (e) {
       debugPrint('Error loading draft: $e');
     } finally {
@@ -275,6 +294,11 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
         'eventSchedulerDraftV3_Week$_selectedWeekOffset',
         jsonEncode(_scheduledEventsData),
       );
+      // Persist deleted-slot markers so they survive tab navigation
+      await prefs.setString(
+        'eventSchedulerDeletedSlotsV1_Week$_selectedWeekOffset',
+        jsonEncode(_deletedSlots.toList()),
+      );
     } catch (e) {
       debugPrint('Error saving draft (likely quota exceeded): $e');
     }
@@ -286,8 +310,12 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
   }
 
   void _selectSlot(String slotId) {
-    // Save current slot before switching
-    if (_selectedSlotId != null) {
+    // Save current slot before switching, but ONLY if:
+    // a) there is already a local draft for it (user previously saved it), OR
+    // b) the form was loaded from a local draft (not purely from liveEvents).
+    // This prevents clicking between grid tiles from silently resurrecting
+    // live events into the local draft without any user intent.
+    if (_selectedSlotId != null && !_currentSlotFromLiveOnly) {
       _saveCurrentSlot();
     }
 
@@ -296,9 +324,11 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
 
       // 1. Try to get local draft data
       Map<String, dynamic> data = _scheduledEventsData[slotId] ?? {};
+      _currentSlotFromLiveOnly = false; // reset; will be set true below if needed
 
-      // 2. If no local draft, try to find a live event
-      if (data.isEmpty && widget.liveEvents != null) {
+      // 2. If slot was explicitly cleared OR no local draft, try to find a live event
+      //    (but skip liveEvents lookup if slot is in _deletedSlots)
+      if (data.isEmpty && !_deletedSlots.contains(slotId) && widget.liveEvents != null) {
         try {
           final parts = slotId.split(':');
           final hour = int.parse(parts[0]);
@@ -319,19 +349,11 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                   start.minute < minute + 15;
               if (!timeMatch) return false;
 
-              // Check date match (Must be on the target date)
-              // Note: Recurrence implies "Every day", so we accept recurring events regardless of date
-              // IF we want to edit specific instances, we should prioritize `isRecurring: false` on target date.
-
               final isTargetDate = start.year == targetDate.year &&
                   start.month == targetDate.month &&
                   start.day == targetDate.day;
 
-              // Priority: Exact Date Match with same time
               if (isTargetDate) return true;
-
-              // Secondary: Recurring event that covers this day
-              // For now, simpler logic: if it matches time and isRecurring, we show it
               if (e.isRecurring == true) return true;
 
               return false;
@@ -342,6 +364,7 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
 
           if (liveEvent.id.isNotEmpty) {
             data = _convertEventToMap(liveEvent);
+            _currentSlotFromLiveOnly = true; // loaded from liveEvents, not a local draft
           }
         } catch (e) {
           debugPrint('Error matching live event: $e');
@@ -425,6 +448,9 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
 
   void _saveCurrentSlot() {
     if (_selectedSlotId == null) return;
+    // Remove from deleted set — user is actively editing/keeping this slot.
+    _deletedSlots.remove(_selectedSlotId!);
+    _currentSlotFromLiveOnly = false;
 
     final currentData = _scheduledEventsData[_selectedSlotId!] ?? {};
 
@@ -464,6 +490,14 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
   void _clearCurrentSlot() {
     if (_selectedSlotId == null) return;
 
+    final targetDate = _getTargetDate();
+    final dateSuffix =
+      "${targetDate.year}${targetDate.month.toString().padLeft(2, '0')}${targetDate.day.toString().padLeft(2, '0')}";
+    final deterministicPublishedId =
+      'slot_${_selectedSlotId!.replaceAll(':', '')}_$dateSuffix';
+    final deterministicDraftId =
+      'draft_slot_${_selectedSlotId!.replaceAll(':', '')}_$dateSuffix';
+
     // Determine the ID to delete
     String eventId;
 
@@ -472,10 +506,7 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
       eventId = _scheduledEventsData[_selectedSlotId]!['id'];
     } else {
       // 2. Generate Deterministic ID (re-create logic from _publishSchedule)
-      final targetDate = _getTargetDate();
-      final dateSuffix =
-          "${targetDate.year}${targetDate.month.toString().padLeft(2, '0')}${targetDate.day.toString().padLeft(2, '0')}";
-      eventId = 'slot_${_selectedSlotId!.replaceAll(':', '')}_$dateSuffix';
+        eventId = deterministicPublishedId;
 
       // 3. Fallback check: Search in live events if the deterministic one isn't the one needed
       // (This is mostly for non-deterministic or legacy IDs, but let's prioritize the deterministic one first because that's what we create)
@@ -484,9 +515,6 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
           final parts = _selectedSlotId!.split(':');
           final hour = int.parse(parts[0]);
           final minute = int.parse(parts[1]);
-          final now = DateTime.now().toUtc();
-          final today = DateTime.utc(now.year, now.month, now.day);
-
           final liveEvent = widget.liveEvents!.firstWhere((e) {
             // Filter out Global events just like _selectSlot
             if (e.type == 'global') return false;
@@ -499,9 +527,9 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                 start.minute < minute + 15;
             if (!timeMatch) return false;
 
-            final dateMatch = start.year == today.year &&
-                start.month == today.month &&
-                start.day == today.day;
+            final dateMatch = start.year == targetDate.year &&
+              start.month == targetDate.month &&
+              start.day == targetDate.day;
             final isRecurring = e.isRecurring == true;
 
             // Note: If we are editing a specific instance (date match), we prefer that ID.
@@ -522,8 +550,25 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
       }
     }
 
-    // Optimistically delete from Firestore (if it exists)
-    _eventRepository.deleteEvent(eventId).then((_) {
+    // Mark slot as explicitly deleted — suppresses liveEvent display in the grid
+    // even before the Firestore deletion propagates back through the stream.
+    _deletedSlots.add(_selectedSlotId!);
+    _currentSlotFromLiveOnly = false;
+
+    // Delete all possible IDs for this slot/date (published + draft + discovered ID)
+    final idsToDelete = <String>{
+      eventId,
+      deterministicPublishedId,
+      deterministicDraftId,
+    };
+    if (eventId.startsWith('draft_slot_')) {
+      idsToDelete.add(eventId.replaceFirst('draft_slot_', 'slot_'));
+    } else if (eventId.startsWith('slot_')) {
+      idsToDelete.add(eventId.replaceFirst('slot_', 'draft_slot_'));
+    }
+
+    Future.wait(idsToDelete.map((id) => _eventRepository.deleteEvent(id)))
+        .then((_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Event cleared from schedule')),
@@ -531,7 +576,7 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
       }
     }).catchError((e) {
       // Ignore errors if doc doesn't exist
-      debugPrint("Error deleting event $eventId: $e");
+      debugPrint("Error deleting slot docs for ${_selectedSlotId!}: $e");
     });
 
     setState(() {
@@ -541,7 +586,7 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
     });
 
     _resetForm();
-    _saveDraftToLocal();
+    _saveDraftToLocal(); // persists both _scheduledEventsData and _deletedSlots
   }
 
   void _stopLocalVideo() {
@@ -619,13 +664,15 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
     setState(() {
       _selectedSlotId = null;
       _scheduledEventsData.clear();
+      _deletedSlots.clear();
+      _currentSlotFromLiveOnly = false;
       if (_weeklyDrafts.containsKey(_selectedWeekOffset)) {
         _weeklyDrafts[_selectedWeekOffset]?.clear();
       }
       _resetForm();
     });
 
-    await _saveDraftToLocal(); // Saves empty map
+    await _saveDraftToLocal(); // Saves empty map + clears persisted deleted slots
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -715,6 +762,9 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
     try {
       // Convert map to List<Event>
       List<Event> eventsToSave = [];
+      // Slots with no meaningful content (blank title + no media) are treated as
+      // implicit deletes — remove any live published doc so the noticeboard clears.
+      List<String> idsToDelete = [];
 
       _scheduledEventsData.forEach((slotId, data) {
         // slotId is "HH:mm"
@@ -739,20 +789,32 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
         final dateSuffix =
             "${targetDate.year}${targetDate.month.toString().padLeft(2, '0')}${targetDate.day.toString().padLeft(2, '0')}";
         final deterministicId =
-            'slot_${slotId.replaceAll(':', '')}_$dateSuffix';
+          'slot_${slotId.replaceAll(':', '')}_$dateSuffix';
+        final draftId =
+          'draft_slot_${slotId.replaceAll(':', '')}_$dateSuffix';
+
+        final title = (data['title'] as String? ?? '').trim();
+        final visualUrl = (data['visualUrl'] as String? ?? '').trim();
+        final soundUrl = (data['soundUrl'] as String? ?? '').trim();
+
+        // If no title AND no media, treat as blank/deleted — clear the live doc
+        // so the noticeboard reflects the empty state immediately.
+        if (title.isEmpty && visualUrl.isEmpty && soundUrl.isEmpty) {
+          idsToDelete.addAll([deterministicId, draftId]);
+          return; // skip adding to eventsToSave
+        }
 
         final event = Event(
-          id: data['id'] ?? deterministicId,
+          id: draftId,
 
-          title: data['title'] ?? 'Untitled Event',
+          title: title,
           intent: data['intent'],
-          visualUrl: data['visualUrl'],
+          visualUrl: visualUrl.isNotEmpty ? visualUrl : null,
           // Ensure mediaUrl is set for User App compatibility (from visualUrl)
           // User App uses mediaUrl for video/audio playback logic
-          mediaUrl: data['visualUrl'] ??
-              data['soundUrl'], // Fallback to sound if no visual
-          soundUrl: data['soundUrl'],
-          durationSeconds: data['durationSeconds'],
+          mediaUrl: visualUrl.isNotEmpty ? visualUrl : (soundUrl.isNotEmpty ? soundUrl : null),
+          soundUrl: soundUrl.isNotEmpty ? soundUrl : null,
+          durationSeconds: data['durationSeconds'] ?? 3600,
           startTimeUTC: eventTime.toIso8601String(),
           originTime:
               slotId, // Save the HH:mm string for consistent local time parsing
@@ -767,7 +829,7 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
               data['noticeBoardVisibilityAfterMinutes'] ?? 0,
           noticeBoardBgImage: data['noticeBoardBgImage'],
           noticeBoardBgColor: data['noticeBoardBgColor'],
-          // User Request: Save as Draft (Yellow) first, Publish from Dashboard
+          // Drafts must not overwrite live published slot docs in Firestore.
           isPublished: false,
           isDraft: true,
           type: 'national', // Explicitly mark as National
@@ -778,12 +840,22 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
         eventsToSave.add(event);
       });
 
-      await _eventRepository.saveEvents(eventsToSave);
+      // Delete blank slots from Firestore so notieboard clears immediately
+      if (idsToDelete.isNotEmpty) {
+        await Future.wait(
+          idsToDelete.map((id) => _eventRepository.deleteEvent(id).catchError((_) {})),
+        );
+      }
 
+      if (eventsToSave.isNotEmpty) {
+        await _eventRepository.saveEvents(eventsToSave);
+      }
+
+      final deleted = idsToDelete.isNotEmpty ? ' (${(idsToDelete.length ~/ 2)} blank slot(s) cleared)' : '';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Schedule saved as Draft (${eventsToSave.length} slots). Go to Dashboard to Publish.',
+            'Schedule saved as Draft (${eventsToSave.length} slot(s))$deleted. Go to Dashboard to Publish.',
           ),
         ),
       );
@@ -824,8 +896,10 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
     setState(() {
       _selectedSlotId = null;
       _scheduledEventsData.clear();
+      _deletedSlots.clear();
+      _currentSlotFromLiveOnly = false;
     });
-    // First try to load draft for the new week offset
+    // First try to load draft for the new week offset (also restores _deletedSlots)
     _loadDraftFromLocal();
     // If no draft exists, and we are viewing a future week,
     // the UI will show empty or live recurring events as appropriate.
@@ -1535,35 +1609,29 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                         final hour = int.parse(parts[0]);
                                         final minute = int.parse(parts[1]);
 
-                                        // Use the Week Offset logic to check for events in THIS week
                                         final targetDate = _getTargetDate();
 
                                         liveEvent =
                                             widget.liveEvents!.firstWhere(
                                           (e) {
-                                            if (e.startTimeUTC == null)
+                                            if (e.startTimeUTC == null) {
                                               return false;
+                                            }
                                             final start = DateTime.parse(
                                               e.startTimeUTC!,
                                             );
 
-                                            // Check time match
-                                            final timeMatch =
-                                                start.hour == hour &&
-                                                    start.minute >= minute &&
-                                                    start.minute < minute + 15;
+                                            final timeMatch = start.hour == hour &&
+                                                start.minute >= minute &&
+                                                start.minute < minute + 15;
                                             if (!timeMatch) return false;
 
-                                            // Check date match (On Target Date)
                                             final isTargetDate =
                                                 start.year == targetDate.year &&
-                                                    start.month ==
-                                                        targetDate.month &&
+                                                    start.month == targetDate.month &&
                                                     start.day == targetDate.day;
 
-                                            // Check recurrence
-                                            final isRecurring =
-                                                e.isRecurring == true;
+                                            final isRecurring = e.isRecurring == true;
 
                                             return isTargetDate || isRecurring;
                                           },
@@ -1571,8 +1639,12 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                       } catch (_) {}
                                     }
 
+                                    // A slot is considered empty if:
+                                    // - there's no local draft AND no live event, OR
+                                    // - it was explicitly cleared by the user (_deletedSlots)
                                     final hasData =
-                                        hasLocalData || liveEvent != null;
+                                        (hasLocalData || liveEvent != null) &&
+                                        !_deletedSlots.contains(slotId);
 
                                     // Determine status color
                                     Color statusColor =
@@ -1584,10 +1656,10 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                       final parts = slotId.split(':');
                                       final hour = int.parse(parts[0]);
                                       final minute = int.parse(parts[1]);
+                                      final targetDate = _getTargetDate();
 
                                       // Use target date to ensure we compare against the correct day (supports Week Offset)
                                       // This fixes an issue where viewing future/past weeks compared slots against "Today's" time
-                                      final targetDate = _getTargetDate();
                                       final slotTime = targetDate.add(
                                         Duration(hours: hour, minutes: minute),
                                       );
@@ -1595,12 +1667,14 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                       final isFuture = slotTime.isAfter(now);
 
                                       if (hasLocalData) {
-                                        // Draft status - Amber for unpublished drafts (as requested)
-                                        // We use Amber to signify "Pending Publish"
+                                        // Draft status - Amber for unpublished drafts
                                         statusColor = Colors.amber;
-                                      } else {
-                                        // Live status - Green for Published/Live
+                                      } else if (isFuture) {
+                                        // Live status, slot not yet fired - Green (upcoming)
                                         statusColor = Colors.green;
+                                      } else {
+                                        // Live status, slot time has passed - Amber (expired)
+                                        statusColor = Colors.amber;
                                       }
                                     }
 
@@ -3000,132 +3074,41 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                                       ),
                                                     ),
 
-                                                  // Content (Bottom)
-                                                  Positioned(
-                                                    bottom: 40,
-                                                    left: 20,
-                                                    right: 20,
-                                                    child: Column(
-                                                      crossAxisAlignment:
-                                                          CrossAxisAlignment
-                                                              .start,
-                                                      children: [
-                                                        Text(
-                                                          _titleController
-                                                                  .text.isEmpty
-                                                              ? 'Event Title'
-                                                              : _titleController
-                                                                  .text,
-                                                          style:
-                                                              const TextStyle(
-                                                            color: Colors.white,
-                                                            fontSize: 24,
-                                                            fontWeight:
-                                                                FontWeight.bold,
-                                                            shadows: [
-                                                              Shadow(
-                                                                blurRadius: 4,
+                                                  // Playback preview should not show noticeboard text fields.
+                                                  if (_soundUrlController
+                                                      .text
+                                                      .isNotEmpty)
+                                                    Positioned(
+                                                      bottom: 40,
+                                                      left: 20,
+                                                      right: 20,
+                                                      child: Row(
+                                                        children: [
+                                                          const Icon(
+                                                            Icons.music_note,
+                                                            color:
+                                                                Colors.white70,
+                                                            size: 16,
+                                                          ),
+                                                          const SizedBox(
+                                                            width: 8,
+                                                          ),
+                                                          Expanded(
+                                                            child: Text(
+                                                              'Audio attached',
+                                                              style: TextStyle(
                                                                 color: Colors
-                                                                    .black,
-                                                              ),
-                                                            ],
-                                                          ),
-                                                        ),
-                                                        if (_intentController
-                                                            .text
-                                                            .isNotEmpty) ...[
-                                                          const SizedBox(
-                                                            height: 8,
-                                                          ),
-                                                          Text(
-                                                            _intentController
-                                                                .text,
-                                                            style:
-                                                                const TextStyle(
-                                                              color: Colors
-                                                                  .white70,
-                                                              fontSize: 16,
-                                                              shadows: [
-                                                                Shadow(
-                                                                  blurRadius: 4,
-                                                                  color: Colors
-                                                                      .black,
+                                                                    .white
+                                                                    .withOpacity(
+                                                                  0.7,
                                                                 ),
-                                                              ],
+                                                                fontSize: 12,
+                                                              ),
                                                             ),
-                                                            maxLines: 1,
-                                                            overflow:
-                                                                TextOverflow
-                                                                    .ellipsis,
                                                           ),
                                                         ],
-                                                        if (_descriptionController
-                                                            .text
-                                                            .isNotEmpty) ...[
-                                                          const SizedBox(
-                                                            height: 4,
-                                                          ),
-                                                          Text(
-                                                            _descriptionController
-                                                                .text,
-                                                            style:
-                                                                const TextStyle(
-                                                              color: Colors
-                                                                  .white60,
-                                                              fontSize: 12,
-                                                              shadows: [
-                                                                Shadow(
-                                                                  blurRadius: 4,
-                                                                  color: Colors
-                                                                      .black,
-                                                                ),
-                                                              ],
-                                                            ),
-                                                            maxLines: 2,
-                                                            overflow:
-                                                                TextOverflow
-                                                                    .ellipsis,
-                                                          ),
-                                                        ],
-                                                        if (_soundUrlController
-                                                            .text
-                                                            .isNotEmpty) ...[
-                                                          const SizedBox(
-                                                            height: 16,
-                                                          ),
-                                                          Row(
-                                                            children: [
-                                                              const Icon(
-                                                                Icons
-                                                                    .music_note,
-                                                                color: Colors
-                                                                    .white70,
-                                                                size: 16,
-                                                              ),
-                                                              const SizedBox(
-                                                                width: 8,
-                                                              ),
-                                                              Expanded(
-                                                                child: Text(
-                                                                  'Audio attached',
-                                                                  style:
-                                                                      TextStyle(
-                                                                    color: Colors
-                                                                        .white
-                                                                        .withOpacity(
-                                                                      0.7,
-                                                                    ),
-                                                                    fontSize:
-                                                                        12,
-                                                                  ),
-                                                                ),
-                                                              ),
-                                                            ],
-                                                          ),
-                                                        ],
-                                                      ],
+                                                      ),
                                                     ),
-                                                  ),
                                                 ],
                                               ),
                                       ),
