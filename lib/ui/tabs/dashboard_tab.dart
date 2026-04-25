@@ -608,17 +608,33 @@ class _DashboardTabState extends State<DashboardTab> {
       }
     }).toList();
 
+    String slotStatusKey(DateTime start) =>
+        '${start.year}-${start.month}-${start.day}-${start.hour}-${start.minute}';
+
+    final Set<String> publishedSlotKeys = {};
+    for (var e in weekEvents) {
+      try {
+        final start = effectiveStarts[e.id] ?? DateTime.parse(e.startTimeUTC!);
+        if (e.isPublished) {
+          publishedSlotKeys.add(slotStatusKey(start));
+        }
+      } catch (_) {}
+    }
+
     // Analyze minute slots
     for (var e in weekEvents) {
       try {
          final start = effectiveStarts[e.id] ?? DateTime.parse(e.startTimeUTC!);
          final minute = start.minute;
+         final key = slotStatusKey(start);
+         final isDraftLike = !e.isPublished || e.isDraft;
+         final hasPublishedTwin = publishedSlotKeys.contains(key);
          // Normalize minute to nearest bucket if needed, or exact match?
          // Assuming users create events exactly at 0, 15, 30, 45 or close to it.
          // Let's use strict mapping:
          if (hasContentAt.containsKey(minute)) {
              hasContentAt[minute] = true;
-             if (!e.isPublished) hasDraftsAt[minute] = true;
+             if (isDraftLike && !hasPublishedTwin) hasDraftsAt[minute] = true;
          }
       } catch (_) {}
     }
@@ -639,10 +655,13 @@ class _DashboardTabState extends State<DashboardTab> {
     for (var e in eventsInCurrentView) {
       try {
         final start = effectiveStarts[e.id] ?? DateTime.parse(e.startTimeUTC!);
+        final key = slotStatusKey(start);
+        final isDraftLike = !e.isPublished || e.isDraft;
+        final hasPublishedTwin = publishedSlotKeys.contains(key);
         final current = currentViewHourStatus[start.hour] ?? 0;
 
         // Prioritize Draft (2) > Completed/Amber (3) > Published (1)
-        if (!e.isPublished) {
+        if (isDraftLike && !hasPublishedTwin) {
           currentViewHourStatus[start.hour] = 2;
         } else {
           final sundaySlotTime = DateTime.utc(
@@ -676,9 +695,17 @@ class _DashboardTabState extends State<DashboardTab> {
     // Or just for the current view? Usually Sync applies to the whole week context.
     // Let's assume global week drafts for the main button color.
     final bool anyEventsInWeek = eventsInCurrentView.isNotEmpty;
-    final bool anyDraftsInWeek = eventsInCurrentView.any(
-      (e) => !e.isPublished || e.isDraft,
-    );
+    final bool anyDraftsInWeek = eventsInCurrentView.any((e) {
+      try {
+        final start = effectiveStarts[e.id] ?? DateTime.parse(e.startTimeUTC!);
+        final key = slotStatusKey(start);
+        final isDraftLike = !e.isPublished || e.isDraft;
+        final hasPublishedTwin = publishedSlotKeys.contains(key);
+        return isDraftLike && !hasPublishedTwin;
+      } catch (_) {
+        return false;
+      }
+    });
 
     return Card(
       elevation: 2,
