@@ -12,12 +12,8 @@ class MonetizationTab extends StatefulWidget {
 class _MonetizationTabState extends State<MonetizationTab> {
   final MonetizationRepository _repo = MonetizationRepository();
 
-  // Defined Tiers
-  static const String TIER_FREE = 'tier_free';
-  static const String TIER_STANDARD = 'tier_standard';
-  static const String TIER_PRO = 'tier_pro';
-
   MonetizationOffer? _selectedOffer;
+  String? _selectedDraftSetId;
   
   // Form Controllers
   final _titleController = TextEditingController();
@@ -29,6 +25,7 @@ class _MonetizationTabState extends State<MonetizationTab> {
   // Unlimited Toggles
   bool _unlimitedSends = false;
   bool _unlimitedForums = false;
+  final _draftSetNameController = TextEditingController();
 
   bool _hasAutoSelected = false;
 
@@ -48,6 +45,7 @@ class _MonetizationTabState extends State<MonetizationTab> {
     _rcIdController.dispose();
     _dailySendsController.dispose();
     _forumsController.dispose();
+    _draftSetNameController.dispose();
     super.dispose();
   }
 
@@ -84,11 +82,11 @@ class _MonetizationTabState extends State<MonetizationTab> {
     final presentation = _selectedOffer!.presentation;
 
     final updatedOffer = MonetizationOffer(
-      id: _selectedOffer!.id, // Keep the fixed ID (tier_free, etc)
+      id: _selectedOffer!.id,
       title: _titleController.text,
       description: _descController.text,
-      isActive: true, // Tiers are always "active" in the config list
-      revenueCatOfferingId: _selectedOffer!.id == TIER_FREE ? '' : _rcIdController.text,
+      isActive: true,
+      revenueCatOfferingId: _rcIdController.text.trim(),
       limits: limits,
       presentation: presentation,
     );
@@ -97,23 +95,243 @@ class _MonetizationTabState extends State<MonetizationTab> {
     
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Saved ${_getTierName(updatedOffer.id)} Configuration!')),
+        SnackBar(content: Text('Saved ${updatedOffer.title} card!')),
       );
-      // Refresh selection to show saved state
-      // Force rebuild of parent to update list
       setState(() {
          _selectedOffer = updatedOffer;
       });
     }
   }
 
-  String _getTierName(String id) {
-    switch (id) {
-      case TIER_FREE: return 'Free Tier (Default)';
-      case TIER_STANDARD: return 'Standard Tier';
-      case TIER_PRO: return 'Pro Tier';
-      default: return 'Unknown Tier';
+  Future<void> _createDraftSet({required bool fromCurrentDraft}) async {
+    final defaultName = fromCurrentDraft ? 'Snapshot ${DateTime.now().toIso8601String().substring(0, 19)}' : 'Blank Draft ${DateTime.now().toIso8601String().substring(0, 19)}';
+    _draftSetNameController.text = defaultName;
+
+    final name = await showDialog<String>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: Text(fromCurrentDraft ? 'Create Snapshot from Current Draft' : 'Create New Blank Draft'),
+        content: TextField(
+          controller: _draftSetNameController,
+          decoration: const InputDecoration(
+            labelText: 'Draft Name',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(c, _draftSetNameController.text.trim()),
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+
+    if (name == null || name.isEmpty) return;
+
+    final setId = await _repo.createDraftSet(name: name, fromCurrentDraft: fromCurrentDraft);
+    if (!fromCurrentDraft) {
+      await _repo.clearDraftOffers();
+      _selectedOffer = null;
+      _hasAutoSelected = false;
     }
+
+    if (mounted) {
+      setState(() {
+        _selectedDraftSetId = setId;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(fromCurrentDraft ? 'Snapshot created.' : 'Blank draft created. Add cards on the left.')),
+      );
+    }
+  }
+
+  Future<void> _saveCurrentDraftToSelectedSet() async {
+    if (_selectedDraftSetId == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Select a draft set first.')),
+      );
+      return;
+    }
+
+    await _repo.saveCurrentDraftToSet(_selectedDraftSetId!);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Current draft saved to selected set.')),
+    );
+  }
+
+  Future<void> _loadSelectedSet() async {
+    if (_selectedDraftSetId == null) return;
+
+    await _repo.loadSetToCurrentDraft(_selectedDraftSetId!);
+    if (!mounted) return;
+    setState(() {
+      _selectedOffer = null;
+      _hasAutoSelected = false;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Loaded selected draft set into editor.')),
+    );
+  }
+
+  Future<void> _deleteSelectedSet() async {
+    if (_selectedDraftSetId == null) return;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Delete Selected Draft Set?'),
+        content: const Text('This deletes the selected saved draft set. Current editor state is not automatically changed.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    await _repo.deleteDraftSet(_selectedDraftSetId!);
+    if (!mounted) return;
+    setState(() {
+      _selectedDraftSetId = null;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Draft set deleted.')),
+    );
+  }
+
+  String _slugify(String value) {
+    final cleaned = value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '_').replaceAll(RegExp(r'^_+|_+$'), '');
+    return cleaned.isEmpty ? 'offer' : cleaned;
+  }
+
+  Future<void> _addCard() async {
+    final titleController = TextEditingController();
+    final idController = TextEditingController();
+
+    final shouldCreate = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Add Deal Card'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: titleController,
+              decoration: const InputDecoration(
+                labelText: 'Card Title',
+                hintText: 'e.g. Harmony 100',
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (value) {
+                if (idController.text.isEmpty || idController.text.startsWith('offer_')) {
+                  idController.text = 'offer_${_slugify(value)}';
+                }
+              },
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: idController,
+              decoration: const InputDecoration(
+                labelText: 'Card ID',
+                hintText: 'e.g. offer_harmony_100',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Create Card')),
+        ],
+      ),
+    );
+
+    if (shouldCreate != true) return;
+
+    final title = titleController.text.trim();
+    final id = idController.text.trim().isEmpty
+        ? 'offer_${_slugify(title)}_${DateTime.now().millisecondsSinceEpoch}'
+        : idController.text.trim();
+
+    if (title.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Card title is required.')),
+      );
+      return;
+    }
+
+    final offer = MonetizationOffer(
+      id: id,
+      title: title,
+      description: '',
+      isActive: true,
+      revenueCatOfferingId: '',
+      limits: AppUsageLimits(maxDailySends: 10, maxActiveForums: 1),
+    );
+
+    await _repo.saveDraftOffer(offer);
+    if (!mounted) return;
+    _selectOffer(offer);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Card created. Configure it on the right panel.')),
+    );
+  }
+
+  Future<void> _removeOffer(String offerId, String title) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Remove Card?'),
+        content: Text('Delete "$title" from this draft?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Delete Card')),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    await _repo.deleteDraftOffer(offerId);
+    if (!mounted) return;
+    if (_selectedOffer?.id == offerId) {
+      setState(() {
+        _selectedOffer = null;
+      });
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Card removed from draft.')),
+    );
+  }
+
+  Future<void> _publishDraftToLive(List<MonetizationOffer> draftOffers) async {
+    final hasFreeTier = draftOffers.any((o) => o.id == 'tier_free');
+    final warning = hasFreeTier
+        ? 'This will make these settings LIVE for all users immediately.\n\nEnsure RevenueCat IDs match exactly.'
+        : 'No tier_free card was found. Non-subscribed users will use hardcoded app fallback limits.\n\nPublish anyway?';
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Publish Configuration to App?'),
+        content: Text(warning),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('PUBLISH LIVE')),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+    await _repo.publishToLive();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Configuration published to live app!')),
+    );
   }
 
   @override
@@ -148,32 +366,91 @@ class _MonetizationTabState extends State<MonetizationTab> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-               const Text("Tier Configuration", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+               const Text("Deals / Offers Configuration", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
                const SizedBox(height: 4),
-               const Text("Configure the 3 levels of access for your app users.", style: TextStyle(color: Colors.grey)),
+               const Text("Create draft sets, add/remove cards, then publish to live.", style: TextStyle(color: Colors.grey)),
+               const SizedBox(height: 16),
+
+               StreamBuilder<List<MonetizationDraftSet>>(
+                stream: _repo.getDraftSetsStream(),
+                builder: (context, snapshot) {
+                  final sets = snapshot.data ?? [];
+
+                  if (_selectedDraftSetId == null && sets.isNotEmpty) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (!mounted) return;
+                      setState(() {
+                        _selectedDraftSetId = sets.first.id;
+                      });
+                    });
+                  }
+
+                  final selectedExists = _selectedDraftSetId != null && sets.any((s) => s.id == _selectedDraftSetId);
+                  final dropdownValue = selectedExists ? _selectedDraftSetId : null;
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      DropdownButtonFormField<String>(
+                        value: dropdownValue,
+                        items: sets
+                            .map(
+                              (s) => DropdownMenuItem<String>(
+                                value: s.id,
+                                child: Text(s.name),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) => setState(() => _selectedDraftSetId = value),
+                        decoration: const InputDecoration(
+                          labelText: 'Saved Draft Sets',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          OutlinedButton.icon(
+                            onPressed: () => _createDraftSet(fromCurrentDraft: false),
+                            icon: const Icon(Icons.add),
+                            label: const Text('New Blank Draft'),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: () => _createDraftSet(fromCurrentDraft: true),
+                            icon: const Icon(Icons.copy_all),
+                            label: const Text('Snapshot Current'),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: _selectedDraftSetId == null ? null : _saveCurrentDraftToSelectedSet,
+                            icon: const Icon(Icons.save),
+                            label: const Text('Save to Selected'),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: _selectedDraftSetId == null ? null : _loadSelectedSet,
+                            icon: const Icon(Icons.upload_file),
+                            label: const Text('Load Selected'),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: _selectedDraftSetId == null ? null : _deleteSelectedSet,
+                            icon: const Icon(Icons.delete_outline),
+                            label: const Text('Delete Selected'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  );
+                },
+               ),
+
                const SizedBox(height: 16),
                
                ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE53935), foregroundColor: Colors.white, padding: const EdgeInsets.all(16)),
-                onPressed: () async {
-                   final confirm = await showDialog<bool>(
-                      context: context, 
-                      builder: (c) => AlertDialog(
-                        title: const Text('Publish Configuration to App?'),
-                        content: const Text('This will make these settings LIVE for all users immediately.\n\nEnsure RevenueCat IDs match exactly.'),
-                        actions: [
-                          TextButton(onPressed: ()=>Navigator.pop(c, false), child: const Text('Cancel')),
-                          TextButton(onPressed: ()=>Navigator.pop(c, true), child: const Text('PUBLISH LIVE')),
-                        ],
-                      )
-                   );
-                   if (confirm == true) {
-                     await _repo.publishToLive();
-                     if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Configuration Published to Live App!')));
-                   }
-                },
+                onPressed: null,
                 icon: const Icon(Icons.cloud_upload),
-                label: const Text('PUBLISH TIERS TO LIVE APP'),
+                label: const Text('SELECT A CARD LIST BELOW, THEN PUBLISH'),
               ),
               const SizedBox(height: 8),
               OutlinedButton.icon(
@@ -208,58 +485,91 @@ class _MonetizationTabState extends State<MonetizationTab> {
             stream: _repo.getDraftOffersStream(),
             builder: (context, snapshot) {
               if (snapshot.hasError) return Center(child: Text('Error: ${snapshot.error}'));
-              
-              // We simulate the 3 tiers existing even if the DB is empty
-              final dbOffers = snapshot.data ?? [];
-              
-              Widget buildTierTile(String id, IconData icon, Color color, String defaultTitle, int defaultDaily, int defaultRooms) {
-                // Find in DB or create default
-                final offer = dbOffers.firstWhere(
-                  (o) => o.id == id,
-                  orElse: () => MonetizationOffer(
-                    id: id,
-                    title: defaultTitle,
-                    description: '',
-                    isActive: true,
-                    revenueCatOfferingId: '',
-                    limits: AppUsageLimits(maxDailySends: 0, maxActiveForums: 0),
-                  )
-                );
 
-                final isSelected = _selectedOffer?.id == id;
+              final dbOffers = (snapshot.data ?? [])
+                ..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
 
-                // Auto-select Free on first load
-                if (id == TIER_FREE && !_hasAutoSelected && dbOffers.isNotEmpty) {
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (mounted) {
-                       _hasAutoSelected = true;
-                       _selectOffer(offer);
-                    }
-                  });
-                }
-
-                return ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: color.withOpacity(0.2),
-                    child: Icon(icon, color: color),
-                  ),
-                  title: Text(_getTierName(id), style: const TextStyle(fontWeight: FontWeight.bold)),
-                  subtitle: Text('${offer.title}\nLimit: ${offer.limits.maxDailySends == -1 ? "Unlimited" : offer.limits.maxDailySends} daily'),
-                  isThreeLine: true,
-                  selected: isSelected,
-                  selectedTileColor: color.withOpacity(0.05),
-                  onTap: () => _selectOffer(offer),
-                  trailing: const Icon(Icons.chevron_right),
-                );
+              if (!_hasAutoSelected && dbOffers.isNotEmpty) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (!mounted) return;
+                  _hasAutoSelected = true;
+                  _selectOffer(dbOffers.first);
+                });
               }
 
-              return ListView(
+              return Column(
                 children: [
-                  buildTierTile(TIER_FREE, Icons.money_off, Colors.grey, 'Use Free Version', 10, 0),
-                  const Divider(),
-                  buildTierTile(TIER_STANDARD, Icons.star_border, Colors.blue, 'Standard Monthly', 10, 2),
-                  const Divider(),
-                  buildTierTile(TIER_PRO, Icons.diamond, Colors.amber, 'Pro Subscription', 100, 22),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed: _addCard,
+                            icon: const Icon(Icons.add),
+                            label: const Text('Add Card'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: dbOffers.isEmpty
+                        ? Center(
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Text(
+                                'No cards in this draft. Click "Add Card" or load a saved draft set.',
+                                style: TextStyle(color: Colors.grey.shade700),
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          )
+                        : ListView.separated(
+                            itemCount: dbOffers.length,
+                            separatorBuilder: (_, __) => const Divider(height: 1),
+                            itemBuilder: (context, index) {
+                              final offer = dbOffers[index];
+                              final isSelected = _selectedOffer?.id == offer.id;
+                              return ListTile(
+                                leading: CircleAvatar(
+                                  backgroundColor: Colors.blue.withOpacity(0.12),
+                                  child: const Icon(Icons.style, color: Colors.blue),
+                                ),
+                                title: Text(offer.title, style: const TextStyle(fontWeight: FontWeight.bold)),
+                                subtitle: Text(
+                                  'ID: ${offer.id}\nRC: ${offer.revenueCatOfferingId.isEmpty ? "(none)" : offer.revenueCatOfferingId}',
+                                ),
+                                isThreeLine: true,
+                                selected: isSelected,
+                                selectedTileColor: Colors.blue.withOpacity(0.06),
+                                onTap: () => _selectOffer(offer),
+                                trailing: IconButton(
+                                  tooltip: 'Delete Card',
+                                  icon: const Icon(Icons.delete_outline),
+                                  onPressed: () => _removeOffer(offer.id, offer.title),
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFFE53935),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.all(14),
+                        ),
+                        onPressed: () => _publishDraftToLive(dbOffers),
+                        icon: const Icon(Icons.cloud_upload),
+                        label: const Text('PUBLISH CURRENT DRAFT TO LIVE APP'),
+                      ),
+                    ),
+                  ),
                 ],
               );
             },
@@ -270,11 +580,9 @@ class _MonetizationTabState extends State<MonetizationTab> {
   }
 
   Widget _buildEditor() {
-    if (_selectedOffer == null) return const Center(child: Text('Select a Tier from the list to Configure.'));
-    
-    final isFree = _selectedOffer!.id == TIER_FREE;
-    final isStandard = _selectedOffer!.id == TIER_STANDARD;
-    final isPro = _selectedOffer!.id == TIER_PRO;
+    if (_selectedOffer == null) {
+      return const Center(child: Text('Select a card from the left to configure it.'));
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -288,8 +596,9 @@ class _MonetizationTabState extends State<MonetizationTab> {
                const SizedBox(width: 16),
                Expanded(
                  child: Text(
-                   isFree ? 'Configuring Default Limits for non-paying users.' 
-                   : 'Configuring Paid Tier. Requires RevenueCat ID.',
+                   _selectedOffer!.id == 'tier_free'
+                       ? 'Configuring default limits for non-paying users.'
+                       : 'Configure limits and optionally map this card to a RevenueCat entitlement ID.',
                    style: TextStyle(color: Colors.blue.shade900),
                  )
                ),
@@ -304,24 +613,34 @@ class _MonetizationTabState extends State<MonetizationTab> {
         TextField(
           controller: _titleController, 
           decoration: const InputDecoration(
-            labelText: 'Internal Description', 
+            labelText: 'Card Title', 
             hintText: 'e.g. Starter Plan',
             border: OutlineInputBorder(),
           ),
         ),
         const SizedBox(height: 16),
-        
-        if (!isFree)
-          TextField(
-            controller: _rcIdController, 
-            decoration: const InputDecoration(
-              labelText: 'RevenueCat Entitlement Identifier', 
-              hintText: 'e.g. starter_access or unlimited_access',
-              helperText: 'Must match the Entitlement ID in RevenueCat (e.g. starter_access, unlimited_access).',
-              border: OutlineInputBorder(),
-              prefixIcon: Icon(Icons.vpn_key),
-            ),
+
+        TextField(
+          controller: _descController,
+          decoration: const InputDecoration(
+            labelText: 'Description',
+            hintText: 'Optional internal note',
+            border: OutlineInputBorder(),
           ),
+          maxLines: 2,
+        ),
+        const SizedBox(height: 16),
+        
+        TextField(
+          controller: _rcIdController,
+          decoration: const InputDecoration(
+            labelText: 'RevenueCat Entitlement Identifier',
+            hintText: 'e.g. starter_access or unlimited_access',
+            helperText: 'Leave blank for non-subscriber/default cards.',
+            border: OutlineInputBorder(),
+            prefixIcon: Icon(Icons.vpn_key),
+          ),
+        ),
         
         const Divider(height: 48),
         Text('Usage Limits', style: Theme.of(context).textTheme.titleLarge),
@@ -405,12 +724,12 @@ class _MonetizationTabState extends State<MonetizationTab> {
               backgroundColor: Colors.green.shade700,
               foregroundColor: Colors.white,
             ),
-            child: Text('SAVE ${_getTierName(_selectedOffer!.id).toUpperCase()} SETTINGS'),
+            child: const Text('SAVE CARD SETTINGS'),
           ),
         ),
         
         const SizedBox(height: 16),
-        const Center(child: Text('Remember to click "PUBLISH TIERS" on the left after saving changes.', style: TextStyle(color: Colors.grey))),
+        const Center(child: Text('Remember to click "Publish Current Draft" on the left after saving changes.', style: TextStyle(color: Colors.grey))),
       ],
     );
   }

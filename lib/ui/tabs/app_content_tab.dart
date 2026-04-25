@@ -36,10 +36,12 @@ class _AppContentTabState extends State<AppContentTab> {
   bool _showLiveStats = false;
   bool _showFeatured = false;
   String _featuredType = 'youtube'; // 'youtube' or 'video' or 'image'
+  bool _showReelCarousel = false;
+  int _reelAutoRotateSeconds = 8;
+  List<Map<String, dynamic>> _reelItems = [];
 
-  // Video Controllers for Preview
+  // Video Controller for Background Preview only
   VideoPlayerController? _backgroundVideoController;
-  VideoPlayerController? _featuredVideoController;
 
   @override
   void initState() {
@@ -50,7 +52,6 @@ class _AppContentTabState extends State<AppContentTab> {
   @override
   void dispose() {
     _backgroundVideoController?.dispose();
-    _featuredVideoController?.dispose();
     super.dispose();
   }
 
@@ -69,8 +70,8 @@ class _AppContentTabState extends State<AppContentTab> {
             data['message'] ?? 'Your journey begins here.';
         _backgroundImageUrl = data['backgroundImageUrl'];
 
-        _showBulletin = data['showBulletin'] ?? false;
-        _bulletinController.text = data['bulletinText'] ?? '';
+        _showBulletin = data['appContentShowBulletin'] ?? false;
+        _bulletinController.text = data['appContentBulletinText'] ?? '';
 
         _showLiveStats = data['showLiveStats'] ?? false;
 
@@ -80,11 +81,17 @@ class _AppContentTabState extends State<AppContentTab> {
         _featuredTitleController.text = data['featuredTitle'] ?? '';
         _featuredBodyController.text = data['featuredBody'] ?? '';
 
-        // Initialize featured video if needed
-        if (_showFeatured &&
-            _featuredType == 'video' &&
-            _featuredUrlController.text.isNotEmpty) {
-          _initFeaturedVideo(_featuredUrlController.text);
+        _showReelCarousel = data['showReelCarousel'] ?? false;
+        _reelAutoRotateSeconds =
+            (data['reelAutoRotateSeconds'] as num?)?.toInt() ?? 8;
+        final rawReels = data['reelItems'];
+        if (rawReels is List) {
+          _reelItems = rawReels
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList();
+        } else {
+          _reelItems = [];
         }
 
         if (_backgroundImageUrl != null && _isVideo(_backgroundImageUrl!)) {
@@ -128,16 +135,6 @@ class _AppContentTabState extends State<AppContentTab> {
     if (mounted) setState(() {});
   }
 
-  Future<void> _initFeaturedVideo(String url) async {
-    _featuredVideoController?.dispose();
-    _featuredVideoController = VideoPlayerController.networkUrl(Uri.parse(url));
-    await _featuredVideoController!.initialize();
-    _featuredVideoController!.setLooping(true);
-    _featuredVideoController!.setVolume(0); // Mute by default for preview
-    _featuredVideoController!.play();
-    if (mounted) setState(() {});
-  }
-
   Future<void> _saveContent() async {
     print('Saving content...');
     final user = FirebaseAuth.instance.currentUser;
@@ -154,16 +151,39 @@ class _AppContentTabState extends State<AppContentTab> {
         'title': _titleController.text.trim(),
         'message': _messageController.text.trim(),
         'backgroundImageUrl': _backgroundImageUrl,
-        'showBulletin': _showBulletin,
-        'bulletinText': _bulletinController.text.trim(),
+        'showBulletin': false,
+        'bulletinText': '',
+        'appContentShowBulletin': _showBulletin,
+        'appContentBulletinText': _bulletinController.text.trim(),
         'showLiveStats': _showLiveStats,
         'showFeatured': _showFeatured,
         'featuredType': _featuredType,
         'featuredUrl': _featuredUrlController.text.trim(),
         'featuredTitle': _featuredTitleController.text.trim(),
         'featuredBody': _featuredBodyController.text.trim(),
+        'showReelCarousel': _showReelCarousel,
+        'reelAutoRotateSeconds': _reelAutoRotateSeconds,
+        'reelItems': _reelItems,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true)).timeout(const Duration(seconds: 60));
+
+      // Confirm publish reached the backend (not only local cache).
+      final serverDoc = await FirebaseFirestore.instance
+          .collection('app_config')
+          .doc('home_screen')
+          .get(const GetOptions(source: Source.server));
+      final serverData = serverDoc.data() ?? <String, dynamic>{};
+      final publishedShowBulletin =
+          serverData['appContentShowBulletin'] == true;
+      final publishedBulletinText =
+          (serverData['appContentBulletinText'] as String? ?? '').trim();
+      final expectedBulletinText = _bulletinController.text.trim();
+      if (publishedShowBulletin != _showBulletin ||
+          publishedBulletinText != expectedBulletinText) {
+        throw Exception(
+          'Publish verification failed: server home_screen values do not match the latest save.',
+        );
+      }
 
       print('Content saved successfully');
       if (mounted) {
@@ -203,191 +223,225 @@ class _AppContentTabState extends State<AppContentTab> {
 
   Future<void> _pickFromMediaLibrary({required bool isBackground}) async {
     String? selectedSection;
-    
+
     await showDialog(
       context: context,
       builder: (context) => Dialog(
-        child: StatefulBuilder(
-          builder: (context, setState) {
-            return Container(
-              width: 800,
-              height: 600,
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                          isBackground
-                              ? 'Select Background'
-                              : 'Select Featured Content',
-                          style: Theme.of(context).textTheme.titleLarge),
-                      IconButton(
-                          icon: const Icon(Icons.close),
-                          onPressed: () => Navigator.pop(context)),
-                    ],
-                  ),
-                  const Divider(),
-                  // Section Filter (Dynamic from Media Library)
-                  Row(
-                    children: [
-                      const Text('Filter by Section: '),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: StreamBuilder<List<MediaItem>>(
-                          stream: _mediaLibrary.getMediaStream(),
-                          builder: (context, snapshot) {
-                            if (!snapshot.hasData) return const LinearProgressIndicator();
-                            final allItems = snapshot.data!;
-                            final sections = allItems.map((e) => e.section).toSet().toList()..sort();
-                            
-                            return DropdownButton<String>(
-                              value: selectedSection,
-                              hint: const Text('Select Category'),
-                              isExpanded: true,
-                              items: [
-                                const DropdownMenuItem(value: 'All', child: Text('All Categories')),
-                                ...sections.map((s) => DropdownMenuItem(value: s, child: Text(s))),
-                              ],
-                              onChanged: (val) {
-                                setState(() {
-                                  selectedSection = val;
-                                });
-                              },
-                            );
-                          },
-                        ),
+        child: StatefulBuilder(builder: (context, setState) {
+          return Container(
+            width: 800,
+            height: 600,
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                        isBackground
+                            ? 'Select Background'
+                            : 'Select Featured Content',
+                        style: Theme.of(context).textTheme.titleLarge),
+                    IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.pop(context)),
+                  ],
+                ),
+                const Divider(),
+                // Section Filter (Dynamic from Media Library)
+                Row(
+                  children: [
+                    const Text('Filter by Section: '),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: StreamBuilder<List<MediaItem>>(
+                        stream: _mediaLibrary.getMediaStream(),
+                        builder: (context, snapshot) {
+                          if (!snapshot.hasData)
+                            return const LinearProgressIndicator();
+                          final allItems = snapshot.data!;
+                          final sections = allItems
+                              .map((e) => e.section)
+                              .toSet()
+                              .toList()
+                            ..sort();
+
+                          return DropdownButton<String>(
+                            value: selectedSection,
+                            hint: const Text('Select Category'),
+                            isExpanded: true,
+                            items: [
+                              const DropdownMenuItem(
+                                  value: 'All', child: Text('All Categories')),
+                              ...sections.map((s) =>
+                                  DropdownMenuItem(value: s, child: Text(s))),
+                            ],
+                            onChanged: (val) {
+                              setState(() {
+                                selectedSection = val;
+                              });
+                            },
+                          );
+                        },
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  Expanded(
-                    child: StreamBuilder<List<MediaItem>>(
-                      stream: _mediaLibrary.getMediaStream(section: selectedSection),
-                      builder: (context, snapshot) {
-                        if (snapshot.connectionState == ConnectionState.waiting) {
-                          return const Center(child: CircularProgressIndicator());
-                        }
-                        if (snapshot.hasError) {
-                          return Center(child: Text('Error: ${snapshot.error}'));
-                        }
-                        final allFiles = snapshot.data ?? [];
-
-                        if (allFiles.isEmpty) {
-                          return const Center(
-                              child: Text(
-                                  'No media found in this section.'));
-                        }
-
-                        return GridView.builder(
-                          gridDelegate:
-                              const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 4,
-                            crossAxisSpacing: 10,
-                            mainAxisSpacing: 10,
-                          ),
-                          itemCount: allFiles.length,
-                          itemBuilder: (context, index) {
-                            final item = allFiles[index];
-                            final urlLower = item.url.toLowerCase();
-                            
-                            // Robust type detection
-                            final isYoutube = item.type == 'youtube' || urlLower.contains('youtu');
-                            final isVideo = item.type == 'video' || isYoutube || urlLower.contains('.mp4') || urlLower.contains('.mov');
-                            final isImage = item.type == 'image' || 
-                                           (!isVideo && (urlLower.contains('.jpg') || urlLower.contains('.jpeg') || urlLower.contains('.png') || urlLower.contains('.webp')));
-                            final isPdf = urlLower.contains('.pdf');
-
-                            return InkWell(
-                              onTap: () {
-                                // Use the parent context's setState to update the main widget
-                                this.setState(() {
-                                  if (isBackground) {
-                                    if (isPdf) {
-                                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('PDF cannot be used as background')));
-                                        return; 
-                                    }
-                                    _backgroundImageUrl = item.url;
-                                    if (isVideo && !isYoutube) {
-                                      _initBackgroundVideo(item.url);
-                                    } else {
-                                      _backgroundVideoController?.dispose();
-                                      _backgroundVideoController = null;
-                                    }
-                                  } else {
-                                    _featuredUrlController.text = item.url;
-                                    if (isYoutube) {
-                                       _featuredType = 'youtube';
-                                    } else if (isVideo) {
-                                        _featuredType = 'video';
-                                        _initFeaturedVideo(item.url);
-                                    } else if (isPdf) {
-                                      _featuredType = 'pdf';
-                                    } else {
-                                      _featuredType = 'image';
-                                    }
-                                  }
-                                });
-                                Navigator.pop(context);
-                              },
-                              child: Card(
-                                clipBehavior: Clip.antiAlias,
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                                  children: [
-                                    Expanded(
-                                      child: isImage
-                                          ? Image.network(item.url,
-                                              fit: BoxFit.cover,
-                                              errorBuilder: (ctx, _, __) => const Center(child: Icon(Icons.broken_image)),
-                                          )
-                                          : (isVideo || isYoutube)
-                                              ? VideoGridItem(
-                                                  url: item.url,
-                                                  type: isYoutube ? 'youtube' : 'upload',
-                                                  enablePreview: false,
-                                                )
-                                              : Container(
-                                                  color: Colors.grey.shade200,
-                                                  child: Column(
-                                                    mainAxisAlignment: MainAxisAlignment.center,
-                                                    children: [
-                                                      Icon(
-                                                        isPdf ? Icons.picture_as_pdf : Icons.insert_drive_file,
-                                                        size: 40,
-                                                        color: isPdf ? Colors.red : Colors.grey,
-                                                      ),
-                                                      if (isPdf) 
-                                                        const Text('PDF', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))
-                                                    ],
-                                                  ),
-                                                ),
-                                    ),
-                                    Padding(
-                                      padding: const EdgeInsets.all(4.0),
-                                      child: Text(
-                                        item.name,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(fontSize: 12),
-                                        textAlign: TextAlign.center,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            );
-                          },
-                        );
-                      },
                     ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Expanded(
+                  child: StreamBuilder<List<MediaItem>>(
+                    stream:
+                        _mediaLibrary.getMediaStream(section: selectedSection),
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
+                      if (snapshot.hasError) {
+                        return Center(child: Text('Error: ${snapshot.error}'));
+                      }
+                      final allFiles = snapshot.data ?? [];
+
+                      if (allFiles.isEmpty) {
+                        return const Center(
+                            child: Text('No media found in this section.'));
+                      }
+
+                      return GridView.builder(
+                        gridDelegate:
+                            const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 4,
+                          crossAxisSpacing: 10,
+                          mainAxisSpacing: 10,
+                        ),
+                        itemCount: allFiles.length,
+                        itemBuilder: (context, index) {
+                          final item = allFiles[index];
+                          final urlLower = item.url.toLowerCase();
+
+                          // Robust type detection
+                          final isYoutube = item.type == 'youtube' ||
+                              urlLower.contains('youtu');
+                          final isVideo = item.type == 'video' ||
+                              isYoutube ||
+                              urlLower.contains('.mp4') ||
+                              urlLower.contains('.mov');
+                          final isImage = item.type == 'image' ||
+                              (!isVideo &&
+                                  (urlLower.contains('.jpg') ||
+                                      urlLower.contains('.jpeg') ||
+                                      urlLower.contains('.png') ||
+                                      urlLower.contains('.webp')));
+                          final isPdf = urlLower.contains('.pdf');
+
+                          return InkWell(
+                            onTap: () {
+                              // Use the parent context's setState to update the main widget
+                              this.setState(() {
+                                if (isBackground) {
+                                  if (isPdf) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(
+                                            content: Text(
+                                                'PDF cannot be used as background')));
+                                    return;
+                                  }
+                                  _backgroundImageUrl = item.url;
+                                  if (isVideo && !isYoutube) {
+                                    _initBackgroundVideo(item.url);
+                                  } else {
+                                    _backgroundVideoController?.dispose();
+                                    _backgroundVideoController = null;
+                                  }
+                                } else {
+                                  _featuredUrlController.text = item.url;
+                                  _showFeatured = true;
+                                  if (isYoutube) {
+                                    _featuredType = 'youtube';
+                                  } else if (isVideo) {
+                                    _featuredType = 'video';
+                                    // HtmlVideoPreview handles its own initialization — no controller needed.
+                                  } else if (isPdf) {
+                                    _featuredType = 'pdf';
+                                  } else {
+                                    _featuredType = 'image';
+                                  }
+                                }
+                              });
+                              Navigator.pop(context);
+                            },
+                            child: Card(
+                              clipBehavior: Clip.antiAlias,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Expanded(
+                                    child: isImage
+                                        ? Image.network(
+                                            item.url,
+                                            fit: BoxFit.cover,
+                                            errorBuilder: (ctx, _, __) =>
+                                                const Center(
+                                                    child: Icon(
+                                                        Icons.broken_image)),
+                                          )
+                                        : (isVideo || isYoutube)
+                                            ? VideoGridItem(
+                                                url: item.url,
+                                                type: isYoutube
+                                                    ? 'youtube'
+                                                    : 'upload',
+                                                enablePreview: false,
+                                              )
+                                            : Container(
+                                                color: Colors.grey.shade200,
+                                                child: Column(
+                                                  mainAxisAlignment:
+                                                      MainAxisAlignment.center,
+                                                  children: [
+                                                    Icon(
+                                                      isPdf
+                                                          ? Icons.picture_as_pdf
+                                                          : Icons
+                                                              .insert_drive_file,
+                                                      size: 40,
+                                                      color: isPdf
+                                                          ? Colors.red
+                                                          : Colors.grey,
+                                                    ),
+                                                    if (isPdf)
+                                                      const Text('PDF',
+                                                          style: TextStyle(
+                                                              fontSize: 10,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .bold))
+                                                  ],
+                                                ),
+                                              ),
+                                  ),
+                                  Padding(
+                                    padding: const EdgeInsets.all(4.0),
+                                    child: Text(
+                                      item.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(fontSize: 12),
+                                      textAlign: TextAlign.center,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      );
+                    },
                   ),
-                ],
-              ),
-            );
-          }
-        ),
+                ),
+              ],
+            ),
+          );
+        }),
       ),
     );
   }
@@ -425,6 +479,223 @@ class _AppContentTabState extends State<AppContentTab> {
             child: const Text('Add'),
           ),
         ],
+      ),
+    );
+  }
+
+  String _detectContentType(String url, {String? mediaTypeHint}) {
+    final lower = url.toLowerCase();
+    if (lower.contains('youtu')) return 'youtube';
+    if (mediaTypeHint == 'video' ||
+        lower.contains('.mp4') ||
+        lower.contains('.mov') ||
+        lower.contains('video')) {
+      return 'video';
+    }
+    if (lower.contains('.jpg') ||
+        lower.contains('.jpeg') ||
+        lower.contains('.png') ||
+        lower.contains('.webp')) {
+      return 'image';
+    }
+    if (lower.contains('.pdf')) return 'pdf';
+    return 'link';
+  }
+
+  Future<void> _addReelFromMediaLibrary() async {
+    String? selectedSection;
+
+    await showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        child: StatefulBuilder(
+          builder: (context, setDialogState) {
+            return Container(
+              width: 900,
+              height: 620,
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Add Reel from Media Library',
+                          style: Theme.of(context).textTheme.titleLarge),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ],
+                  ),
+                  const Divider(),
+                  Row(
+                    children: [
+                      const Text('Filter by Section: '),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: StreamBuilder<List<MediaItem>>(
+                          stream: _mediaLibrary.getMediaStream(),
+                          builder: (context, snapshot) {
+                            if (!snapshot.hasData) {
+                              return const LinearProgressIndicator();
+                            }
+                            final allItems = snapshot.data!;
+                            final sections = allItems
+                                .map((e) => e.section)
+                                .toSet()
+                                .toList()
+                              ..sort();
+
+                            return DropdownButton<String>(
+                              value: selectedSection,
+                              hint: const Text('Select Category'),
+                              isExpanded: true,
+                              items: [
+                                const DropdownMenuItem(
+                                  value: 'All',
+                                  child: Text('All Categories'),
+                                ),
+                                ...sections.map(
+                                  (s) => DropdownMenuItem(
+                                    value: s,
+                                    child: Text(s),
+                                  ),
+                                ),
+                              ],
+                              onChanged: (val) {
+                                setDialogState(() => selectedSection = val);
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Expanded(
+                    child: StreamBuilder<List<MediaItem>>(
+                      stream: _mediaLibrary.getMediaStream(
+                          section: selectedSection),
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState ==
+                            ConnectionState.waiting) {
+                          return const Center(
+                              child: CircularProgressIndicator());
+                        }
+                        if (snapshot.hasError) {
+                          return Center(
+                              child: Text('Error: ${snapshot.error}'));
+                        }
+                        final allFiles = snapshot.data ?? [];
+                        if (allFiles.isEmpty) {
+                          return const Center(
+                              child: Text('No media found in this section.'));
+                        }
+
+                        return GridView.builder(
+                          gridDelegate:
+                              const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 4,
+                            crossAxisSpacing: 10,
+                            mainAxisSpacing: 10,
+                          ),
+                          itemCount: allFiles.length,
+                          itemBuilder: (context, index) {
+                            final item = allFiles[index];
+                            final type = _detectContentType(
+                              item.url,
+                              mediaTypeHint: item.type,
+                            );
+
+                            return InkWell(
+                              onTap: () {
+                                setState(() {
+                                  _showReelCarousel = true;
+                                  _reelItems.add({
+                                    'url': item.url,
+                                    'type': type,
+                                    'title': item.name,
+                                    'caption': '',
+                                    'enabled': true,
+                                  });
+                                });
+                                Navigator.pop(context);
+                                if (mounted) {
+                                  ScaffoldMessenger.of(this.context)
+                                      .showSnackBar(
+                                    SnackBar(
+                                      content: Text('Reel added: ${item.name}'),
+                                      duration: const Duration(seconds: 2),
+                                    ),
+                                  );
+                                }
+                              },
+                              child: Card(
+                                clipBehavior: Clip.antiAlias,
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    Expanded(
+                                      child: type == 'image'
+                                          ? Image.network(
+                                              item.url,
+                                              fit: BoxFit.cover,
+                                              errorBuilder: (ctx, _, __) =>
+                                                  const Center(
+                                                      child: Icon(
+                                                          Icons.broken_image)),
+                                            )
+                                          : (type == 'video' ||
+                                                  type == 'youtube')
+                                              ? IgnorePointer(
+                                                  child: VideoGridItem(
+                                                    url: item.url,
+                                                    type: type == 'youtube'
+                                                        ? 'youtube'
+                                                        : 'upload',
+                                                    enablePreview: false,
+                                                  ),
+                                                )
+                                              : Container(
+                                                  color: Colors.grey.shade200,
+                                                  child: Center(
+                                                    child: Icon(
+                                                      type == 'pdf'
+                                                          ? Icons.picture_as_pdf
+                                                          : Icons.link,
+                                                      size: 38,
+                                                      color: type == 'pdf'
+                                                          ? Colors.red
+                                                          : Colors.blueGrey,
+                                                    ),
+                                                  ),
+                                                ),
+                                    ),
+                                    Padding(
+                                      padding: const EdgeInsets.all(6.0),
+                                      child: Text(
+                                        item.name,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(fontSize: 12),
+                                        textAlign: TextAlign.center,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
       ),
     );
   }
@@ -569,7 +840,9 @@ class _AppContentTabState extends State<AppContentTab> {
                   title: const Text('Show Featured Content'),
                   subtitle: const Text('Display a video or image thumbnail'),
                   value: _showFeatured,
-                  onChanged: (v) => setState(() => _showFeatured = v),
+                  onChanged: (v) => setState(() {
+                    _showFeatured = v;
+                  }),
                 ),
                 if (_showFeatured) ...[
                   const SizedBox(height: 16),
@@ -675,6 +948,171 @@ class _AppContentTabState extends State<AppContentTab> {
                     ),
                 ],
 
+                const SizedBox(height: 32),
+
+                // 5. Reel Carousel
+                _buildSectionHeader('Reel Carousel (Home Loop)'),
+                SwitchListTile(
+                  title: const Text('Enable Reel Carousel'),
+                  subtitle: const Text(
+                    'Loop user reels (MP4/YouTube/images/links) on the Home screen',
+                  ),
+                  value: _showReelCarousel,
+                  onChanged: (v) => setState(() {
+                    _showReelCarousel = v;
+                  }),
+                ),
+                if (_showReelCarousel) ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Text('Auto-rotate every'),
+                      const SizedBox(width: 12),
+                      SizedBox(
+                        width: 220,
+                        child: Slider(
+                          value: _reelAutoRotateSeconds.toDouble(),
+                          min: 4,
+                          max: 20,
+                          divisions: 16,
+                          label: '$_reelAutoRotateSeconds s',
+                          onChanged: (v) => setState(
+                              () => _reelAutoRotateSeconds = v.round()),
+                        ),
+                      ),
+                      Text('$_reelAutoRotateSeconds seconds'),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      ElevatedButton.icon(
+                        onPressed: _addReelFromMediaLibrary,
+                        icon: const Icon(Icons.video_library),
+                        label: const Text('Add Reel from Library'),
+                      ),
+                      const SizedBox(width: 12),
+                      if (_reelItems.isNotEmpty)
+                        OutlinedButton.icon(
+                          onPressed: () => setState(() => _reelItems.clear()),
+                          icon: const Icon(Icons.delete_sweep),
+                          label: const Text('Clear All'),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  if (_reelItems.isEmpty)
+                    const Text(
+                      'No reels added yet. Add clips from Media Library to start the carousel.',
+                      style: TextStyle(color: Colors.grey),
+                    )
+                  else
+                    Column(
+                      children: List.generate(_reelItems.length, (index) {
+                        final item = _reelItems[index];
+                        final title = (item['title'] as String?) ?? '';
+                        final caption = (item['caption'] as String?) ?? '';
+                        final url = (item['url'] as String?) ?? '';
+                        final type = (item['type'] as String?) ?? 'video';
+                        final enabled = item['enabled'] != false;
+                        return Card(
+                          margin: const EdgeInsets.only(bottom: 10),
+                          child: Padding(
+                            padding: const EdgeInsets.all(10),
+                            child: Column(
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        '${index + 1}. ${title.isEmpty ? 'Untitled Reel' : title}',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                    Switch(
+                                      value: enabled,
+                                      onChanged: (v) => setState(
+                                        () => _reelItems[index]['enabled'] = v,
+                                      ),
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.arrow_upward),
+                                      onPressed: index == 0
+                                          ? null
+                                          : () => setState(() {
+                                                final tmp =
+                                                    _reelItems[index - 1];
+                                                _reelItems[index - 1] =
+                                                    _reelItems[index];
+                                                _reelItems[index] = tmp;
+                                              }),
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.arrow_downward),
+                                      onPressed: index == _reelItems.length - 1
+                                          ? null
+                                          : () => setState(() {
+                                                final tmp =
+                                                    _reelItems[index + 1];
+                                                _reelItems[index + 1] =
+                                                    _reelItems[index];
+                                                _reelItems[index] = tmp;
+                                              }),
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.delete,
+                                          color: Colors.red),
+                                      onPressed: () => setState(
+                                          () => _reelItems.removeAt(index)),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                Row(
+                                  children: [
+                                    Chip(label: Text(type.toUpperCase())),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        url,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(fontSize: 12),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                TextFormField(
+                                  initialValue: title,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Display Title',
+                                    border: OutlineInputBorder(),
+                                  ),
+                                  onChanged: (v) =>
+                                      _reelItems[index]['title'] = v,
+                                ),
+                                const SizedBox(height: 8),
+                                TextFormField(
+                                  initialValue: caption,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Caption (optional)',
+                                    border: OutlineInputBorder(),
+                                  ),
+                                  maxLines: 2,
+                                  onChanged: (v) =>
+                                      _reelItems[index]['caption'] = v,
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }),
+                    ),
+                ],
+
                 const SizedBox(height: 48),
                 Row(
                   children: [
@@ -710,25 +1148,40 @@ class _AppContentTabState extends State<AppContentTab> {
           ),
         ),
 
-        // Right Side: Phone Preview
+        // Right Side: Preview Panel (wider for better content visibility)
         Expanded(
-          flex: 4, // Increased flex from 2 to 4 for larger preview
+          flex: 5,
           child: Container(
             color: Colors.grey.shade100,
             padding: const EdgeInsets.all(24),
             alignment: Alignment.center,
             child: Column(
               children: [
-                const Text('LIVE PREVIEW',
-                    style: TextStyle(
-                        fontWeight: FontWeight.bold, color: Colors.grey)),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Text('LIVE PREVIEW',
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold, color: Colors.grey)),
+                    const Spacer(),
+                    // Pop-out full-size preview
+                    if (_showFeatured && _featuredUrlController.text.isNotEmpty)
+                      TextButton.icon(
+                        onPressed: () => _openFullSizePreview(),
+                        icon: const Icon(Icons.open_in_full, size: 16),
+                        label: const Text('Full Size'),
+                        style: TextButton.styleFrom(
+                            foregroundColor: Colors.indigo),
+                      ),
+                  ],
+                ),
                 const SizedBox(height: 16),
                 Expanded(
                   child: FittedBox(
-                    fit: BoxFit.contain, // Ensure it scales up to fill available space
+                    fit: BoxFit.contain,
                     child: Container(
-                      width: 375,
-                      height: 812,
+                      width: 420,
+                      height: 850,
                       decoration: BoxDecoration(
                         color: Colors.black,
                         borderRadius: BorderRadius.circular(40),
@@ -800,147 +1253,170 @@ class _AppContentTabState extends State<AppContentTab> {
                                 child: Padding(
                                   padding: const EdgeInsets.all(24.0),
                                   child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.center,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.center,
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                    // App Bar Mock
-                                    Row(
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.spaceBetween,
-                                      children: [
-                                        const Icon(Icons.menu,
+                                      // App Bar Mock
+                                      Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          const Icon(Icons.menu,
+                                              color: Colors.white),
+                                          const Text('Harmony',
+                                              style: TextStyle(
+                                                  color: Colors.white,
+                                                  fontWeight: FontWeight.bold)),
+                                          const Icon(Icons.notifications,
+                                              color: Colors.white),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 40),
+
+                                      // Main Text
+                                      const Icon(Icons.spa,
+                                          size: 60, color: Colors.white70),
+                                      const SizedBox(height: 16),
+                                      Text(
+                                        _titleController.text.isEmpty
+                                            ? 'Title'
+                                            : _titleController.text,
+                                        style: const TextStyle(
+                                            fontSize: 28,
+                                            fontWeight: FontWeight.bold,
                                             color: Colors.white),
-                                        const Text('Harmony',
-                                            style: TextStyle(
-                                                color: Colors.white,
-                                                fontWeight: FontWeight.bold)),
-                                        const Icon(Icons.notifications,
-                                            color: Colors.white),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 40),
-
-                                    // Main Text
-                                    const Icon(Icons.spa,
-                                        size: 60, color: Colors.white70),
-                                    const SizedBox(height: 16),
-                                    Text(
-                                      _titleController.text.isEmpty
-                                          ? 'Title'
-                                          : _titleController.text,
-                                      style: const TextStyle(
-                                          fontSize: 28,
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.white),
-                                      textAlign: TextAlign.center,
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Text(
-                                      _messageController.text.isEmpty
-                                          ? 'Message'
-                                          : _messageController.text,
-                                      style: const TextStyle(
-                                          color: Colors.white70, fontSize: 16),
-                                      textAlign: TextAlign.center,
-                                    ),
-
-                                    const SizedBox(height: 32),
-
-                                    // Bulletin Board
-                                    if (_showBulletin)
-                                      Container(
-                                        width: double.infinity,
-                                        padding: const EdgeInsets.all(16),
-                                        decoration: BoxDecoration(
-                                          color: Colors.white.withOpacity(0.15),
-                                          borderRadius:
-                                              BorderRadius.circular(16),
-                                          border:
-                                              Border.all(color: Colors.white30),
-                                        ),
-                                        child: Column(
-                                          children: [
-                                            const Row(
-                                              mainAxisAlignment:
-                                                  MainAxisAlignment.center,
-                                              children: [
-                                                Icon(Icons.push_pin,
-                                                    color: Colors.amber,
-                                                    size: 16),
-                                                SizedBox(width: 8),
-                                                Text('NOTICE BOARD',
-                                                    style: TextStyle(
-                                                        color: Colors.amber,
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                        fontSize: 12)),
-                                              ],
-                                            ),
-                                            const SizedBox(height: 8),
-                                            Text(
-                                              _bulletinController.text.isEmpty
-                                                  ? '...'
-                                                  : _bulletinController.text,
-                                              style: const TextStyle(
-                                                  color: Colors.white),
-                                              textAlign: TextAlign.center,
-                                            ),
-                                          ],
-                                        ),
+                                        textAlign: TextAlign.center,
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        _messageController.text.isEmpty
+                                            ? 'Message'
+                                            : _messageController.text,
+                                        style: const TextStyle(
+                                            color: Colors.white70,
+                                            fontSize: 16),
+                                        textAlign: TextAlign.center,
                                       ),
 
-                                    const SizedBox(height: 16),
+                                      const SizedBox(height: 32),
 
-                                    // Featured Content
-                                    if (_showFeatured)
-                                      Container(
-                                        constraints: const BoxConstraints(minHeight: 150),
-                                        width: double.infinity,
-                                        decoration: BoxDecoration(
-                                          color: Colors.black54,
-                                          borderRadius:
-                                              BorderRadius.circular(16),
+                                      // Bulletin Board
+                                      if (_showBulletin)
+                                        Container(
+                                          width: double.infinity,
+                                          padding: const EdgeInsets.all(16),
+                                          decoration: BoxDecoration(
+                                            color:
+                                                Colors.white.withOpacity(0.15),
+                                            borderRadius:
+                                                BorderRadius.circular(16),
+                                            border: Border.all(
+                                                color: Colors.white30),
+                                          ),
+                                          child: Column(
+                                            children: [
+                                              const Row(
+                                                mainAxisAlignment:
+                                                    MainAxisAlignment.center,
+                                                children: [
+                                                  Icon(Icons.push_pin,
+                                                      color: Colors.amber,
+                                                      size: 16),
+                                                  SizedBox(width: 8),
+                                                  Text('NOTICE BOARD',
+                                                      style: TextStyle(
+                                                          color: Colors.amber,
+                                                          fontWeight:
+                                                              FontWeight.bold,
+                                                          fontSize: 12)),
+                                                ],
+                                              ),
+                                              const SizedBox(height: 8),
+                                              Text(
+                                                _bulletinController.text.isEmpty
+                                                    ? '...'
+                                                    : _bulletinController.text,
+                                                style: const TextStyle(
+                                                    color: Colors.white),
+                                                textAlign: TextAlign.center,
+                                              ),
+                                            ],
+                                          ),
                                         ),
-                                        clipBehavior: Clip.antiAlias,
-                                        alignment: Alignment.center,
-                                        child: _buildFeaturedPreview(),
-                                      ),
 
-                                    const SizedBox(height: 32),
+                                      const SizedBox(height: 16),
 
-                                    // Live Stats
-                                    if (_showLiveStats)
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 16, vertical: 8),
-                                        decoration: BoxDecoration(
-                                          color: Colors.green.withOpacity(0.2),
-                                          borderRadius:
-                                              BorderRadius.circular(20),
-                                          border: Border.all(
-                                              color: Colors.green
-                                                  .withOpacity(0.5)),
+                                      // Featured Content
+                                      if (_showFeatured && !_showReelCarousel)
+                                        Container(
+                                          constraints: const BoxConstraints(
+                                              minHeight: 150),
+                                          width: double.infinity,
+                                          decoration: BoxDecoration(
+                                            color: Colors.black54,
+                                            borderRadius:
+                                                BorderRadius.circular(16),
+                                          ),
+                                          clipBehavior: Clip.antiAlias,
+                                          alignment: Alignment.center,
+                                          child: _buildFeaturedPreview(),
                                         ),
-                                        child: const Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Icon(Icons.circle,
-                                                color: Colors.green, size: 12),
-                                            SizedBox(width: 8),
-                                            Text('124 Users Online',
-                                                style: TextStyle(
-                                                    color: Colors.greenAccent,
-                                                    fontWeight:
-                                                        FontWeight.bold)),
-                                          ],
-                                        ),
-                                      ),
 
-                                    const SizedBox(height: 20),
-                                  ],
+                                      const SizedBox(height: 16),
+
+                                      if (_showReelCarousel)
+                                        Container(
+                                          width: double.infinity,
+                                          padding: const EdgeInsets.all(10),
+                                          decoration: BoxDecoration(
+                                            color:
+                                                Colors.white.withOpacity(0.08),
+                                            borderRadius:
+                                                BorderRadius.circular(16),
+                                            border: Border.all(
+                                                color: Colors.white24),
+                                          ),
+                                          child: _buildReelPreview(),
+                                        ),
+
+                                      const SizedBox(height: 32),
+
+                                      // Live Stats
+                                      if (_showLiveStats)
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 16, vertical: 8),
+                                          decoration: BoxDecoration(
+                                            color:
+                                                Colors.green.withOpacity(0.2),
+                                            borderRadius:
+                                                BorderRadius.circular(20),
+                                            border: Border.all(
+                                                color: Colors.green
+                                                    .withOpacity(0.5)),
+                                          ),
+                                          child: const Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(Icons.circle,
+                                                  color: Colors.green,
+                                                  size: 12),
+                                              SizedBox(width: 8),
+                                              Text('124 Users Online',
+                                                  style: TextStyle(
+                                                      color: Colors.greenAccent,
+                                                      fontWeight:
+                                                          FontWeight.bold)),
+                                            ],
+                                          ),
+                                        ),
+
+                                      const SizedBox(height: 20),
+                                    ],
+                                  ),
                                 ),
                               ),
-                             ), 
                             ),
                           ],
                         ),
@@ -963,18 +1439,27 @@ class _AppContentTabState extends State<AppContentTab> {
 
     switch (_featuredType) {
       case 'youtube':
-        // Use VideoGridItem for consistent YouTube preview
-        return VideoGridItem(
-          url: _featuredUrlController.text,
-          type: 'youtube',
-          enablePreview: true,
+        // Wrap in a fixed-height box so the 16:9 thumbnail is not squashed.
+        return SizedBox(
+          height: 210,
+          child: VideoGridItem(
+            url: _featuredUrlController.text,
+            type: 'youtube',
+            enablePreview: true,
+          ),
         );
       case 'video':
-        // Use VideoGridItem for consistent Video preview
-        return VideoGridItem(
-          url: _featuredUrlController.text,
-          type: 'upload',
-          enablePreview: true,
+        // Use HtmlVideoPreview — much more reliable on Flutter Web than VideoPlayerController.
+        // The native browser <video> element handles CORS, range requests and codecs directly.
+        return SizedBox(
+          height: 300,
+          child: HtmlVideoPreview(
+            url: _featuredUrlController.text,
+            autoPlay: true,
+            loop: true,
+            muted: true,
+            controls: true,
+          ),
         );
       case 'pdf':
         return const Column(
@@ -994,22 +1479,112 @@ class _AppContentTabState extends State<AppContentTab> {
             fit: BoxFit.contain,
             width: double.infinity,
             errorBuilder: (context, error, stackTrace) => Container(
-               height: 150,
-               alignment: Alignment.center,
-               child: const Column(
-                 mainAxisAlignment: MainAxisAlignment.center,
-                 children: [
-                   Icon(Icons.broken_image, color: Colors.white54, size: 40),
-                   SizedBox(height: 8),
-                   Text("Image not found", style: TextStyle(color: Colors.white54, fontSize: 10)),
-                 ],
-               ),
+              height: 150,
+              alignment: Alignment.center,
+              child: const Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.broken_image, color: Colors.white54, size: 40),
+                  SizedBox(height: 8),
+                  Text("Image not found",
+                      style: TextStyle(color: Colors.white54, fontSize: 10)),
+                ],
+              ),
             ),
           ),
         );
       default:
         return const SizedBox();
     }
+  }
+
+  Widget _buildReelPreview() {
+    final enabledItems =
+        _reelItems.where((e) => e['enabled'] != false).toList();
+    if (enabledItems.isEmpty) {
+      return const Text(
+        'Carousel enabled but no active reels.',
+        style: TextStyle(color: Colors.white70),
+      );
+    }
+
+    final item = enabledItems.first;
+    final type = (item['type'] as String?) ?? 'video';
+    final url = (item['url'] as String?) ?? '';
+    final title = (item['title'] as String?) ?? 'Reel';
+    final caption = (item['caption'] as String?) ?? '';
+
+    Widget media;
+    if (type == 'youtube') {
+      media = SizedBox(
+        height: 340,
+        child: VideoGridItem(url: url, type: 'youtube', enablePreview: true),
+      );
+    } else if (type == 'video') {
+      media = SizedBox(
+        height: 340,
+        child: HtmlVideoPreview(
+          url: url,
+          autoPlay: true,
+          loop: true,
+          muted: true,
+          controls: false,
+          objectFit: 'cover',
+        ),
+      );
+    } else if (type == 'image') {
+      media = SizedBox(
+        height: 340,
+        child: Image.network(url, fit: BoxFit.cover),
+      );
+    } else {
+      media = SizedBox(
+        height: 120,
+        child: Center(
+          child: Text(
+            type == 'pdf' ? 'PDF Reel' : 'Link Reel',
+            style: const TextStyle(color: Colors.white70),
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.slideshow, color: Colors.amber, size: 16),
+            const SizedBox(width: 8),
+            Text(
+              'Reel Carousel (${enabledItems.length} active)',
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        media,
+        const SizedBox(height: 8),
+        Text(
+          title,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        if (caption.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              caption,
+              style: const TextStyle(color: Colors.white70),
+            ),
+          ),
+      ],
+    );
   }
 
   String? _getYoutubeId(String url) {
@@ -1038,6 +1613,45 @@ class _AppContentTabState extends State<AppContentTab> {
                   color: Colors.indigo)),
           const Divider(),
         ],
+      ),
+    );
+  }
+
+  /// Pop-out dialog showing the featured content at full usable size.
+  void _openFullSizePreview() {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.black,
+        insetPadding: const EdgeInsets.all(24),
+        child: Stack(
+          children: [
+            SizedBox(
+              width: double.infinity,
+              height: double.infinity,
+              child: _featuredType == 'video'
+                  ? HtmlVideoPreview(
+                      url: _featuredUrlController.text,
+                      autoPlay: true,
+                      loop: false,
+                      muted: false,
+                      controls: true,
+                    )
+                  : _buildFeaturedPreview(),
+            ),
+            Positioned(
+              top: 12,
+              right: 12,
+              child: CircleAvatar(
+                backgroundColor: Colors.black54,
+                child: IconButton(
+                  icon: const Icon(Icons.close, color: Colors.white),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

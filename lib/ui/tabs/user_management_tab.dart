@@ -1027,6 +1027,11 @@ class _UserDetailPanelState extends State<_UserDetailPanel> with SingleTickerPro
   void _showEditSubscriptionDialog(BuildContext context) {
     String selectedStatus = widget.user.status;
     String selectedPlan = widget.user.subscriptionPlan;
+    String selectedVipQuota =
+      (widget.user.vipQuotaTier == 'starter_access' ||
+        widget.user.vipQuotaTier == 'unlimited_access')
+      ? widget.user.vipQuotaTier!
+      : '__auto__';
     final renewalController = TextEditingController(text: widget.user.renewalDate ?? '');
 
     showDialog(
@@ -1061,6 +1066,29 @@ class _UserDetailPanelState extends State<_UserDetailPanel> with SingleTickerPro
                   onChanged: (val) => setState(() => selectedPlan = val!),
                 ),
                 const SizedBox(height: 16),
+                DropdownButtonFormField<String>(
+                  initialValue: selectedVipQuota,
+                  decoration: const InputDecoration(
+                    labelText: 'VIP Daily Quota',
+                    helperText: 'Only applies when user has VIP access.',
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: '__auto__',
+                      child: Text('Automatic (no VIP override)'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'starter_access',
+                      child: Text('Starter (10/day)'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'unlimited_access',
+                      child: Text('Harmony 100 (100/day)'),
+                    ),
+                  ],
+                  onChanged: (val) => setState(() => selectedVipQuota = val!),
+                ),
+                const SizedBox(height: 16),
                 TextField(
                   controller: renewalController,
                   decoration: const InputDecoration(
@@ -1084,6 +1112,7 @@ class _UserDetailPanelState extends State<_UserDetailPanel> with SingleTickerPro
                         .update({
                       'status': selectedStatus,
                       'subscriptionPlan': selectedPlan,
+                      'vipQuotaTier': selectedVipQuota == '__auto__' ? null : selectedVipQuota,
                       'renewalDate': renewalController.text.isEmpty ? null : renewalController.text,
                     });
                     
@@ -1540,6 +1569,8 @@ class _BillingTab extends StatelessWidget {
           _InfoRow(label: 'Plan', value: user.subscriptionPlan),
           _InfoRow(label: 'Status', value: user.status),
           if (user.renewalDate != null) _InfoRow(label: 'Renewal Date', value: user.renewalDate!),
+          if (user.vipQuotaTier != null && user.vipQuotaTier!.isNotEmpty)
+            _InfoRow(label: 'VIP Quota Tier', value: user.vipQuotaTier!),
           
           // Auto-Renew Status
           Padding(

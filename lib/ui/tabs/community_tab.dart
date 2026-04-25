@@ -105,6 +105,27 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
     }
   }
 
+  Future<void> _saveFeedScrollSettings({
+    required bool enabled,
+    required double speed,
+  }) async {
+    try {
+      await FirebaseFirestore.instance
+          .collection('app_config')
+          .doc('community_settings')
+          .set({
+        'auto_scroll_enabled': enabled,
+        'auto_scroll_speed': speed,
+      }, SetOptions(merge: true));
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error saving feed scroll settings: $e')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -423,6 +444,81 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                     ],
                   );
                 }
+              ),
+              const SizedBox(height: 12),
+              StreamBuilder<DocumentSnapshot>(
+                stream: FirebaseFirestore.instance
+                    .collection('app_config')
+                    .doc('community_settings')
+                    .snapshots(),
+                builder: (context, snapshot) {
+                  final data =
+                      snapshot.data?.data() as Map<String, dynamic>? ?? {};
+                  final autoScrollEnabled =
+                      (data['auto_scroll_enabled'] as bool?) ?? false;
+                    final autoScrollSpeed =
+                      ((data['auto_scroll_speed'] as num?)?.toDouble() ?? 28)
+                        .clamp(8, 120)
+                        .toDouble();
+
+                  return Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.grey.shade300),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.swap_vert, size: 18, color: Colors.indigo),
+                            const SizedBox(width: 8),
+                            const Expanded(
+                              child: Text(
+                                'Live Feed Auto-Scroll (User App)',
+                                style: TextStyle(fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                            Switch(
+                              value: autoScrollEnabled,
+                              onChanged: (val) => _saveFeedScrollSettings(
+                                enabled: val,
+                                speed: autoScrollSpeed,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Speed: ${autoScrollSpeed.toStringAsFixed(0)} px/s',
+                          style: TextStyle(color: Colors.grey.shade700),
+                        ),
+                        Slider(
+                          value: autoScrollSpeed,
+                          min: 8,
+                          max: 120,
+                          divisions: 28,
+                          label: autoScrollSpeed.toStringAsFixed(0),
+                          onChanged: autoScrollEnabled
+                              ? (val) => _saveFeedScrollSettings(
+                                  enabled: autoScrollEnabled,
+                                  speed: val,
+                                )
+                              : null,
+                        ),
+                        Text(
+                          'Configure here in System > Community > Live Feed; users see it live.',
+                          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                        ),
+                      ],
+                    ),
+                  );
+                },
               ),
             ],
           ),

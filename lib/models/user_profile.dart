@@ -15,6 +15,7 @@ class UserProfile {
   final DateTime? suspensionExpiry;
   final String? lastAdminAction;
   final bool willRenew; // From RevenueCat
+  final String? vipQuotaTier; // Optional VIP override: starter_access/unlimited_access
 
   UserProfile({
     required this.id,
@@ -30,6 +31,7 @@ class UserProfile {
     this.suspensionExpiry,
     this.lastAdminAction,
     this.willRenew = false,
+    this.vipQuotaTier,
   });
 
   factory UserProfile.fromFirestore(String id, Map<String, dynamic> data) {
@@ -69,6 +71,7 @@ class UserProfile {
       suspensionExpiry: (data['suspensionExpiry'] as Timestamp?)?.toDate(),
       lastAdminAction: data['lastAdminAction'] as String?,
       willRenew: data['willRenew'] as bool? ?? false,
+      vipQuotaTier: data['vipQuotaTier'] as String?,
     );
   }
 
@@ -87,6 +90,7 @@ class UserProfile {
       'suspensionExpiry': suspensionExpiry,
       'lastAdminAction': lastAdminAction,
       'willRenew': willRenew,
+      'vipQuotaTier': vipQuotaTier,
     };
   }
 
@@ -103,6 +107,7 @@ class UserProfile {
     DateTime? suspensionExpiry,
     String? lastAdminAction,
     bool? willRenew,
+    String? vipQuotaTier,
   }) {
     return UserProfile(
       id: id,
@@ -118,6 +123,7 @@ class UserProfile {
       suspensionExpiry: suspensionExpiry ?? this.suspensionExpiry,
       lastAdminAction: lastAdminAction ?? this.lastAdminAction,
       willRenew: willRenew ?? this.willRenew,
+      vipQuotaTier: vipQuotaTier ?? this.vipQuotaTier,
     );
   }
 }

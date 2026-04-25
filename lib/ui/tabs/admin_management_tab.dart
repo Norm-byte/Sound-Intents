@@ -9,7 +9,6 @@ import '../../services/auth_service.dart';
 import '../../services/admin_user_service.dart';
 import '../../services/media_library_service.dart';
 import '../../models/media_item.dart';
-import 'app_content_tab.dart';
 
 class AdminManagementTab extends StatefulWidget {
   const AdminManagementTab({super.key});
@@ -71,7 +70,7 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this); // Reduced to 4
+    _tabController = TabController(length: 3, vsync: this);
     _newAdminPermissions = Map.from(_defaultAdminPermissions);
     _showAddForm = true; // Always show the form by default
     _loadLockState();
@@ -188,6 +187,7 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
         'assignee': _nameController.text.trim(),
         'contactInfo': _emailController.text.trim(),
         'status': 'active',
+        'vipQuotaTier': 'tier_beta',
         'createdAt': FieldValue.serverTimestamp(),
         'redeemedBy': null,
         'redeemedAt': null,
@@ -384,6 +384,7 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
         'assignee': assignee,
         'contactInfo': contact,
         'status': 'active', // active, redeemed, revoked
+        'vipQuotaTier': 'tier_beta',
         'createdAt': FieldValue.serverTimestamp(),
         'redeemedBy': null,
         'redeemedAt': null,
@@ -654,7 +655,6 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
                   // Tab(icon: Icon(Icons.pending_actions), text: 'Access Requests'), // Removed
                   Tab(icon: Icon(Icons.admin_panel_settings), text: 'Super Admin'),
                   Tab(icon: Icon(Icons.build), text: 'Maintenance'),
-                  Tab(icon: Icon(Icons.mobile_screen_share), text: 'App Content'),
                 ],
               ),
             ],
@@ -677,9 +677,6 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
 
               // Tab 4: Maintenance
               const _MaintenanceTab(),
-
-              // Tab 5: App Content
-              const AppContentTab(),
             ],
           ),
         ),

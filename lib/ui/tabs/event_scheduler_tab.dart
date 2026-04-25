@@ -762,9 +762,6 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
     try {
       // Convert map to List<Event>
       List<Event> eventsToSave = [];
-      // Slots with no meaningful content (blank title + no media) are treated as
-      // implicit deletes — remove any live published doc so the noticeboard clears.
-      List<String> idsToDelete = [];
 
       _scheduledEventsData.forEach((slotId, data) {
         // slotId is "HH:mm"
@@ -788,8 +785,6 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
         // This ensures if we re-save the same slot for the same day, it overwrites the existing event instead of creating a new one.
         final dateSuffix =
             "${targetDate.year}${targetDate.month.toString().padLeft(2, '0')}${targetDate.day.toString().padLeft(2, '0')}";
-        final deterministicId =
-          'slot_${slotId.replaceAll(':', '')}_$dateSuffix';
         final draftId =
           'draft_slot_${slotId.replaceAll(':', '')}_$dateSuffix';
 
@@ -802,13 +797,6 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
         final title = (data['title'] as String? ?? '').trim();
         final visualUrl = (data['visualUrl'] as String? ?? '').trim();
         final soundUrl = (data['soundUrl'] as String? ?? '').trim();
-
-        // If no title AND no media, treat as blank/deleted — clear the live doc
-        // so the noticeboard reflects the empty state immediately.
-        if (title.isEmpty && visualUrl.isEmpty && soundUrl.isEmpty) {
-          idsToDelete.addAll([deterministicId, draftId]);
-          return; // skip adding to eventsToSave
-        }
 
         final event = Event(
           id: draftId,
@@ -845,22 +833,14 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
         eventsToSave.add(event);
       });
 
-      // Delete blank slots from Firestore so notieboard clears immediately
-      if (idsToDelete.isNotEmpty) {
-        await Future.wait(
-          idsToDelete.map((id) => _eventRepository.deleteEvent(id).catchError((_) {})),
-        );
-      }
-
       if (eventsToSave.isNotEmpty) {
         await _eventRepository.saveEvents(eventsToSave);
       }
 
-      final deleted = idsToDelete.isNotEmpty ? ' (${(idsToDelete.length ~/ 2)} blank slot(s) cleared)' : '';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Schedule saved as Draft (${eventsToSave.length} slot(s))$deleted. Go to Dashboard to Publish.',
+            'Schedule saved as Draft (${eventsToSave.length} slot(s)). Go to Dashboard to Publish.',
           ),
         ),
       );

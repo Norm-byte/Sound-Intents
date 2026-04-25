@@ -550,6 +550,23 @@ class _MediaLibraryTabState extends State<MediaLibraryTab> {
 
                     const SizedBox(width: 8),
 
+                    IconButton(
+                      tooltip: 'Open YouTube',
+                      icon: const Icon(Icons.open_in_new, color: Colors.red),
+                      onPressed: () async {
+                        final youtubeUri = Uri.parse('https://www.youtube.com');
+                        final didLaunch = await launchUrl(
+                          youtubeUri,
+                          mode: LaunchMode.externalApplication,
+                        );
+                        if (!didLaunch && mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Could not open YouTube.')),
+                          );
+                        }
+                      },
+                    ),
+
                   ],
                 ),
                 const SizedBox(height: 16),

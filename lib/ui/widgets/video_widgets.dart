@@ -292,3 +292,52 @@ class _FullVideoPlayerState extends State<FullVideoPlayer> {
     );
   }
 }
+
+/// Renders an MP4/video URL using a native browser <video> element via
+/// HtmlElementView. This is more reliable on Flutter Web than VideoPlayerController
+/// because the browser handles CORS, range requests, and codec support natively.
+class HtmlVideoPreview extends StatelessWidget {
+  final String url;
+  final bool autoPlay;
+  final bool loop;
+  final bool muted;
+  final bool controls;
+  final String objectFit;
+
+  const HtmlVideoPreview({
+    super.key,
+    required this.url,
+    this.autoPlay = true,
+    this.loop = true,
+    this.muted = true,
+    this.controls = true,
+    this.objectFit = 'contain',
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (url.isEmpty) {
+      return const Center(child: Icon(Icons.videocam, color: Colors.white54, size: 48));
+    }
+
+    // Unique view ID so each widget instance gets its own element.
+    final viewId = 'html-video-${url.hashCode}';
+
+    // ignore: undefined_prefixed_name
+    ui_web.platformViewRegistry.registerViewFactory(viewId, (int id) {
+      final video = html.VideoElement()
+        ..src = url
+        ..style.width = '100%'
+        ..style.height = '100%'
+        ..style.objectFit = objectFit
+        ..style.background = '#000';
+      if (controls) video.controls = true;
+      if (autoPlay) video.autoplay = true;
+      if (loop) video.loop = true;
+      if (muted) video.muted = true;
+      return video;
+    });
+
+    return HtmlElementView(viewType: viewId);
+  }
+}

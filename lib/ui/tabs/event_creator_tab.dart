@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import '../../models/media_item.dart';
 import 'dart:typed_data';
 import 'dart:async';
@@ -178,17 +179,12 @@ class _EventCreatorTabState extends State<EventCreatorTab>
 
   final List<Map<String, dynamic>> _timeZones = [
     {'label': 'UTC', 'offset': 0},
-    {'label': 'London (GMT)', 'offset': 0},
-    {'label': 'London (BST)', 'offset': 1},
-    {'label': 'Paris (CET)', 'offset': 1},
-    {'label': 'Paris (CEST)', 'offset': 2},
-    {'label': 'New York (EST)', 'offset': -5},
-    {'label': 'New York (EDT)', 'offset': -4},
-    {'label': 'Los Angeles (PST)', 'offset': -8},
-    {'label': 'Los Angeles (PDT)', 'offset': -7},
+    {'label': 'London (Auto DST)', 'offset': 0},
+    {'label': 'Paris (Auto DST)', 'offset': 1},
+    {'label': 'New York (Auto DST)', 'offset': -5},
+    {'label': 'Los Angeles (Auto DST)', 'offset': -8},
     {'label': 'Tokyo (JST)', 'offset': 9},
-    {'label': 'Sydney (AEST)', 'offset': 10},
-    {'label': 'Sydney (AEDT)', 'offset': 11},
+    {'label': 'Sydney (Auto DST)', 'offset': 10},
   ];
 
   @override
@@ -218,11 +214,98 @@ class _EventCreatorTabState extends State<EventCreatorTab>
       
       setState(() {
         _selectedTimeZoneLabel = match['label'];
-        _selectedTimeZoneOffset = match['offset'];
+        _selectedTimeZoneOffset = _offsetForZone(_selectedTimeZoneLabel, now);
       });
     } catch (e) {
       debugPrint('Error detecting timezone: $e');
     }
+  }
+
+  String _normalizeTimeZoneLabel(String? rawLabel) {
+    final label = (rawLabel ?? 'UTC').trim();
+    switch (label) {
+      case 'London (GMT)':
+      case 'London (BST)':
+      case 'London (Auto DST)':
+        return 'London (Auto DST)';
+      case 'Paris (CET)':
+      case 'Paris (CEST)':
+      case 'Paris (Auto DST)':
+        return 'Paris (Auto DST)';
+      case 'New York (EST)':
+      case 'New York (EDT)':
+      case 'New York (Auto DST)':
+        return 'New York (Auto DST)';
+      case 'Los Angeles (PST)':
+      case 'Los Angeles (PDT)':
+      case 'Los Angeles (Auto DST)':
+        return 'Los Angeles (Auto DST)';
+      case 'Sydney (AEST)':
+      case 'Sydney (AEDT)':
+      case 'Sydney (Auto DST)':
+        return 'Sydney (Auto DST)';
+      default:
+        return label;
+    }
+  }
+
+  DateTime _lastSundayOfMonth(int year, int month) {
+    final firstOfNextMonth =
+        month == 12 ? DateTime(year + 1, 1, 1) : DateTime(year, month + 1, 1);
+    final lastOfMonth = firstOfNextMonth.subtract(const Duration(days: 1));
+    return lastOfMonth.subtract(Duration(days: lastOfMonth.weekday % 7));
+  }
+
+  DateTime _nthSundayOfMonth(int year, int month, int n) {
+    final firstDay = DateTime(year, month, 1);
+    final daysUntilSunday = (DateTime.sunday - firstDay.weekday + 7) % 7;
+    return firstDay.add(Duration(days: daysUntilSunday + ((n - 1) * 7)));
+  }
+
+  bool _isEuropeDst(DateTime date) {
+    final start = _lastSundayOfMonth(date.year, 3);
+    final end = _lastSundayOfMonth(date.year, 10);
+    final d = DateTime(date.year, date.month, date.day);
+    return !d.isBefore(start) && d.isBefore(end);
+  }
+
+  bool _isUsDst(DateTime date) {
+    final start = _nthSundayOfMonth(date.year, 3, 2);
+    final end = _nthSundayOfMonth(date.year, 11, 1);
+    final d = DateTime(date.year, date.month, date.day);
+    return !d.isBefore(start) && d.isBefore(end);
+  }
+
+  bool _isSydneyDst(DateTime date) {
+    final start = _nthSundayOfMonth(date.year, 10, 1);
+    final end = _nthSundayOfMonth(date.year, 4, 1);
+    final d = DateTime(date.year, date.month, date.day);
+
+    if (d.month >= 10) {
+      return !d.isBefore(start);
+    }
+    if (d.month <= 4) {
+      return d.isBefore(end);
+    }
+    return false;
+  }
+
+  int _offsetForZone(String label, DateTime date) {
+    final normalized = _normalizeTimeZoneLabel(label).toLowerCase();
+
+    if (normalized == 'utc') return 0;
+    if (normalized.contains('tokyo')) return 9;
+    if (normalized.contains('london')) return _isEuropeDst(date) ? 1 : 0;
+    if (normalized.contains('paris')) return _isEuropeDst(date) ? 2 : 1;
+    if (normalized.contains('new york')) return _isUsDst(date) ? -4 : -5;
+    if (normalized.contains('los angeles')) return _isUsDst(date) ? -7 : -8;
+    if (normalized.contains('sydney')) return _isSydneyDst(date) ? 11 : 10;
+
+    return 0;
+  }
+
+  String _formatDateTime(DateTime dt) {
+    return DateFormat('yyyy-MM-dd HH:mm').format(dt);
   }
 
   void _onFocusChange() {
@@ -349,13 +432,7 @@ class _EventCreatorTabState extends State<EventCreatorTab>
       _useTrendingIntent = event.useTrendingIntent ?? false;
 
       // Parse Time & Zone
-      _selectedTimeZoneLabel = event.originTimeZone ?? 'UTC';
-      // Find offset
-      final zone = _timeZones.firstWhere(
-        (z) => z['label'] == _selectedTimeZoneLabel,
-        orElse: () => {'offset': 0},
-      );
-      _selectedTimeZoneOffset = zone['offset'];
+      _selectedTimeZoneLabel = _normalizeTimeZoneLabel(event.originTimeZone);
 
       if (event.originTime != null) {
         final parts = event.originTime!.split(':');
@@ -368,7 +445,8 @@ class _EventCreatorTabState extends State<EventCreatorTab>
         // (Since we store wall clock time in UTC slots for global events)
         // BUT we need to convert it back to "Origin Time" by adding the offset
         final dt = DateTime.parse(event.startTimeUTC!);
-        final originDt = dt.add(Duration(hours: _selectedTimeZoneOffset));
+        final originOffset = _offsetForZone(_selectedTimeZoneLabel, dt);
+        final originDt = dt.add(Duration(hours: originOffset));
         _selectedTime = TimeOfDay(hour: originDt.hour, minute: originDt.minute);
       } else {
         _selectedTime = const TimeOfDay(hour: 12, minute: 0);
@@ -383,6 +461,9 @@ class _EventCreatorTabState extends State<EventCreatorTab>
       } else {
         _selectedDate = DateTime.now();
       }
+
+      _selectedTimeZoneOffset =
+          _offsetForZone(_selectedTimeZoneLabel, _selectedDate);
       
       // Ensure we are using the correct date for the calendar sidebar too
       _sidebarSelectedDate = _selectedDate;
@@ -410,10 +491,16 @@ class _EventCreatorTabState extends State<EventCreatorTab>
     // STRICT RULE: All events start at 00 seconds.
     // User requested to remove the "Current Seconds" logic and enforce standard scheduling.
     
-    final localDateTime = DateTime.utc(date.year, date.month, date.day,
-        _selectedTime.hour, _selectedTime.minute);
+    final effectiveOffset = _offsetForZone(_selectedTimeZoneLabel, date);
+    final localDateTime = DateTime.utc(
+      date.year,
+      date.month,
+      date.day,
+      _selectedTime.hour,
+      _selectedTime.minute,
+    );
     final utcDateTime =
-        localDateTime.subtract(Duration(hours: _selectedTimeZoneOffset));
+      localDateTime.subtract(Duration(hours: effectiveOffset));
 
     final updated = current.copyWith(
       title: _titleController.text,
@@ -2357,58 +2444,7 @@ class _EventCreatorTabState extends State<EventCreatorTab>
           ),
         ),
 
-        // Content (Bottom)
-        Positioned(
-          bottom: 40,
-          left: 20,
-          right: 20,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                _titleController.text.isEmpty
-                    ? 'Event Title'
-                    : _titleController.text,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                  shadows: [Shadow(blurRadius: 4, color: Colors.black)],
-                ),
-              ),
-              if (_intentController.text.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Text(
-                  _intentController.text,
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 16,
-                    shadows: [Shadow(blurRadius: 4, color: Colors.black)],
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-              if (_soundUrlController.text.isNotEmpty) ...[
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    const Icon(Icons.music_note,
-                        color: Colors.white70, size: 16),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Audio attached',
-                        style: TextStyle(
-                            color: Colors.white.withOpacity(0.7), fontSize: 12),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ],
-          ),
-        ),
+
       ],
     );
   }
@@ -2422,11 +2458,45 @@ class _EventCreatorTabState extends State<EventCreatorTab>
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'Editing: ${_events[_selectedSlotIndex!].title}',
-                style: Theme.of(context).textTheme.headlineSmall,
-                overflow: TextOverflow.ellipsis,
-                maxLines: 1,
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Editing: ${_events[_selectedSlotIndex!].title}',
+                      style: Theme.of(context).textTheme.headlineSmall,
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: _events[_selectedSlotIndex!].isPublished
+                          ? Colors.green.shade100
+                          : Colors.amber.shade100,
+                      border: Border.all(
+                        color: _events[_selectedSlotIndex!].isPublished
+                            ? Colors.green
+                            : Colors.amber,
+                      ),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      _events[_selectedSlotIndex!].isPublished
+                          ? 'PUBLISHED'
+                          : 'DRAFT',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: _events[_selectedSlotIndex!].isPublished
+                            ? Colors.green.shade900
+                            : Colors.amber.shade900,
+                      ),
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 16),
               Wrap(
@@ -2470,6 +2540,37 @@ class _EventCreatorTabState extends State<EventCreatorTab>
                     label: const Text('Save to Dashboard'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.amber.shade800,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                  ElevatedButton.icon(
+                    onPressed: _isLoading
+                        ? null
+                        : () async {
+                            // Publish event (make it visible to users)
+                            setState(() {
+                              _saveCurrentSlotInMemory();
+                              if (_selectedSlotIndex != null) {
+                                _events[_selectedSlotIndex!] =
+                                    _events[_selectedSlotIndex!].copyWith(
+                                  isPublished: true, // PUBLISH
+                                  isDraft: false,
+                                );
+                              }
+                            });
+                            await _saveCurrentEvent();
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                    content: Text('Event Published! Now visible to users'),
+                                    backgroundColor: Colors.green),
+                              );
+                            }
+                          },
+                    icon: const Icon(Icons.publish),
+                    label: const Text('Publish Event'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green.shade700,
                       foregroundColor: Colors.white,
                     ),
                   ),
@@ -2566,10 +2667,12 @@ class _EventCreatorTabState extends State<EventCreatorTab>
                             onChanged: (val) {
                               if (val != null) {
                                 setState(() {
-                                  _selectedTimeZoneLabel = val;
-                                  _selectedTimeZoneOffset =
-                                      _timeZones.firstWhere(
-                                          (z) => z['label'] == val)['offset'];
+                                  _selectedTimeZoneLabel =
+                                      _normalizeTimeZoneLabel(val);
+                                  _selectedTimeZoneOffset = _offsetForZone(
+                                    _selectedTimeZoneLabel,
+                                    _selectedDate,
+                                  );
                                 });
                               }
                             },
@@ -2586,7 +2689,15 @@ class _EventCreatorTabState extends State<EventCreatorTab>
                                 firstDate: DateTime(2024),
                                 lastDate: DateTime(2030),
                               );
-                              if (d != null) setState(() => _selectedDate = d);
+                              if (d != null) {
+                                setState(() {
+                                  _selectedDate = d;
+                                  _selectedTimeZoneOffset = _offsetForZone(
+                                    _selectedTimeZoneLabel,
+                                    _selectedDate,
+                                  );
+                                });
+                              }
                             },
                             child: InputDecorator(
                               decoration: const InputDecoration(
@@ -2600,6 +2711,53 @@ class _EventCreatorTabState extends State<EventCreatorTab>
                         ),
                       ],
                     ),
+                    if (_selectedEventType == 'global') ...[
+                      const SizedBox(height: 8),
+                      Builder(
+                        builder: (context) {
+                          final originDateTime = DateTime.utc(
+                            _selectedDate.year,
+                            _selectedDate.month,
+                            _selectedDate.day,
+                            _selectedTime.hour,
+                            _selectedTime.minute,
+                          );
+                          final utcDateTime = originDateTime.subtract(
+                            Duration(hours: _selectedTimeZoneOffset),
+                          );
+                          final londonLocal = utcDateTime.add(
+                            Duration(
+                              hours: _offsetForZone(
+                                'London (Auto DST)',
+                                _selectedDate,
+                              ),
+                            ),
+                          );
+                          final parisLocal = utcDateTime.add(
+                            Duration(
+                              hours: _offsetForZone(
+                                'Paris (Auto DST)',
+                                _selectedDate,
+                              ),
+                            ),
+                          );
+
+                          return Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: Colors.blue.withOpacity(0.08),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.blue.shade100),
+                            ),
+                            child: Text(
+                              'UTC stored: ${_formatDateTime(utcDateTime)}  |  UK view: ${_formatDateTime(londonLocal)}  |  Paris view: ${_formatDateTime(parisLocal)}',
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
                     const SizedBox(height: 16),
                     Row(
                       children: [
