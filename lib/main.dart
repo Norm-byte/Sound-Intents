@@ -404,11 +404,14 @@ class _AdminHomePageState extends State<AdminHomePage>
     final weekStart = thisWeekMonday.add(Duration(days: 7 * weekOffset));
     final weekEnd = weekStart.add(const Duration(days: 7));
 
-    // Filter events to publish
-    // Removed the 'if (e.isPublished) return false' check to ensure SYNC updates existing events
+    // Publish only scheduler slot docs for this week/lane.
+    // Legacy non-slot docs can carry stale metadata and must never be auto-promoted.
     final eventsToPublish = _scheduledEvents.where((e) {
       if (e.type == 'global') return false;
       if (e.startTimeUTC == null) return false;
+      final isSlotDoc =
+          e.id.startsWith('slot_') || e.id.startsWith('draft_slot_');
+      if (!isSlotDoc) return false;
 
       final start = DateTime.parse(e.startTimeUTC!);
       if (minuteFilter != null && start.minute != minuteFilter) return false;
@@ -512,13 +515,11 @@ class _AdminHomePageState extends State<AdminHomePage>
     final weekStart = thisWeekMonday.add(Duration(days: 7 * weekOffset));
     final weekEnd = weekStart.add(const Duration(days: 7));
 
-    // Strict clear: remove both published events and matching draft slot docs
-    // so old metadata cannot be republished into the same slot later.
+    // Strict clear: remove all national events in this week/lane, including
+    // legacy non-slot docs, so stale metadata cannot survive hidden.
     final eventsToDelete = _scheduledEvents.where((e) {
       if (e.type == 'global') return false;
       if (e.startTimeUTC == null) return false;
-      final isSlotDoc = e.id.startsWith('slot_') || e.id.startsWith('draft_slot_');
-      if (!isSlotDoc) return false;
       final start = DateTime.parse(e.startTimeUTC!);
       bool matchesWeek =
           start.isAfter(weekStart.subtract(const Duration(seconds: 1))) &&
