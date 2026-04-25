@@ -129,6 +129,16 @@ class _DashboardTabState extends State<DashboardTab> {
     final nextWeekStart = thisWeekStart.add(const Duration(days: 7));
     final nextNextWeekStart = nextWeekStart.add(const Duration(days: 7));
 
+    // Events whose startTimeUTC falls in this week's range
+    final thisWeekEvents = widget.events.where((e) {
+      if (e.startTimeUTC == null) return false;
+      final start = DateTime.parse(e.startTimeUTC!);
+      return !start.isBefore(thisWeekStart) && start.isBefore(nextWeekStart);
+    }).toList();
+
+    final thisWeekDrafts = thisWeekEvents.where((e) => e.isDraft == true).toList();
+    final thisWeekPublished = thisWeekEvents.where((e) => e.isPublished == true).toList();
+
     // Events whose startTimeUTC falls in next week's range
     final nextWeekEvents = widget.events.where((e) {
       if (e.startTimeUTC == null) return false;
@@ -139,11 +149,12 @@ class _DashboardTabState extends State<DashboardTab> {
     final nextWeekDrafts = nextWeekEvents.where((e) => e.isDraft == true).toList();
     final nextWeekPublished = nextWeekEvents.where((e) => e.isPublished == true).toList();
 
-    // STEP 1: We have crossed into what was "next week" — publish those drafts now.
-    if (!todayUtc.isBefore(nextWeekStart) && nextWeekDrafts.isNotEmpty) {
-      widget.onPublishWeek?.call(0); // offset 0 = current week (formerly next week)
+    // STEP 1: If current week has drafts and no published events, publish it now.
+    // This covers Monday rollover and recovery if the dashboard was closed at boundary time.
+    if (thisWeekDrafts.isNotEmpty && thisWeekPublished.isEmpty) {
+      widget.onPublishWeek?.call(0); // offset 0 = current week
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Auto-System: Published ${nextWeekDrafts.length} events for the new week.'),
+        content: Text('Auto-System: Published ${thisWeekDrafts.length} events for the current week.'),
         backgroundColor: Colors.green,
         duration: const Duration(seconds: 4),
       ));

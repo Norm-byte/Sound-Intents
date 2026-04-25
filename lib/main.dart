@@ -25,6 +25,7 @@ import 'ui/tabs/legal_tab.dart';
 import 'ui/tabs/documentation_tab.dart'; // Added for Operators Manual
 import 'ui/tabs/chat_management_tab.dart';
 import 'ui/tabs/monetization_tab.dart';
+import 'ui/tabs/app_content_tab.dart';
 import 'ui/notifications_screen.dart';
 import 'ui/widgets/locked_tab_wrapper.dart';
 import 'widgets/app_footer.dart';
@@ -239,6 +240,7 @@ class _AdminHomePageState extends State<AdminHomePage>
       Tab(icon: Icon(Icons.public), text: 'Worldwide Events'), // Renamed
       Tab(icon: Icon(Icons.schedule), text: 'National Events'), // Renamed
       Tab(icon: Icon(Icons.perm_media), text: 'Media Library'),
+      Tab(icon: Icon(Icons.mobile_screen_share), text: 'App Content'),
       Tab(icon: Icon(Icons.chat), text: 'Chat Rooms'),
       Tab(icon: Icon(Icons.monetization_on), text: 'Deals/Offers'),
       Tab(icon: Icon(Icons.lightbulb), text: 'Topics'),
@@ -307,6 +309,9 @@ class _AdminHomePageState extends State<AdminHomePage>
           onPublishWeek: _handlePublishWeek,
           onClearWeek: (offset, minute) => _handleClearWeek(offset,
               minuteFilter: minute), // Updated Clear Callback
+          onClearTimeSlots: (offset, minute) => _handleClearWeekDraftSlots(
+              offset,
+              minuteFilter: minute),
           onPublishEvent: _handlePublishEvent,
         ),
       ),
@@ -327,32 +332,37 @@ class _AdminHomePageState extends State<AdminHomePage>
         'National Events',
         EventSchedulerTab(
           selectionNotifier: _schedulerSelectionNotifier,
-          liveEvents: events,
+          liveEvents: _scheduledEvents
+              .where((event) => event.type != 'global' && event.isPublished)
+              .toList(),
         ),
       ),
 
       // 4. Media Library
       buildTab('media_library', 'Media Library', const MediaLibraryTab()),
 
-      // 5. Chat Rooms
+      // 5. App Content (promoted to top-level for full-screen workflow)
+      buildTab('system', 'App Content', const AppContentTab()),
+
+      // 6. Chat Rooms
       buildTab('chat_management', 'Chat Rooms', const ChatManagementTab()),
 
       // Monetization / Deals
       buildTab('monetization', 'Deals', const MonetizationTab()),
 
-      // 6. Topics
+      // 7. Topics
       buildTab('topics', 'Topics', const YoutubeLibraryTab()),
 
-      // 7. System
+      // 8. System
       buildTab('system', 'System', const SystemTab()),
 
-      // 8. Notifications
+      // 9. Notifications
       buildTab('notifications', 'Notifications', const NotificationsScreen()),
 
-      // 9. Legal (Locked)
+      // 10. Legal (Locked)
       buildTab('legal', 'Legal', const LegalTab()),
 
-      // 10. Operators Manual (Accessible to All - DocumentationTab under the hood)
+      // 11. Operators Manual (Accessible to All - DocumentationTab under the hood)
       buildTab('documentation', 'Operators Manual', const DocumentationTab()),
     ];
   }
@@ -386,7 +396,7 @@ class _AdminHomePageState extends State<AdminHomePage>
     }
   }
 
-  Future<void> _handlePublishWeek(int weekOffset) async {
+  Future<void> _handlePublishWeek(int weekOffset, int? minuteFilter) async {
     final now = DateTime.now().toUtc();
     final today = DateTime.utc(now.year, now.month, now.day);
     final daysSinceMonday = today.weekday - 1;
@@ -401,6 +411,7 @@ class _AdminHomePageState extends State<AdminHomePage>
       if (e.startTimeUTC == null) return false;
 
       final start = DateTime.parse(e.startTimeUTC!);
+      if (minuteFilter != null && start.minute != minuteFilter) return false;
       final inRange =
           start.isAfter(weekStart.subtract(const Duration(seconds: 1))) &&
               start.isBefore(weekEnd);
@@ -409,19 +420,38 @@ class _AdminHomePageState extends State<AdminHomePage>
 
     if (eventsToPublish.isEmpty) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('No events found in this week to sync.')));
+        final suffix = minuteFilter == null
+            ? ''
+            : ' for :${minuteFilter.toString().padLeft(2, '0')} lane';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('No events found in this week$suffix to sync.')));
       }
       return;
     }
+
+    final upcomingCount = eventsToPublish.where((e) {
+      if (e.startTimeUTC == null) return false;
+      final start = DateTime.parse(e.startTimeUTC!);
+      return !start.isBefore(now);
+    }).length;
 
     int count = 0;
     for (var e in eventsToPublish) {
       try {
         // Always set published=true, regardless of previous state
         // This forces an update to Firestore which the User App will see
-        final updated = e.copyWith(isPublished: true, isDraft: false);
+        final publishedId = e.id.startsWith('draft_slot_')
+            ? e.id.replaceFirst('draft_slot_', 'slot_')
+            : e.id;
+        final updated = e.copyWith(
+          id: publishedId,
+          isPublished: true,
+          isDraft: false,
+        );
         await _repository.saveEvent(updated);
+        if (e.id.startsWith('draft_slot_') && e.id != publishedId) {
+          await _repository.deleteEvent(e.id);
+        }
         count++;
       } catch (e) {
         debugPrint('Error publishing event: $e');
@@ -429,19 +459,29 @@ class _AdminHomePageState extends State<AdminHomePage>
     }
 
     if (mounted) {
+      final weekLabel =
+          '${weekStart.year}-${weekStart.month.toString().padLeft(2, '0')}-${weekStart.day.toString().padLeft(2, '0')}';
+      final weekEndLabel =
+          '${weekEnd.year}-${weekEnd.month.toString().padLeft(2, '0')}-${weekEnd.day.toString().padLeft(2, '0')}';
+      final laneLabel = minuteFilter == null
+          ? 'all lanes'
+          : ':${minuteFilter.toString().padLeft(2, '0')} lane';
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Published $count events!'),
+          content: Text(
+            'Synced $count events for week $weekLabel to $weekEndLabel ($laneLabel, upcoming now: $upcomingCount).',
+          ),
           backgroundColor: Colors.green));
     }
   }
 
   Future<void> _handleClearWeek(int weekOffset, {int? minuteFilter}) async {
     String msg =
-        'Are you sure you want to delete ALL events in Week ${weekOffset + 1}';
+      'Are you sure you want to delete events in Week ${weekOffset + 1}';
     if (minuteFilter != null) {
       msg += ' for the :${minuteFilter.toString().padLeft(2, '0')} minute slot';
     }
-    msg += '? This cannot be undone.';
+    msg +=
+      '? Matching draft slot data will also be cleared to prevent stale noticeboard content from republishing.';
 
     final confirm = await showDialog<bool>(
       context: context,
@@ -472,10 +512,13 @@ class _AdminHomePageState extends State<AdminHomePage>
     final weekStart = thisWeekMonday.add(Duration(days: 7 * weekOffset));
     final weekEnd = weekStart.add(const Duration(days: 7));
 
-    // Find events to delete
+    // Strict clear: remove both published events and matching draft slot docs
+    // so old metadata cannot be republished into the same slot later.
     final eventsToDelete = _scheduledEvents.where((e) {
       if (e.type == 'global') return false;
       if (e.startTimeUTC == null) return false;
+      final isSlotDoc = e.id.startsWith('slot_') || e.id.startsWith('draft_slot_');
+      if (!isSlotDoc) return false;
       final start = DateTime.parse(e.startTimeUTC!);
       bool matchesWeek =
           start.isAfter(weekStart.subtract(const Duration(seconds: 1))) &&
@@ -494,22 +537,205 @@ class _AdminHomePageState extends State<AdminHomePage>
     if (eventsToDelete.isEmpty) {
       if (mounted)
         ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('No events to delete.')));
+            const SnackBar(content: Text('No slot events found to clear.')));
       return;
     }
 
+    final idsToDelete = <String>{};
+    for (final e in eventsToDelete) {
+      idsToDelete.add(e.id);
+      if (e.id.startsWith('slot_')) {
+        idsToDelete.add(e.id.replaceFirst('slot_', 'draft_slot_'));
+      } else if (e.id.startsWith('draft_slot_')) {
+        idsToDelete.add(e.id.replaceFirst('draft_slot_', 'slot_'));
+      }
+    }
+
     int deletedCount = 0;
-    for (var e in eventsToDelete) {
-      await _repository.deleteEvent(e.id);
-      deletedCount++;
+    for (final id in idsToDelete) {
+      try {
+        await _repository.deleteEvent(id);
+        deletedCount++;
+      } catch (_) {
+        // Ignore missing docs in strict-clear sweep.
+      }
+    }
+
+    // Also clear local scheduler cache for this week/lane so stale drafts
+    // do not reappear in editor state after strict clear.
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final draftKey = 'eventSchedulerDraftV3_Week$weekOffset';
+      final deletedKey = 'eventSchedulerDeletedSlotsV1_Week$weekOffset';
+
+      if (minuteFilter == null) {
+        await prefs.setString(draftKey, '{}');
+        await prefs.setString(deletedKey, '[]');
+      } else {
+        final draftString = prefs.getString(draftKey);
+        if (draftString != null) {
+          final Map<String, dynamic> draftMap = jsonDecode(draftString);
+          final keysToRemove = draftMap.keys.where((slotId) {
+            final parts = slotId.split(':');
+            if (parts.length != 2) return false;
+            final minute = int.tryParse(parts[1]);
+            return minute == minuteFilter;
+          }).toList();
+          for (final k in keysToRemove) {
+            draftMap.remove(k);
+          }
+          await prefs.setString(draftKey, jsonEncode(draftMap));
+        }
+
+        final deletedString = prefs.getString(deletedKey);
+        if (deletedString != null) {
+          final List<dynamic> deletedList = jsonDecode(deletedString);
+          deletedList.removeWhere((slotId) {
+            if (slotId is! String) return false;
+            final parts = slotId.split(':');
+            if (parts.length != 2) return false;
+            final minute = int.tryParse(parts[1]);
+            return minute == minuteFilter;
+          });
+          await prefs.setString(deletedKey, jsonEncode(deletedList));
+        }
+      }
+    } catch (e) {
+      debugPrint('Failed strict-clear local scheduler cache: $e');
+    }
+
+    // Prevent immediate Auto-System republish of current week right after a manual clear.
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('auto_system_skip_current_week_autopublish_once', true);
+    } catch (e) {
+      debugPrint('Could not set auto-system skip flag: $e');
     }
 
     await _loadEvents(); // Refresh UI
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Deleted $deletedCount events.'),
+          content: Text(
+              'Strict clear complete: removed $deletedCount published/draft slot docs.'),
           backgroundColor: Colors.redAccent));
+    }
+  }
+
+  Future<void> _handleClearWeekDraftSlots(int weekOffset,
+      {int? minuteFilter}) async {
+    String msg =
+        'Are you sure you want to clear DRAFT time slots in Week ${weekOffset + 1}';
+    if (minuteFilter != null) {
+      msg += ' for the :${minuteFilter.toString().padLeft(2, '0')} minute slot';
+    }
+    msg += '? This clears scheduler slot drafts.';
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Clear Time Slots?'),
+        content: Text(msg),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+            child: const Text('Clear', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    final now = DateTime.now().toUtc();
+    final todayRaw = DateTime.utc(now.year, now.month, now.day);
+    final daysSinceMonday = todayRaw.weekday - 1;
+    final thisWeekMonday = todayRaw.subtract(Duration(days: daysSinceMonday));
+
+    final weekStart = thisWeekMonday.add(Duration(days: 7 * weekOffset));
+    final weekEnd = weekStart.add(const Duration(days: 7));
+
+    final draftEventsToDelete = _scheduledEvents.where((e) {
+      if (e.type == 'global') return false;
+      if (e.startTimeUTC == null) return false;
+      final isDraftSlot = e.isDraft || e.id.startsWith('draft_slot_');
+      if (!isDraftSlot) return false;
+
+      final start = DateTime.parse(e.startTimeUTC!);
+      final matchesWeek =
+          start.isAfter(weekStart.subtract(const Duration(seconds: 1))) &&
+              start.isBefore(weekEnd);
+      if (!matchesWeek) return false;
+
+      if (minuteFilter != null && start.minute != minuteFilter) return false;
+      return true;
+    }).toList();
+
+    int deletedCount = 0;
+    for (final e in draftEventsToDelete) {
+      await _repository.deleteEvent(e.id);
+      deletedCount++;
+    }
+
+    // Also clear local scheduler cache for this week so drafts don't reappear from local storage.
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final draftKey = 'eventSchedulerDraftV3_Week$weekOffset';
+      final deletedKey = 'eventSchedulerDeletedSlotsV1_Week$weekOffset';
+
+      if (minuteFilter == null) {
+        await prefs.setString(draftKey, '{}');
+        await prefs.setString(deletedKey, '[]');
+      } else {
+        final draftString = prefs.getString(draftKey);
+        if (draftString != null) {
+          final Map<String, dynamic> draftMap = jsonDecode(draftString);
+          final keysToRemove = draftMap.keys.where((slotId) {
+            final parts = slotId.split(':');
+            if (parts.length != 2) return false;
+            final minute = int.tryParse(parts[1]);
+            return minute == minuteFilter;
+          }).toList();
+          for (final k in keysToRemove) {
+            draftMap.remove(k);
+          }
+          await prefs.setString(draftKey, jsonEncode(draftMap));
+        }
+
+        final deletedString = prefs.getString(deletedKey);
+        if (deletedString != null) {
+          final List<dynamic> deletedList = jsonDecode(deletedString);
+          deletedList.removeWhere((slotId) {
+            if (slotId is! String) return false;
+            final parts = slotId.split(':');
+            if (parts.length != 2) return false;
+            final minute = int.tryParse(parts[1]);
+            return minute == minuteFilter;
+          });
+          await prefs.setString(deletedKey, jsonEncode(deletedList));
+        }
+      }
+    } catch (e) {
+      debugPrint('Failed clearing local scheduler draft cache: $e');
+    }
+
+    await _loadEvents();
+
+    if (mounted) {
+      final lane = minuteFilter == null
+          ? 'all lanes'
+          : ':${minuteFilter.toString().padLeft(2, '0')} lane';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Cleared $deletedCount draft slots for $lane.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
     }
   }
 
