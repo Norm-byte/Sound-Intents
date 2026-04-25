@@ -724,17 +724,17 @@ class _DashboardTabState extends State<DashboardTab> {
                             children: [
                               IconButton(
                                 icon: const Icon(Icons.delete_outline, color: Colors.red),
-                                tooltip: 'Delete Published Week (All Lanes)',
+                                tooltip: 'Delete Published for This Lane',
                                 onPressed: () {
                                   if (widget.onClearWeek != null) {
-                                    // Delete Published is a week-level action.
-                                    // Do not restrict to current minute lane.
-                                    widget.onClearWeek!(weekOffset, null);
+                                    // Delete Published should target the currently
+                                    // displayed minute lane only (:00/:15/:30/:45).
+                                    widget.onClearWeek!(weekOffset, currentOffset);
                                   }
                                 },
                               ),
                               const Text(
-                                'Delete Published Week',
+                                'Delete Published Lane',
                                 style: TextStyle(
                                   fontSize: 10,
                                   color: Colors.red,
