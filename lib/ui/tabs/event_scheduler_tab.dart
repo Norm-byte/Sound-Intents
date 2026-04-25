@@ -793,6 +793,12 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
         final draftId =
           'draft_slot_${slotId.replaceAll(':', '')}_$dateSuffix';
 
+        final rawShowBefore = data['noticeBoardShowBeforeMinutes'];
+        final int parsedShowBefore = rawShowBefore is int
+            ? rawShowBefore
+            : int.tryParse('${rawShowBefore ?? ''}') ?? 60;
+        final int effectiveShowBefore = parsedShowBefore <= 0 ? 60 : parsedShowBefore;
+
         final title = (data['title'] as String? ?? '').trim();
         final visualUrl = (data['visualUrl'] as String? ?? '').trim();
         final soundUrl = (data['soundUrl'] as String? ?? '').trim();
@@ -823,8 +829,7 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
           isRandomized: data['isRandomized'] ?? false,
           useTrendingIntent: data['useTrendingIntent'] ?? false,
           autoNotify: data['autoNotify'] ?? false,
-          noticeBoardShowBeforeMinutes:
-              data['noticeBoardShowBeforeMinutes'] ?? 60,
+            noticeBoardShowBeforeMinutes: effectiveShowBefore,
           noticeBoardVisibilityAfterMinutes:
               data['noticeBoardVisibilityAfterMinutes'] ?? 0,
           noticeBoardBgImage: data['noticeBoardBgImage'],
