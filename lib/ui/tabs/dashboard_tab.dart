@@ -17,8 +17,10 @@ class DashboardTab extends StatefulWidget {
   final Function(Event) onEditEvent;
   final Function(Event) onDeleteEvent;
   final Function(List<Event>)? onImportEvents;
-  final Function(int weekOffset)? onPublishWeek;
+  final Function(int weekOffset, int? minuteFilter)? onPublishWeek;
   final Function(int weekOffset, int? minuteFilter)? onClearWeek; // Updated callback
+  final Function(int weekOffset, int? minuteFilter)?
+      onClearTimeSlots; // Clear draft slots only
   final Function(Event)? onPublishEvent;
 
   const DashboardTab({
@@ -31,6 +33,7 @@ class DashboardTab extends StatefulWidget {
     this.onImportEvents,
     this.onPublishWeek,
     this.onClearWeek, // New
+    this.onClearTimeSlots,
     this.onPublishEvent,
   });
 
@@ -53,6 +56,7 @@ class _DashboardTabState extends State<DashboardTab> {
 
   // Automation / System State
   bool _isAutoSystemEnabled = false; // "Auto-Publish" Toggle (Current + 3)
+  bool _skipCurrentWeekAutoPublishOnce = false;
 
   late final ScrollController _scrollController;
 
@@ -82,9 +86,15 @@ class _DashboardTabState extends State<DashboardTab> {
   Future<void> _loadAutoSystemState() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final enabled = prefs.getBool('auto_system_enabled') ?? true;
+      final enabled = prefs.getBool('auto_system_enabled') ?? false;
+      final skipCurrentWeekOnce =
+          prefs.getBool('auto_system_skip_current_week_autopublish_once') ??
+              false;
       if (mounted) {
-        setState(() => _isAutoSystemEnabled = enabled);
+        setState(() {
+          _isAutoSystemEnabled = enabled;
+          _skipCurrentWeekAutoPublishOnce = skipCurrentWeekOnce;
+        });
         if (enabled) {
           // Delay to ensure frame is ready for SnackBars etc.
           WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -94,6 +104,20 @@ class _DashboardTabState extends State<DashboardTab> {
       }
     } catch (e) {
       debugPrint('Error loading auto-system state: $e');
+    }
+  }
+
+  Future<void> _consumeCurrentWeekAutoPublishSkip() async {
+    if (!_skipCurrentWeekAutoPublishOnce) return;
+    _skipCurrentWeekAutoPublishOnce = false;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(
+        'auto_system_skip_current_week_autopublish_once',
+        false,
+      );
+    } catch (e) {
+      debugPrint('Failed clearing auto-system skip flag: $e');
     }
   }
 
@@ -112,6 +136,75 @@ class _DashboardTabState extends State<DashboardTab> {
         });
       }
     });
+  }
+
+  DateTime? _effectiveWeekStartForEvent(
+    Event event,
+    DateTime weekStart,
+    DateTime weekEnd,
+  ) {
+    if (event.type == 'global' || event.startTimeUTC == null) return null;
+
+    final rawStart = DateTime.parse(event.startTimeUTC!);
+    if (!rawStart.isBefore(weekStart) && rawStart.isBefore(weekEnd)) {
+      return rawStart;
+    }
+
+    final recurrence = (event.recurrenceType ?? '').trim().toLowerCase();
+    final isSlotDoc = event.id.startsWith('slot_');
+    final isExplicitRecurring =
+      (!isSlotDoc && event.isRecurring == true) ||
+      recurrence == 'daily' ||
+      recurrence == 'weekly' ||
+      recurrence == 'monthly';
+    if (!isExplicitRecurring) return null;
+
+    var hour = rawStart.hour;
+    var minute = rawStart.minute;
+    final originTime = event.originTime;
+    if (originTime != null && originTime.contains(':')) {
+      final parts = originTime.split(':');
+      if (parts.length == 2) {
+        hour = int.tryParse(parts[0]) ?? hour;
+        minute = int.tryParse(parts[1]) ?? minute;
+      }
+    }
+
+    DateTime? candidate;
+
+    if (recurrence == 'daily') {
+      // Daily recurrence is represented once per week card at a stable day;
+      // this keeps slot occupancy truthful without fabricating dated instances.
+      candidate = DateTime.utc(
+        weekStart.year,
+        weekStart.month,
+        weekStart.day,
+        hour,
+        minute,
+      );
+    } else if (recurrence == 'monthly') {
+      candidate = DateTime.utc(
+        weekStart.year,
+        weekStart.month,
+        rawStart.day,
+        hour,
+        minute,
+      );
+    } else {
+      candidate = weekStart.add(
+        Duration(
+          days: rawStart.weekday - DateTime.monday,
+          hours: hour,
+          minutes: minute,
+        ),
+      );
+    }
+
+    if (candidate.isBefore(weekStart) || !candidate.isBefore(weekEnd)) {
+      return null;
+    }
+
+    return candidate;
   }
   
   // Implementation of "Auto-System" (Current + 3) Rule
@@ -151,14 +244,20 @@ class _DashboardTabState extends State<DashboardTab> {
 
     // STEP 1: If current week has drafts and no published events, publish it now.
     // This covers Monday rollover and recovery if the dashboard was closed at boundary time.
-    if (thisWeekDrafts.isNotEmpty && thisWeekPublished.isEmpty) {
-      widget.onPublishWeek?.call(0); // offset 0 = current week
+    if (!_skipCurrentWeekAutoPublishOnce &&
+        thisWeekDrafts.isNotEmpty &&
+        thisWeekPublished.isEmpty) {
+      widget.onPublishWeek?.call(0, null); // offset 0 = current week
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('Auto-System: Published ${thisWeekDrafts.length} events for the current week.'),
         backgroundColor: Colors.green,
         duration: const Duration(seconds: 4),
       ));
       return;
+    }
+
+    if (_skipCurrentWeekAutoPublishOnce) {
+      _consumeCurrentWeekAutoPublishSkip();
     }
 
     // STEP 2: Next week has no content yet — auto-create draft from current week.
@@ -213,12 +312,6 @@ class _DashboardTabState extends State<DashboardTab> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text('JSON copied to clipboard. Paste into a file to save.'),
-                  const SizedBox(height: 12),
-                  Expanded(
-                    child: SingleChildScrollView(
-                      child: SelectableText(jsonData, style: const TextStyle(fontSize: 12)),
-                    ),
-                  ),
                 ],
               ),
             ),
@@ -503,21 +596,22 @@ class _DashboardTabState extends State<DashboardTab> {
     final Map<int, bool> hasDraftsAt = {0: false, 15: false, 30: false, 45: false};
 
     // Filter events strictly within this week range
+    final Map<String, DateTime> effectiveStarts = {};
     final weekEvents = widget.events.where((e) {
-      if (e.type == 'global') return false; 
-      if (e.startTimeUTC == null) return false;
       try {
-        final start = DateTime.parse(e.startTimeUTC!);
-        final inRange = start.isAfter(weekStart.subtract(const Duration(seconds: 1))) && 
-                        start.isBefore(weekEnd);
-        return inRange;
-      } catch (_) { return false; }
+        final effectiveStart = _effectiveWeekStartForEvent(e, weekStart, weekEnd);
+        if (effectiveStart == null) return false;
+        effectiveStarts[e.id] = effectiveStart;
+        return true;
+      } catch (_) {
+        return false;
+      }
     }).toList();
 
     // Analyze minute slots
     for (var e in weekEvents) {
       try {
-         final start = DateTime.parse(e.startTimeUTC!);
+         final start = effectiveStarts[e.id] ?? DateTime.parse(e.startTimeUTC!);
          final minute = start.minute;
          // Normalize minute to nearest bucket if needed, or exact match?
          // Assuming users create events exactly at 0, 15, 30, 45 or close to it.
@@ -537,24 +631,40 @@ class _DashboardTabState extends State<DashboardTab> {
     // Filter events again for the *selected* view (currentOffset)
     final eventsInCurrentView = weekEvents.where((e) {
        try {
-         final start = DateTime.parse(e.startTimeUTC!);
+         final start = effectiveStarts[e.id] ?? DateTime.parse(e.startTimeUTC!);
          return start.minute == currentOffset;
        } catch (_) { return false; }
     }).toList();
 
     for (var e in eventsInCurrentView) {
       try {
-        final start = DateTime.parse(e.startTimeUTC!);
+        final start = effectiveStarts[e.id] ?? DateTime.parse(e.startTimeUTC!);
         final current = currentViewHourStatus[start.hour] ?? 0;
 
         // Prioritize Draft (2) > Completed/Amber (3) > Published (1)
         if (!e.isPublished) {
           currentViewHourStatus[start.hour] = 2;
-        } else if (isPastWeek || (start.weekday == DateTime.sunday && start.isBefore(now))) {
-          // Past week OR Sunday slot that has already passed → amber
-          if (current != 2) currentViewHourStatus[start.hour] = 3;
         } else {
-          if (current != 2 && current != 3) currentViewHourStatus[start.hour] = 1;
+          final sundaySlotTime = DateTime.utc(
+            now.year,
+            now.month,
+            now.day,
+            start.hour,
+            start.minute,
+          );
+          final sundayProgressAmber =
+              weekOffset == 0 &&
+              now.weekday == DateTime.sunday &&
+              sundaySlotTime.isBefore(now);
+
+          if (isPastWeek || sundayProgressAmber) {
+            // Preserve the original principle:
+            // - Past weeks are completed/amber.
+            // - In current week, only Sunday slots flip amber as they pass.
+          if (current != 2) currentViewHourStatus[start.hour] = 3;
+          } else {
+            if (current != 2 && current != 3) currentViewHourStatus[start.hour] = 1;
+          }
         }
       } catch (_) {}
     }
@@ -565,7 +675,10 @@ class _DashboardTabState extends State<DashboardTab> {
     // Let's check if there are drafts *anywhere* in the week for the main SYNC button?
     // Or just for the current view? Usually Sync applies to the whole week context.
     // Let's assume global week drafts for the main button color.
-    final bool anyDraftsInWeek = hasDraftsAt.values.any((v) => v);
+    final bool anyEventsInWeek = eventsInCurrentView.isNotEmpty;
+    final bool anyDraftsInWeek = eventsInCurrentView.any(
+      (e) => !e.isPublished || e.isDraft,
+    );
 
     return Card(
       elevation: 2,
@@ -606,12 +719,52 @@ class _DashboardTabState extends State<DashboardTab> {
                       // Actions (Trash + Sync) - Moved Left as requested
                       Row(
                         children: [
-                          IconButton(
-                            icon: const Icon(Icons.delete_outline, color: Colors.red),
-                            tooltip: 'Clear Week (Selected View)',
-                            onPressed: () {
-                              if (widget.onClearWeek != null) widget.onClearWeek!(weekOffset, currentOffset);
-                            },
+                          Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.delete_outline, color: Colors.red),
+                                tooltip: 'Delete Published Week (All Lanes)',
+                                onPressed: () {
+                                  if (widget.onClearWeek != null) {
+                                    // Delete Published is a week-level action.
+                                    // Do not restrict to current minute lane.
+                                    widget.onClearWeek!(weekOffset, null);
+                                  }
+                                },
+                              ),
+                              const Text(
+                                'Delete Published Week',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  color: Colors.red,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(width: 6),
+                          Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.cleaning_services_outlined, color: Colors.orange),
+                                tooltip: 'Clear Time Slots (Drafts) for Selected View',
+                                onPressed: () {
+                                  if (widget.onClearTimeSlots != null) {
+                                    widget.onClearTimeSlots!(weekOffset, currentOffset);
+                                  }
+                                },
+                              ),
+                              const Text(
+                                'Clear Draft Slots',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  color: Colors.orange,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
                           ),
                           // Dropdown for Week Actions
                           PopupMenuButton<String>(
@@ -655,32 +808,62 @@ class _DashboardTabState extends State<DashboardTab> {
                               ];
                             },
                           ),
-                          if (anyDraftsInWeek) ...[
-                            const SizedBox(width: 8),
-                            ElevatedButton(
-                              onPressed: () {
-                                  if (widget.onPublishWeek != null) widget.onPublishWeek!(weekOffset);
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(content: Text("Publishing $label..."))
-                                  );
-                              },
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.amber.shade800,
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                              ),
-                              child: const Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Padding(
-                                    padding: EdgeInsets.only(right: 6.0),
-                                    child: Icon(Icons.warning_amber_rounded, size: 16),
-                                  ),
-                                  Text("Publish Drafts", style: TextStyle(fontWeight: FontWeight.bold)),
-                                ],
+                          const SizedBox(width: 8),
+                          ElevatedButton(
+                            onPressed: anyEventsInWeek
+                                ? () {
+                              if (widget.onPublishWeek != null) {
+                                widget.onPublishWeek!(weekOffset, currentOffset);
+                              }
+                              final msg = anyDraftsInWeek
+                                  ? "Publishing drafts in $label..."
+                                  : "Re-publishing $label to Firestore...";
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(msg)),
+                              );
+                            }
+                                : null,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: !anyEventsInWeek
+                                  ? Colors.grey.shade400
+                                  : (anyDraftsInWeek
+                                      ? Colors.amber.shade800
+                                      : Colors.green.shade600),
+                              foregroundColor: !anyEventsInWeek
+                                  ? Colors.grey.shade700
+                                  : Colors.white,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 8,
                               ),
                             ),
-                          ],
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 6.0),
+                                  child: Icon(
+                                    !anyEventsInWeek
+                                        ? Icons.remove_circle_outline
+                                        : (anyDraftsInWeek
+                                        ? Icons.warning_amber_rounded
+                                        : Icons.check_circle),
+                                    size: 16,
+                                  ),
+                                ),
+                                Text(
+                                  !anyEventsInWeek
+                                      ? "No Events"
+                                      : (anyDraftsInWeek
+                                      ? "Publish Drafts"
+                                      : "Publish Week"),
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         ],
                       ),
                     ],

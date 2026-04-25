@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:intl/intl.dart';
 import 'firebase_options.dart';
 import 'models/event.dart';
 import 'repositories/event_repository.dart';
@@ -478,10 +479,21 @@ class _AdminHomePageState extends State<AdminHomePage>
   }
 
   Future<void> _handleClearWeek(int weekOffset, {int? minuteFilter}) async {
+    final now = DateTime.now().toUtc();
+    final todayRaw = DateTime.utc(now.year, now.month, now.day);
+    final daysSinceMonday = todayRaw.weekday - 1;
+    final thisWeekMonday = todayRaw.subtract(Duration(days: daysSinceMonday));
+    final weekStart = thisWeekMonday.add(Duration(days: 7 * weekOffset));
+    final weekEnd = weekStart.add(const Duration(days: 7));
+    final weekLabel =
+        '${DateFormat('MMM d').format(weekStart)} - ${DateFormat('MMM d').format(weekEnd.subtract(const Duration(days: 1)))}';
+
     String msg =
-      'Are you sure you want to delete events in Week ${weekOffset + 1}';
+      'Are you sure you want to delete published events for $weekLabel';
     if (minuteFilter != null) {
       msg += ' for the :${minuteFilter.toString().padLeft(2, '0')} minute slot';
+    } else {
+      msg += ' (all lanes)';
     }
     msg +=
       '? Matching draft slot data will also be cleared to prevent stale noticeboard content from republishing.';
@@ -506,14 +518,6 @@ class _AdminHomePageState extends State<AdminHomePage>
     );
 
     if (confirm != true) return;
-
-    final now = DateTime.now().toUtc();
-    final todayRaw = DateTime.utc(now.year, now.month, now.day);
-    final daysSinceMonday = todayRaw.weekday - 1;
-    final thisWeekMonday = todayRaw.subtract(Duration(days: daysSinceMonday));
-
-    final weekStart = thisWeekMonday.add(Duration(days: 7 * weekOffset));
-    final weekEnd = weekStart.add(const Duration(days: 7));
 
     // Strict clear: remove all national events in this week/lane, including
     // legacy non-slot docs, so stale metadata cannot survive hidden.
@@ -625,10 +629,21 @@ class _AdminHomePageState extends State<AdminHomePage>
 
   Future<void> _handleClearWeekDraftSlots(int weekOffset,
       {int? minuteFilter}) async {
+    final now = DateTime.now().toUtc();
+    final todayRaw = DateTime.utc(now.year, now.month, now.day);
+    final daysSinceMonday = todayRaw.weekday - 1;
+    final thisWeekMonday = todayRaw.subtract(Duration(days: daysSinceMonday));
+    final weekStart = thisWeekMonday.add(Duration(days: 7 * weekOffset));
+    final weekEnd = weekStart.add(const Duration(days: 7));
+    final weekLabel =
+      '${DateFormat('MMM d').format(weekStart)} - ${DateFormat('MMM d').format(weekEnd.subtract(const Duration(days: 1)))}';
+
     String msg =
-        'Are you sure you want to clear DRAFT time slots in Week ${weekOffset + 1}';
+      'Are you sure you want to clear DRAFT time slots for $weekLabel';
     if (minuteFilter != null) {
       msg += ' for the :${minuteFilter.toString().padLeft(2, '0')} minute slot';
+    } else {
+      msg += ' (all lanes)';
     }
     msg += '? This clears scheduler slot drafts.';
 
@@ -652,14 +667,6 @@ class _AdminHomePageState extends State<AdminHomePage>
     );
 
     if (confirm != true) return;
-
-    final now = DateTime.now().toUtc();
-    final todayRaw = DateTime.utc(now.year, now.month, now.day);
-    final daysSinceMonday = todayRaw.weekday - 1;
-    final thisWeekMonday = todayRaw.subtract(Duration(days: daysSinceMonday));
-
-    final weekStart = thisWeekMonday.add(Duration(days: 7 * weekOffset));
-    final weekEnd = weekStart.add(const Duration(days: 7));
 
     final draftEventsToDelete = _scheduledEvents.where((e) {
       if (e.type == 'global') return false;
