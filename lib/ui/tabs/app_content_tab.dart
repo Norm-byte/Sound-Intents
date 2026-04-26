@@ -2028,23 +2028,12 @@ class _AdminReelCarouselPreviewState
         ),
         if (active.length > 1)
           Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: List.generate(
-                active.length,
-                (i) => AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  margin: const EdgeInsets.symmetric(horizontal: 3),
-                  width: _currentPage == i ? 12 : 6,
-                  height: 6,
-                  decoration: BoxDecoration(
-                    color: _currentPage == i
-                        ? Colors.amberAccent
-                        : Colors.white38,
-                    borderRadius: BorderRadius.circular(3),
-                  ),
-                ),
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              '${_currentPage + 1} / ${active.length}',
+              style: const TextStyle(
+                color: Colors.white54,
+                fontSize: 11,
               ),
             ),
           ),
