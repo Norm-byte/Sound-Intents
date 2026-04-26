@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -1347,8 +1350,31 @@ class _AppContentTabState extends State<AppContentTab> {
 
                                       const SizedBox(height: 16),
 
-                                      // Featured Content
-                                      if (_showFeatured && !_showReelCarousel)
+                                      // Content card — mirrors user app logic exactly.
+                                      // Both on → flip card. One only → plain card.
+                                      if (_showReelCarousel && _showFeatured)
+                                        _AdminPreviewFlipCard(
+                                          frontCard: Container(
+                                            constraints: const BoxConstraints(
+                                                minHeight: 150),
+                                            width: double.infinity,
+                                            decoration: BoxDecoration(
+                                              color: Colors.black54,
+                                              borderRadius:
+                                                  BorderRadius.circular(16),
+                                            ),
+                                            clipBehavior: Clip.antiAlias,
+                                            alignment: Alignment.center,
+                                            child: _buildFeaturedPreview(),
+                                          ),
+                                          backContent:
+                                              _AdminReelCarouselPreview(
+                                            items: _reelItems,
+                                            autoRotateSeconds:
+                                                _reelAutoRotateSeconds,
+                                          ),
+                                        )
+                                      else if (_showFeatured)
                                         Container(
                                           constraints: const BoxConstraints(
                                               minHeight: 150),
@@ -1361,11 +1387,8 @@ class _AppContentTabState extends State<AppContentTab> {
                                           clipBehavior: Clip.antiAlias,
                                           alignment: Alignment.center,
                                           child: _buildFeaturedPreview(),
-                                        ),
-
-                                      const SizedBox(height: 16),
-
-                                      if (_showReelCarousel)
+                                        )
+                                      else if (_showReelCarousel)
                                         Container(
                                           width: double.infinity,
                                           padding: const EdgeInsets.all(10),
@@ -1377,7 +1400,11 @@ class _AppContentTabState extends State<AppContentTab> {
                                             border: Border.all(
                                                 color: Colors.white24),
                                           ),
-                                          child: _buildReelPreview(),
+                                          child: _AdminReelCarouselPreview(
+                                            items: _reelItems,
+                                            autoRotateSeconds:
+                                                _reelAutoRotateSeconds,
+                                          ),
                                         ),
 
                                       const SizedBox(height: 32),
@@ -1653,6 +1680,375 @@ class _AppContentTabState extends State<AppContentTab> {
           ],
         ),
       ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Admin preview flip card — mirrors the user app _FlipContentCard exactly.
+// Front face: featured content + amber carousel icon (top-right) + swipe.
+// Back face: reel carousel + back arrow (top-left). Carousel taps are
+// reserved for pause/play/swipe between items.
+// ---------------------------------------------------------------------------
+class _AdminPreviewFlipCard extends StatefulWidget {
+  final Widget frontCard;
+  final Widget backContent;
+
+  const _AdminPreviewFlipCard({
+    required this.frontCard,
+    required this.backContent,
+  });
+
+  @override
+  State<_AdminPreviewFlipCard> createState() => _AdminPreviewFlipCardState();
+}
+
+class _AdminPreviewFlipCardState extends State<_AdminPreviewFlipCard>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _animation;
+  bool _showBack = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 480),
+    );
+    _animation = Tween<double>(begin: 0.0, end: pi).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
+    );
+    _animation.addStatusListener((status) {
+      if (status == AnimationStatus.dismissed && mounted) {
+        setState(() => _showBack = false);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _flipToCarousel() {
+    if (_showBack) return;
+    setState(() => _showBack = true);
+    _controller.forward();
+  }
+
+  void _flipToFront() {
+    if (!_showBack) return;
+    _controller.reverse();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _animation,
+      builder: (context, _) {
+        final angle = _animation.value;
+        final isShowingFront = angle <= pi / 2;
+
+        final Widget face = isShowingFront
+            ? _buildFrontFace()
+            : Transform(
+                alignment: Alignment.center,
+                transform: Matrix4.identity()..rotateY(pi),
+                child: _buildBackFace(),
+              );
+
+        return Transform(
+          alignment: Alignment.center,
+          transform: Matrix4.identity()
+            ..setEntry(3, 2, 0.001)
+            ..rotateY(angle),
+          child: face,
+        );
+      },
+    );
+  }
+
+  Widget _buildFrontFace() {
+    return GestureDetector(
+      onHorizontalDragEnd: (details) {
+        if ((details.primaryVelocity ?? 0).abs() > 300) _flipToCarousel();
+      },
+      child: Stack(
+        children: [
+          widget.frontCard,
+          Positioned(
+            top: 8,
+            right: 8,
+            child: Tooltip(
+              message: 'View Reel Carousel',
+              child: GestureDetector(
+                onTap: _flipToCarousel,
+                child: Container(
+                  padding: const EdgeInsets.all(5),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.55),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.view_carousel_outlined,
+                    color: Colors.amberAccent,
+                    size: 18,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBackFace() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(10, 40, 10, 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.amberAccent.withOpacity(0.4)),
+      ),
+      child: Stack(
+        children: [
+          widget.backContent,
+          Positioned(
+            top: -32,
+            left: 0,
+            child: Tooltip(
+              message: 'Back to featured',
+              child: GestureDetector(
+                onTap: _flipToFront,
+                child: Container(
+                  padding: const EdgeInsets.all(5),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.55),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.arrow_back,
+                    color: Colors.white,
+                    size: 18,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Admin reel carousel preview — auto-rotating PageView of all enabled items.
+// Uses web-compatible widgets (HtmlVideoPreview / VideoGridItem / Image).
+// Mirrors the user app _HomeReelCarousel behaviour.
+// ---------------------------------------------------------------------------
+class _AdminReelCarouselPreview extends StatefulWidget {
+  final List<Map<String, dynamic>> items;
+  final int autoRotateSeconds;
+
+  const _AdminReelCarouselPreview({
+    required this.items,
+    required this.autoRotateSeconds,
+  });
+
+  @override
+  State<_AdminReelCarouselPreview> createState() =>
+      _AdminReelCarouselPreviewState();
+}
+
+class _AdminReelCarouselPreviewState
+    extends State<_AdminReelCarouselPreview> {
+  late final PageController _pageController;
+  Timer? _autoRotateTimer;
+  int _currentPage = 0;
+
+  List<Map<String, dynamic>> get _enabledItems =>
+      widget.items.where((item) {
+        final enabled = (item['enabled'] as bool?) ?? true;
+        final url = (item['url'] as String?)?.trim() ?? '';
+        return enabled && url.isNotEmpty;
+      }).toList();
+
+  @override
+  void initState() {
+    super.initState();
+    _pageController = PageController();
+    _startAutoRotate();
+  }
+
+  @override
+  void didUpdateWidget(covariant _AdminReelCarouselPreview old) {
+    super.didUpdateWidget(old);
+    if (old.items != widget.items ||
+        old.autoRotateSeconds != widget.autoRotateSeconds) {
+      if (_currentPage >= _enabledItems.length) _currentPage = 0;
+      _startAutoRotate();
+    }
+  }
+
+  void _startAutoRotate() {
+    _autoRotateTimer?.cancel();
+    final active = _enabledItems;
+    if (active.length < 2) return;
+    final secs = widget.autoRotateSeconds.clamp(4, 20);
+    _autoRotateTimer = Timer.periodic(Duration(seconds: secs), (_) {
+      if (!mounted || !_pageController.hasClients) return;
+      final next = (_currentPage + 1) % active.length;
+      _pageController.animateToPage(
+        next,
+        duration: const Duration(milliseconds: 420),
+        curve: Curves.easeInOut,
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _autoRotateTimer?.cancel();
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  Widget _buildItemMedia(Map<String, dynamic> item) {
+    final url = (item['url'] as String?)?.trim() ?? '';
+    final type =
+        ((item['type'] as String?)?.toLowerCase().trim()) ?? 'video';
+
+    if (type == 'youtube') {
+      return SizedBox(
+        height: 200,
+        child: VideoGridItem(url: url, type: 'youtube', enablePreview: true),
+      );
+    }
+    if (type == 'image') {
+      return SizedBox(
+        height: 200,
+        child: Image.network(url, fit: BoxFit.cover, width: double.infinity),
+      );
+    }
+    // video (default)
+    return SizedBox(
+      height: 200,
+      child: HtmlVideoPreview(
+        url: url,
+        autoPlay: true,
+        loop: true,
+        muted: true,
+        controls: false,
+        objectFit: 'cover',
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final active = _enabledItems;
+    if (active.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.all(12),
+        child: Text(
+          'Carousel enabled but no active reels.',
+          style: TextStyle(color: Colors.white70),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.slideshow, color: Colors.amber, size: 16),
+            const SizedBox(width: 8),
+            Text(
+              'Reel Carousel (${active.length} active)',
+              style: const TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          height: 240,
+          child: PageView.builder(
+            controller: _pageController,
+            itemCount: active.length,
+            onPageChanged: (i) => setState(() => _currentPage = i),
+            itemBuilder: (context, index) {
+              final item = active[index];
+              final title = (item['title'] as String?)?.trim() ?? '';
+              final caption = (item['caption'] as String?)?.trim() ?? '';
+
+              return ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  color: Colors.black54,
+                  child: Column(
+                    children: [
+                      Expanded(child: _buildItemMedia(item)),
+                      if (title.isNotEmpty || caption.isNotEmpty)
+                        Padding(
+                          padding:
+                              const EdgeInsets.fromLTRB(10, 8, 10, 8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (title.isNotEmpty)
+                                Text(
+                                  title,
+                                  style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 11),
+                                ),
+                              if (caption.isNotEmpty)
+                                Text(
+                                  caption,
+                                  style: const TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 10),
+                                ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        if (active.length > 1)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: List.generate(
+                active.length,
+                (i) => AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  margin: const EdgeInsets.symmetric(horizontal: 3),
+                  width: _currentPage == i ? 12 : 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    color: _currentPage == i
+                        ? Colors.amberAccent
+                        : Colors.white38,
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }
