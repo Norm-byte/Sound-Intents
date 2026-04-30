@@ -635,8 +635,8 @@ class _MonetizationTabState extends State<MonetizationTab> {
           controller: _rcIdController,
           decoration: const InputDecoration(
             labelText: 'RevenueCat Entitlement Identifier',
-            hintText: 'e.g. starter_access or unlimited_access',
-            helperText: 'Leave blank for non-subscriber/default cards.',
+            hintText: 'e.g. starter_access, unlimited_access, or product ID',
+            helperText: 'Supports entitlement IDs or product IDs. Use comma-separated IDs if needed. Leave blank for non-subscriber/default cards.',
             border: OutlineInputBorder(),
             prefixIcon: Icon(Icons.vpn_key),
           ),
