@@ -462,6 +462,34 @@ class _AdminHomePageState extends State<AdminHomePage>
       }
     }
 
+    // Authoritative sweep: after promoting drafts, delete any orphaned slot_ docs
+    // in this week/lane that had no corresponding draft entry. This ensures that
+    // if the admin cleared a slot's content (without clicking Delete), the live
+    // doc is still removed when Publish Week is pressed.
+    final promotedIds = eventsToPublish
+        .map((e) => e.id.startsWith('draft_slot_')
+            ? e.id.replaceFirst('draft_slot_', 'slot_')
+            : e.id)
+        .toSet();
+
+    final orphanedSlots = _scheduledEvents.where((e) {
+      if (e.type == 'global') return false;
+      if (!e.id.startsWith('slot_')) return false;
+      if (e.startTimeUTC == null) return false;
+      final start = DateTime.parse(e.startTimeUTC!);
+      final inRange = start.isAfter(weekStart.subtract(const Duration(seconds: 1))) &&
+          start.isBefore(weekEnd);
+      if (!inRange) return false;
+      if (minuteFilter != null && start.minute != minuteFilter) return false;
+      return !promotedIds.contains(e.id);
+    }).toList();
+
+    for (final orphan in orphanedSlots) {
+      try {
+        await _repository.deleteEvent(orphan.id);
+      } catch (_) {}
+    }
+
     if (mounted) {
       final weekLabel =
           '${weekStart.year}-${weekStart.month.toString().padLeft(2, '0')}-${weekStart.day.toString().padLeft(2, '0')}';
@@ -539,14 +567,19 @@ class _AdminHomePageState extends State<AdminHomePage>
       return true;
     }).toList();
 
-    if (eventsToDelete.isEmpty) {
-      if (mounted)
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('No slot events found to clear.')));
-      return;
-    }
-
     final idsToDelete = <String>{};
+
+    // Deterministic slot-id sweep: always runs regardless of stream state so
+    // that published slot docs are deleted even if the live stream missed them.
+    idsToDelete.addAll(
+      _deterministicSlotIdsForWeek(
+        weekStart: weekStart,
+        minuteFilter: minuteFilter,
+        includePublished: true,
+        includeDraft: true,
+      ),
+    );
+
     for (final e in eventsToDelete) {
       idsToDelete.add(e.id);
       if (e.id.startsWith('slot_')) {
@@ -554,6 +587,34 @@ class _AdminHomePageState extends State<AdminHomePage>
       } else if (e.id.startsWith('draft_slot_')) {
         idsToDelete.add(e.id.replaceFirst('draft_slot_', 'slot_'));
       }
+    }
+
+    // Authoritative repository sweep: catches legacy/copy IDs that are not
+    // deterministic slot names and may be missing from the live stream.
+    try {
+      final allEvents = await _repository.loadEvents();
+      for (final e in allEvents) {
+        if (e.type == 'global') continue;
+        if (e.startTimeUTC == null) continue;
+        final start = DateTime.parse(e.startTimeUTC!);
+        final inRange =
+            start.isAfter(weekStart.subtract(const Duration(seconds: 1))) &&
+                start.isBefore(weekEnd);
+        if (!inRange) continue;
+        if (minuteFilter != null && start.minute != minuteFilter) continue;
+        idsToDelete.add(e.id);
+      }
+    } catch (e) {
+      debugPrint('Strict clear repository sweep failed: $e');
+    }
+
+    // If neither the stream nor the deterministic sweep found anything to
+    // target, bail out with a clear message so the admin knows nothing ran.
+    if (idsToDelete.isEmpty) {
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No slot events found to clear.')));
+      return;
     }
 
     int deletedCount = 0;
@@ -684,10 +745,52 @@ class _AdminHomePageState extends State<AdminHomePage>
       return true;
     }).toList();
 
-    int deletedCount = 0;
+    final idsToDelete = <String>{
+      ..._deterministicSlotIdsForWeek(
+        weekStart: weekStart,
+        minuteFilter: minuteFilter,
+        includePublished: false,
+        includeDraft: true,
+      ),
+    };
+
     for (final e in draftEventsToDelete) {
-      await _repository.deleteEvent(e.id);
-      deletedCount++;
+      idsToDelete.add(e.id);
+      if (e.id.startsWith('slot_')) {
+        idsToDelete.add(e.id.replaceFirst('slot_', 'draft_slot_'));
+      }
+    }
+
+    // Authoritative repository sweep for draft-like docs in this week/lane.
+    // This catches legacy/copy IDs when stream state is stale.
+    try {
+      final allEvents = await _repository.loadEvents();
+      for (final e in allEvents) {
+        if (e.type == 'global') continue;
+        if (e.startTimeUTC == null) continue;
+        final start = DateTime.parse(e.startTimeUTC!);
+        final inRange =
+            start.isAfter(weekStart.subtract(const Duration(seconds: 1))) &&
+                start.isBefore(weekEnd);
+        if (!inRange) continue;
+        if (minuteFilter != null && start.minute != minuteFilter) continue;
+        final isDraftLike = e.isDraft || e.id.startsWith('draft_slot_');
+        if (isDraftLike) {
+          idsToDelete.add(e.id);
+        }
+      }
+    } catch (e) {
+      debugPrint('Draft clear repository sweep failed: $e');
+    }
+
+    int deletedCount = 0;
+    for (final id in idsToDelete) {
+      try {
+        await _repository.deleteEvent(id);
+        deletedCount++;
+      } catch (_) {
+        // Ignore missing docs in strict draft-clear sweep.
+      }
     }
 
     // Also clear local scheduler cache for this week so drafts don't reappear from local storage.
@@ -745,6 +848,35 @@ class _AdminHomePageState extends State<AdminHomePage>
         ),
       );
     }
+  }
+
+  Set<String> _deterministicSlotIdsForWeek({
+    required DateTime weekStart,
+    int? minuteFilter,
+    required bool includePublished,
+    required bool includeDraft,
+  }) {
+    final ids = <String>{};
+    final minutes =
+        minuteFilter == null ? const [0, 15, 30, 45] : [minuteFilter];
+
+    for (int day = 0; day < 7; day++) {
+      final d = weekStart.add(Duration(days: day));
+      final dateSuffix =
+          '${d.year}${d.month.toString().padLeft(2, '0')}${d.day.toString().padLeft(2, '0')}';
+
+      for (int hour = 0; hour < 24; hour++) {
+        final hh = hour.toString().padLeft(2, '0');
+        for (final mmValue in minutes) {
+          final mm = mmValue.toString().padLeft(2, '0');
+          final core = '${hh}${mm}_$dateSuffix';
+          if (includePublished) ids.add('slot_$core');
+          if (includeDraft) ids.add('draft_slot_$core');
+        }
+      }
+    }
+
+    return ids;
   }
 
   void _handleEventUpdated(Event event) {

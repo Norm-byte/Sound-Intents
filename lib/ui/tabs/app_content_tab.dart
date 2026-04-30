@@ -10,6 +10,8 @@ import '../../services/media_library_service.dart';
 import '../../models/media_item.dart';
 import '../widgets/video_widgets.dart';
 
+const int kMaxActiveReels = 30;
+
 class AppContentTab extends StatefulWidget {
   const AppContentTab({super.key});
 
@@ -42,6 +44,9 @@ class _AppContentTabState extends State<AppContentTab> {
   bool _showReelCarousel = false;
   int _reelAutoRotateSeconds = 8;
   List<Map<String, dynamic>> _reelItems = [];
+
+  int get _activeReelCount =>
+      _reelItems.where((item) => item['enabled'] != false).length;
 
   // Video Controller for Background Preview only
   VideoPlayerController? _backgroundVideoController;
@@ -143,6 +148,18 @@ class _AppContentTabState extends State<AppContentTab> {
     final user = FirebaseAuth.instance.currentUser;
     print('Current User: ${user?.uid}');
 
+    if (_activeReelCount > kMaxActiveReels) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'You have $_activeReelCount active reels. Maximum allowed is $kMaxActiveReels.',
+          ),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
     setState(() => _isSaving = true);
     try {
       // Removed explicit enableNetwork call as it can be unstable
@@ -180,9 +197,27 @@ class _AppContentTabState extends State<AppContentTab> {
           serverData['appContentShowBulletin'] == true;
       final publishedBulletinText =
           (serverData['appContentBulletinText'] as String? ?? '').trim();
+        final publishedShowFeatured = serverData['showFeatured'] == true;
+        final publishedShowReelCarousel =
+          serverData['showReelCarousel'] == true;
+        final publishedFeaturedUrl =
+          (serverData['featuredUrl'] as String? ?? '').trim();
+        final publishedFeaturedType =
+          (serverData['featuredType'] as String? ?? '').trim();
+        final publishedReelAutoRotateSeconds =
+          (serverData['reelAutoRotateSeconds'] as num?)?.toInt() ?? 8;
+        final publishedReelItems = (serverData['reelItems'] as List?) ?? const [];
       final expectedBulletinText = _bulletinController.text.trim();
+        final expectedFeaturedUrl = _featuredUrlController.text.trim();
+        final expectedFeaturedType = _featuredType.trim();
       if (publishedShowBulletin != _showBulletin ||
-          publishedBulletinText != expectedBulletinText) {
+          publishedBulletinText != expectedBulletinText ||
+          publishedShowFeatured != _showFeatured ||
+          publishedShowReelCarousel != _showReelCarousel ||
+          publishedFeaturedUrl != expectedFeaturedUrl ||
+          publishedFeaturedType != expectedFeaturedType ||
+          publishedReelAutoRotateSeconds != _reelAutoRotateSeconds ||
+          publishedReelItems.length != _reelItems.length) {
         throw Exception(
           'Publish verification failed: server home_screen values do not match the latest save.',
         );
@@ -612,6 +647,19 @@ class _AppContentTabState extends State<AppContentTab> {
 
                             return InkWell(
                               onTap: () {
+                                if (_activeReelCount >= kMaxActiveReels) {
+                                  ScaffoldMessenger.of(this.context)
+                                      .showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Maximum $kMaxActiveReels active reels reached. Disable one before adding another.',
+                                      ),
+                                      backgroundColor: Colors.orange,
+                                    ),
+                                  );
+                                  return;
+                                }
+
                                 setState(() {
                                   _showReelCarousel = true;
                                   _reelItems.add({
@@ -967,6 +1015,16 @@ class _AppContentTabState extends State<AppContentTab> {
                 ),
                 if (_showReelCarousel) ...[
                   const SizedBox(height: 8),
+                  Text(
+                    'Active reels: $_activeReelCount/$kMaxActiveReels',
+                    style: TextStyle(
+                      color: _activeReelCount > kMaxActiveReels
+                          ? Colors.red
+                          : Colors.grey.shade700,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
                   Row(
                     children: [
                       const Text('Auto-rotate every'),
@@ -1036,9 +1094,27 @@ class _AppContentTabState extends State<AppContentTab> {
                                     ),
                                     Switch(
                                       value: enabled,
-                                      onChanged: (v) => setState(
-                                        () => _reelItems[index]['enabled'] = v,
-                                      ),
+                                      onChanged: (v) {
+                                        if (v &&
+                                            !enabled &&
+                                            _activeReelCount >=
+                                                kMaxActiveReels) {
+                                          ScaffoldMessenger.of(context)
+                                              .showSnackBar(
+                                            SnackBar(
+                                              content: Text(
+                                                'Maximum $kMaxActiveReels active reels reached.',
+                                              ),
+                                              backgroundColor: Colors.orange,
+                                            ),
+                                          );
+                                          return;
+                                        }
+
+                                        setState(
+                                          () => _reelItems[index]['enabled'] = v,
+                                        );
+                                      },
                                     ),
                                     IconButton(
                                       icon: const Icon(Icons.arrow_upward),
@@ -1166,16 +1242,6 @@ class _AppContentTabState extends State<AppContentTab> {
                     const Text('LIVE PREVIEW',
                         style: TextStyle(
                             fontWeight: FontWeight.bold, color: Colors.grey)),
-                    const Spacer(),
-                    // Pop-out full-size preview
-                    if (_showFeatured && _featuredUrlController.text.isNotEmpty)
-                      TextButton.icon(
-                        onPressed: () => _openFullSizePreview(),
-                        icon: const Icon(Icons.open_in_full, size: 16),
-                        label: const Text('Full Size'),
-                        style: TextButton.styleFrom(
-                            foregroundColor: Colors.indigo),
-                      ),
                   ],
                 ),
                 const SizedBox(height: 16),
@@ -1350,31 +1416,7 @@ class _AppContentTabState extends State<AppContentTab> {
 
                                       const SizedBox(height: 16),
 
-                                      // Content card — mirrors user app logic exactly.
-                                      // Both on → flip card. One only → plain card.
-                                      if (_showReelCarousel && _showFeatured)
-                                        _AdminPreviewFlipCard(
-                                          frontCard: Container(
-                                            constraints: const BoxConstraints(
-                                                minHeight: 150),
-                                            width: double.infinity,
-                                            decoration: BoxDecoration(
-                                              color: Colors.black54,
-                                              borderRadius:
-                                                  BorderRadius.circular(16),
-                                            ),
-                                            clipBehavior: Clip.antiAlias,
-                                            alignment: Alignment.center,
-                                            child: _buildFeaturedPreview(),
-                                          ),
-                                          backContent:
-                                              _AdminReelCarouselPreview(
-                                            items: _reelItems,
-                                            autoRotateSeconds:
-                                                _reelAutoRotateSeconds,
-                                          ),
-                                        )
-                                      else if (_showFeatured)
+                                      if (_showFeatured)
                                         Container(
                                           constraints: const BoxConstraints(
                                               minHeight: 150),
@@ -1386,7 +1428,44 @@ class _AppContentTabState extends State<AppContentTab> {
                                           ),
                                           clipBehavior: Clip.antiAlias,
                                           alignment: Alignment.center,
-                                          child: _buildFeaturedPreview(),
+                                          child: Stack(
+                                            children: [
+                                              SizedBox(
+                                                width: double.infinity,
+                                                child: _buildFeaturedPreview(),
+                                              ),
+                                              if (_showReelCarousel &&
+                                                  _reelItems.isNotEmpty)
+                                                Positioned(
+                                                  top: 8,
+                                                  right: 8,
+                                                  child: Tooltip(
+                                                    message: 'Open Reels',
+                                                    child: GestureDetector(
+                                                      onTap:
+                                                          _openReelsFullscreenPreview,
+                                                      child: Container(
+                                                        padding:
+                                                            const EdgeInsets
+                                                                .all(6),
+                                                        decoration: BoxDecoration(
+                                                          color: Colors.black
+                                                              .withOpacity(0.5),
+                                                          shape: BoxShape.circle,
+                                                        ),
+                                                        child: const Icon(
+                                                          Icons
+                                                              .play_circle_fill_rounded,
+                                                          color:
+                                                              Colors.amberAccent,
+                                                          size: 22,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
                                         )
                                       else if (_showReelCarousel)
                                         Container(
@@ -1400,10 +1479,39 @@ class _AppContentTabState extends State<AppContentTab> {
                                             border: Border.all(
                                                 color: Colors.white24),
                                           ),
-                                          child: _AdminReelCarouselPreview(
-                                            items: _reelItems,
-                                            autoRotateSeconds:
-                                                _reelAutoRotateSeconds,
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              const Row(
+                                                children: [
+                                                  Icon(Icons.slideshow,
+                                                      color: Colors.amber,
+                                                      size: 16),
+                                                  SizedBox(width: 8),
+                                                  Text(
+                                                    'Reel Carousel',
+                                                    style: TextStyle(
+                                                      color: Colors.white,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                              const SizedBox(height: 10),
+                                              SizedBox(
+                                                width: double.infinity,
+                                                child: ElevatedButton.icon(
+                                                  onPressed:
+                                                      _openReelsFullscreenPreview,
+                                                  icon: const Icon(Icons
+                                                      .play_circle_fill_rounded),
+                                                  label: const Text(
+                                                      'Open Reels Full Screen'),
+                                                ),
+                                              ),
+                                            ],
                                           ),
                                         ),
 
@@ -1682,6 +1790,23 @@ class _AppContentTabState extends State<AppContentTab> {
       ),
     );
   }
+
+  void _openReelsFullscreenPreview() {
+    final active = _reelItems.where((item) {
+      final enabled = (item['enabled'] as bool?) ?? true;
+      final url = (item['url'] as String?)?.trim() ?? '';
+      return enabled && url.isNotEmpty;
+    }).toList();
+
+    if (active.isEmpty) return;
+
+    Navigator.of(context, rootNavigator: true).push(
+      MaterialPageRoute(
+        fullscreenDialog: false,
+        builder: (_) => _AdminReelsFullscreenPreview(items: active),
+      ),
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1806,40 +1931,42 @@ class _AdminPreviewFlipCardState extends State<_AdminPreviewFlipCard>
   }
 
   Widget _buildBackFace() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(10, 40, 10, 10),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.amberAccent.withOpacity(0.4)),
-      ),
-      child: Stack(
-        children: [
-          widget.backContent,
-          Positioned(
-            top: -32,
-            left: 0,
-            child: Tooltip(
+    return GestureDetector(
+      onHorizontalDragEnd: (details) {
+        if ((details.primaryVelocity ?? 0).abs() > 300) _flipToFront();
+      },
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.amberAccent.withOpacity(0.4)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Tooltip(
               message: 'Back to featured',
-              child: GestureDetector(
-                onTap: _flipToFront,
-                child: Container(
-                  padding: const EdgeInsets.all(5),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.55),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.arrow_back,
-                    color: Colors.white,
-                    size: 18,
+              child: TextButton.icon(
+                onPressed: _flipToFront,
+                icon: const Icon(Icons.arrow_back, size: 18),
+                label: const Text('Back to Featured'),
+                style: TextButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  backgroundColor: Colors.black.withOpacity(0.45),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(999),
                   ),
                 ),
               ),
             ),
-          ),
-        ],
+            const SizedBox(height: 8),
+            widget.backContent,
+          ],
+        ),
       ),
     );
   }
@@ -2038,6 +2165,147 @@ class _AdminReelCarouselPreviewState
             ),
           ),
       ],
+    );
+  }
+}
+
+class _AdminReelsFullscreenPreview extends StatefulWidget {
+  final List<Map<String, dynamic>> items;
+
+  const _AdminReelsFullscreenPreview({required this.items});
+
+  @override
+  State<_AdminReelsFullscreenPreview> createState() =>
+      _AdminReelsFullscreenPreviewState();
+}
+
+class _AdminReelsFullscreenPreviewState
+    extends State<_AdminReelsFullscreenPreview> {
+  late final PageController _pageController;
+  int _currentPage = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _pageController = PageController();
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  Widget _buildMedia(Map<String, dynamic> item) {
+    final url = (item['url'] as String?)?.trim() ?? '';
+    final type = ((item['type'] as String?)?.toLowerCase().trim()) ?? 'video';
+
+    if (type == 'youtube') {
+      return VideoGridItem(url: url, type: 'youtube', enablePreview: true);
+    }
+    if (type == 'image') {
+      return Image.network(url, fit: BoxFit.cover, width: double.infinity);
+    }
+    return HtmlVideoPreview(
+      url: url,
+      autoPlay: true,
+      loop: false,
+      muted: false,
+      controls: true,
+      objectFit: 'cover',
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
+          PageView.builder(
+            controller: _pageController,
+            allowImplicitScrolling: true,
+            itemCount: widget.items.length,
+            onPageChanged: (index) => setState(() => _currentPage = index),
+            itemBuilder: (context, index) {
+              final item = widget.items[index];
+              final title = (item['title'] as String?)?.trim() ?? '';
+              final caption = (item['caption'] as String?)?.trim() ?? '';
+
+              return Stack(
+                children: [
+                  Positioned.fill(child: _buildMedia(item)),
+                  if (title.isNotEmpty || caption.isNotEmpty)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: Container(
+                        padding: const EdgeInsets.fromLTRB(18, 26, 18, 22),
+                        decoration: const BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [Colors.transparent, Colors.black87],
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (title.isNotEmpty)
+                              Text(
+                                title,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 16,
+                                ),
+                              ),
+                            if (caption.isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Text(
+                                  caption,
+                                  style: const TextStyle(color: Colors.white70),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
+          Positioned(
+            left: 12,
+            top: 12,
+            child: CircleAvatar(
+              backgroundColor: Colors.black.withOpacity(0.55),
+              child: IconButton(
+                icon: const Icon(Icons.arrow_back, color: Colors.white),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ),
+          ),
+          Positioned(
+            right: 12,
+            top: 12,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.55),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                '${_currentPage + 1} / ${widget.items.length}',
+                style: const TextStyle(color: Colors.white70),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

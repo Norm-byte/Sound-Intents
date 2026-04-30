@@ -561,7 +561,7 @@ class _DashboardTabState extends State<DashboardTab> {
                       "Week ${index + 1}", 
                       logicOffset, 
                       subtitle: isCurrent ? "(Current)" : (isPast ? "(Completed)" : null),
-                      showCleanUpAction: isPast, // NEW: Only show Clone action for past/completed weeks
+                        showCleanUpAction: false,
                       currentWeekIndex: currentWeekIndex,
                       scrollController: _scrollController,
                     ),
@@ -594,6 +594,7 @@ class _DashboardTabState extends State<DashboardTab> {
     // We need to know if there is ANY content for 00, 15, 30, 45 in this week.
     final Map<int, bool> hasContentAt = {0: false, 15: false, 30: false, 45: false};
     final Map<int, bool> hasDraftsAt = {0: false, 15: false, 30: false, 45: false};
+    final Map<int, bool> hasPublishedAt = {0: false, 15: false, 30: false, 45: false};
 
     // Filter events strictly within this week range
     final Map<String, DateTime> effectiveStarts = {};
@@ -634,6 +635,7 @@ class _DashboardTabState extends State<DashboardTab> {
          // Let's use strict mapping:
          if (hasContentAt.containsKey(minute)) {
              hasContentAt[minute] = true;
+           if (e.isPublished) hasPublishedAt[minute] = true;
              if (isDraftLike && !hasPublishedTwin) hasDraftsAt[minute] = true;
          }
       } catch (_) {}
@@ -695,7 +697,8 @@ class _DashboardTabState extends State<DashboardTab> {
     // Or just for the current view? Usually Sync applies to the whole week context.
     // Let's assume global week drafts for the main button color.
     final bool anyEventsInWeek = eventsInCurrentView.isNotEmpty;
-    final bool anyDraftsInWeek = eventsInCurrentView.any((e) {
+    final bool anyPublishedInWeek = eventsInCurrentView.any((e) => e.isPublished);
+    final bool anyDraftOnlyInWeek = eventsInCurrentView.any((e) {
       try {
         final start = effectiveStarts[e.id] ?? DateTime.parse(e.startTimeUTC!);
         final key = slotStatusKey(start);
@@ -706,6 +709,7 @@ class _DashboardTabState extends State<DashboardTab> {
         return false;
       }
     });
+    final bool anyDraftsInWeek = anyDraftOnlyInWeek && !anyPublishedInWeek;
 
     return Card(
       elevation: 2,
@@ -1024,13 +1028,13 @@ class _DashboardTabState extends State<DashboardTab> {
             Column(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                _buildMinuteToggle(0, currentOffset, hasContentAt[0]!, hasDraftsAt[0]!, weekOffset, Icons.access_time),
+                _buildMinuteToggle(0, currentOffset, hasContentAt[0]!, hasDraftsAt[0]!, hasPublishedAt[0]!, weekOffset, Icons.access_time),
                 const SizedBox(height: 8),
-                _buildMinuteToggle(15, currentOffset, hasContentAt[15]!, hasDraftsAt[15]!, weekOffset, null, "15"),
+                _buildMinuteToggle(15, currentOffset, hasContentAt[15]!, hasDraftsAt[15]!, hasPublishedAt[15]!, weekOffset, null, "15"),
                 const SizedBox(height: 8),
-                _buildMinuteToggle(30, currentOffset, hasContentAt[30]!, hasDraftsAt[30]!, weekOffset, null, "1/2"),
+                _buildMinuteToggle(30, currentOffset, hasContentAt[30]!, hasDraftsAt[30]!, hasPublishedAt[30]!, weekOffset, null, "1/2"),
                 const SizedBox(height: 8),
-                _buildMinuteToggle(45, currentOffset, hasContentAt[45]!, hasDraftsAt[45]!, weekOffset, null, "45"),
+                _buildMinuteToggle(45, currentOffset, hasContentAt[45]!, hasDraftsAt[45]!, hasPublishedAt[45]!, weekOffset, null, "45"),
               ],
             ),
           ],
@@ -1040,13 +1044,13 @@ class _DashboardTabState extends State<DashboardTab> {
   }
 
   Widget _buildMinuteToggle(
-      int minute, int currentSelection, bool hasContent, bool hasDrafts, int weekOffset, [IconData? icon, String? text]) {
+      int minute, int currentSelection, bool hasContent, bool hasDrafts, bool hasPublished, int weekOffset, [IconData? icon, String? text]) {
     
     final isSelected = minute == currentSelection;
     
     // Glow Color Logic
     Color? glowColor;
-    if (hasDrafts) glowColor = Colors.amber;
+    if (hasDrafts && !hasPublished) glowColor = Colors.amber;
     else if (hasContent) glowColor = Colors.green;
     
     return InkWell(
@@ -1136,7 +1140,7 @@ class _DashboardTabState extends State<DashboardTab> {
             '${newStart.hour.toString().padLeft(2, '0')}${newStart.minute.toString().padLeft(2, '0')}';
         final dateSuffix =
             '${newStart.year}${newStart.month.toString().padLeft(2, '0')}${newStart.day.toString().padLeft(2, '0')}';
-        final newId = 'copy_${slot}_$dateSuffix';
+        final newId = 'draft_slot_${slot}_$dateSuffix';
 
         newEvents.add(
           srcEvent.copyWith(

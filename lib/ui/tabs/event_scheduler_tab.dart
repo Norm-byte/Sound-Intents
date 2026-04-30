@@ -762,8 +762,11 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
     try {
       // Convert map to List<Event>
       List<Event> eventsToSave = [];
+      int blankSlotsCleared = 0;
 
-      _scheduledEventsData.forEach((slotId, data) {
+      for (final entry in _scheduledEventsData.entries) {
+        final slotId = entry.key;
+        final data = entry.value;
         // slotId is "HH:mm"
         // We need to construct a startTimeUTC.
         final parts = slotId.split(':');
@@ -798,6 +801,20 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
         final visualUrl = (data['visualUrl'] as String? ?? '').trim();
         final soundUrl = (data['soundUrl'] as String? ?? '').trim();
 
+        // Firestore rule: blank slot (no title, no media) must never persist as
+        // an empty doc. Delete both draft and published variants, then skip saving.
+        if (title.isEmpty && visualUrl.isEmpty && soundUrl.isEmpty) {
+          final idsToDelete = <String>{
+            draftId,
+            'slot_${slotId.replaceAll(':', '')}_$dateSuffix',
+          };
+          for (final id in idsToDelete) {
+            try { await _eventRepository.deleteEvent(id); } catch (_) {}
+          }
+          blankSlotsCleared++;
+          continue;
+        }
+
         final event = Event(
           id: draftId,
 
@@ -831,16 +848,19 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
           learnMoreShowViewer: false,
         );
         eventsToSave.add(event);
-      });
+      }
 
       if (eventsToSave.isNotEmpty) {
         await _eventRepository.saveEvents(eventsToSave);
       }
 
+      final blankMsg = blankSlotsCleared > 0
+          ? ' ($blankSlotsCleared blank slot(s) removed from Firestore)'
+          : '';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Schedule saved as Draft (${eventsToSave.length} slot(s)). Go to Dashboard to Publish.',
+            'Schedule saved as Draft (${eventsToSave.length} slot(s))$blankMsg. Go to Dashboard to Publish.',
           ),
         ),
       );
