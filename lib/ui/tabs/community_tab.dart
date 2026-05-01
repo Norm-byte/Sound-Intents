@@ -65,6 +65,7 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
               });
         }
         _adminChatController.clear();
+          _messageController.clear();
         if (mounted) {
            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Posted as Admin')));
         }
@@ -415,8 +416,8 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                         child: TextField(
                           controller: _messageController,
                           decoration: InputDecoration(
-                            hintText: 'Type message for top of screen...',
-                            labelText: 'Admin Message (Appears at Top of Chat)',
+                            hintText: 'Type pinned message or chat post...',
+                            labelText: 'Admin Message',
                             border: const OutlineInputBorder(),
                             filled: true,
                             fillColor: Colors.white,
@@ -432,14 +433,22 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                         ),
                       ),
                       const SizedBox(width: 8),
-                      // "Send" button as requested (performs Pin/Save operation)
                       ElevatedButton.icon(
-                        icon: const Icon(Icons.send),
-                        label: const Text('Send'),
+                        icon: const Icon(Icons.push_pin),
+                        label: const Text('Pin'),
                         style: ElevatedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                         ),
                         onPressed: () => _saveAdminMessage(_messageController.text),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton.icon(
+                        icon: const Icon(Icons.forum),
+                        label: const Text('Post'),
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                        ),
+                        onPressed: () => _sendAdminChat(_messageController.text),
                       ),
                     ],
                   );
