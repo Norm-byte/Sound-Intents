@@ -1656,30 +1656,20 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                         Colors.grey.shade300; // Default: Empty
 
                                     if (hasData) {
-                                      // Check if played out or fresh
-                                      final now = DateTime.now().toUtc();
-                                      final parts = slotId.split(':');
-                                      final hour = int.parse(parts[0]);
-                                      final minute = int.parse(parts[1]);
-                                      final targetDate = _getTargetDate();
-
-                                      // Use target date to ensure we compare against the correct day (supports Week Offset)
-                                      // This fixes an issue where viewing future/past weeks compared slots against "Today's" time
-                                      final slotTime = targetDate.add(
-                                        Duration(hours: hour, minutes: minute),
-                                      );
-
-                                      final isFuture = slotTime.isAfter(now);
-
                                       if (hasLocalData) {
                                         // Draft status - Amber for unpublished drafts
                                         statusColor = Colors.amber;
-                                      } else if (isFuture) {
-                                        // Live status, slot not yet fired - Green (upcoming)
-                                        statusColor = Colors.green;
                                       } else {
-                                        // Live status, slot time has passed - Amber (expired)
-                                        statusColor = Colors.amber;
+                                        // Published event: green for the entire Mon-Sun week
+                                        // it belongs to; amber only once that Sunday has passed.
+                                        final now = DateTime.now().toUtc();
+                                        final today = DateTime.utc(now.year, now.month, now.day);
+                                        final daysSinceMonday = today.weekday - 1;
+                                        final weekMonday = today.subtract(Duration(days: daysSinceMonday));
+                                        final targetWeekMonday = weekMonday.add(Duration(days: 7 * _selectedWeekOffset));
+                                        final targetWeekSunday = targetWeekMonday.add(const Duration(days: 6));
+                                        final targetWeekEnd = DateTime.utc(targetWeekSunday.year, targetWeekSunday.month, targetWeekSunday.day, 23, 59, 59);
+                                        statusColor = now.isBefore(targetWeekEnd) ? Colors.green : Colors.amber;
                                       }
                                     }
 
