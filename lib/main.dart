@@ -244,9 +244,9 @@ class _AdminHomePageState extends State<AdminHomePage>
       Tab(icon: Icon(Icons.perm_media), text: 'Media Library'),
       Tab(icon: Icon(Icons.mobile_screen_share), text: 'App Content'),
       Tab(icon: Icon(Icons.chat), text: 'Chat Rooms'),
+      Tab(icon: Icon(Icons.lightbulb), text: 'Topics'),
       Tab(icon: Icon(Icons.forum), text: 'Community'),
       Tab(icon: Icon(Icons.monetization_on), text: 'Deals/Offers'),
-      Tab(icon: Icon(Icons.lightbulb), text: 'Topics'),
       Tab(icon: Icon(Icons.settings), text: 'System'),
       Tab(icon: Icon(Icons.notifications_active), text: 'Notifications'),
       Tab(icon: Icon(Icons.gavel), text: 'Legal'), // Restored
@@ -350,25 +350,25 @@ class _AdminHomePageState extends State<AdminHomePage>
       // 6. Chat Rooms
       buildTab('chat_management', 'Chat Rooms', const ChatManagementTab()),
 
-      // 7. Community & Communication
-      buildTab('chat_management', 'Community', const CommunityTab()),
-
-      // Monetization / Deals
-      buildTab('monetization', 'Deals', const MonetizationTab()),
-
       // 7. Topics
       buildTab('topics', 'Topics', const YoutubeLibraryTab()),
 
-      // 8. System
+      // 8. Community & Communication
+      buildTab('chat_management', 'Community', const CommunityTab()),
+
+      // 9. Monetization / Deals
+      buildTab('monetization', 'Deals', const MonetizationTab()),
+
+      // 10. System
       buildTab('system', 'System', const SystemTab()),
 
-      // 9. Notifications
+      // 11. Notifications
       buildTab('notifications', 'Notifications', const NotificationsScreen()),
 
-      // 10. Legal (Locked)
+      // 12. Legal (Locked)
       buildTab('legal', 'Legal', const LegalTab()),
 
-      // 11. Operators Manual (Accessible to All - DocumentationTab under the hood)
+      // 13. Operators Manual (Accessible to All - DocumentationTab under the hood)
       buildTab('documentation', 'Operators Manual', const DocumentationTab()),
     ];
   }

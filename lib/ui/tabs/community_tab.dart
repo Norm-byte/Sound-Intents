@@ -492,52 +492,59 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                         .toDouble();
 
                   return Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(10),
                       border: Border.all(color: Colors.grey.shade300),
                     ),
-                    child: Theme(
-                      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-                      child: ExpansionTile(
-                        tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-                        childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-                        leading: const Icon(Icons.swap_vert, size: 18, color: Colors.indigo),
-                        title: const Text(
-                          'Auto-Scroll Controls (User App)',
-                          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.swap_vert, size: 18, color: Colors.indigo),
+                            const SizedBox(width: 8),
+                            const Expanded(
+                              child: Text(
+                                'Auto-Scroll Controls (User App)',
+                                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                              ),
+                            ),
+                            Switch(
+                              value: autoScrollEnabled,
+                              onChanged: (val) => _saveFeedScrollSettings(
+                                enabled: val,
+                                speed: autoScrollSpeed,
+                              ),
+                            ),
+                          ],
                         ),
-                        subtitle: Text(
+                        Text(
                           'Current speed: ${autoScrollSpeed.toStringAsFixed(0)} px/s',
                           style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
                         ),
-                        trailing: Switch(
-                          value: autoScrollEnabled,
-                          onChanged: (val) => _saveFeedScrollSettings(
-                            enabled: val,
-                            speed: autoScrollSpeed,
-                          ),
+                        Slider(
+                          value: autoScrollSpeed,
+                          min: 8,
+                          max: 120,
+                          divisions: 28,
+                          label: autoScrollSpeed.toStringAsFixed(0),
+                          onChanged: autoScrollEnabled
+                              ? (val) => _saveFeedScrollSettings(
+                                  enabled: autoScrollEnabled,
+                                  speed: val,
+                                )
+                              : null,
                         ),
-                        children: [
-                          Slider(
-                            value: autoScrollSpeed,
-                            min: 8,
-                            max: 120,
-                            divisions: 28,
-                            label: autoScrollSpeed.toStringAsFixed(0),
-                            onChanged: autoScrollEnabled
-                                ? (val) => _saveFeedScrollSettings(
-                                    enabled: autoScrollEnabled,
-                                    speed: val,
-                                  )
-                                : null,
-                          ),
-                          Text(
-                            'Compact controls to keep more room for live comments.',
-                            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                          ),
-                        ],
-                      ),
+                        Text(
+                          'Slider is always visible here for quick tuning while monitoring live comments.',
+                          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                        ),
+                      ],
                     ),
                   );
                 },
