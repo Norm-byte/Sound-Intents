@@ -131,23 +131,44 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
   Widget build(BuildContext context) {
     return Column(
       children: [
-        // Header & Tabs
+        // Compact section header and sub-tabs
         Container(
           color: Colors.white,
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'Community & Communication',
-                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.indigo.shade50,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: const Text(
+                      'Community & Communication',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.indigo,
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    'Live moderation workspace',
+                    style: TextStyle(
+                      color: Colors.grey.shade600,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 8),
-              const Text(
-                'Manage user interactions, moderate content, and respond to inquiries.',
-                style: TextStyle(color: Colors.grey),
-              ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 10),
               TabBar(
                 controller: _tabController,
                 labelColor: Colors.indigo,
@@ -333,7 +354,7 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
       children: [
         // Feed Selector & Admin Message
         Container(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(12),
           color: Colors.grey.shade100,
           child: Column(
             children: [
@@ -386,7 +407,7 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                   );
                 }
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 10),
               
               // Admin Pinned Message (Available for Global AND Groups now)
               StreamBuilder<DocumentSnapshot>(
@@ -432,21 +453,21 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                           onSubmitted: _saveAdminMessage,
                         ),
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
                       ElevatedButton.icon(
                         icon: const Icon(Icons.push_pin),
                         label: const Text('Pin'),
                         style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                         ),
                         onPressed: () => _saveAdminMessage(_messageController.text),
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
                       ElevatedButton.icon(
                         icon: const Icon(Icons.forum),
                         label: const Text('Post'),
                         style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                         ),
                         onPressed: () => _sendAdminChat(_messageController.text),
                       ),
@@ -454,7 +475,7 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                   );
                 }
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 8),
               StreamBuilder<DocumentSnapshot>(
                 stream: FirebaseFirestore.instance
                     .collection('app_config')
@@ -471,60 +492,52 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                         .toDouble();
 
                   return Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(10),
                       border: Border.all(color: Colors.grey.shade300),
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            const Icon(Icons.swap_vert, size: 18, color: Colors.indigo),
-                            const SizedBox(width: 8),
-                            const Expanded(
-                              child: Text(
-                                'Live Feed Auto-Scroll (User App)',
-                                style: TextStyle(fontWeight: FontWeight.w600),
-                              ),
-                            ),
-                            Switch(
-                              value: autoScrollEnabled,
-                              onChanged: (val) => _saveFeedScrollSettings(
-                                enabled: val,
-                                speed: autoScrollSpeed,
-                              ),
-                            ),
-                          ],
+                    child: Theme(
+                      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                      child: ExpansionTile(
+                        tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                        childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                        leading: const Icon(Icons.swap_vert, size: 18, color: Colors.indigo),
+                        title: const Text(
+                          'Auto-Scroll Controls (User App)',
+                          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
                         ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Speed: ${autoScrollSpeed.toStringAsFixed(0)} px/s',
-                          style: TextStyle(color: Colors.grey.shade700),
+                        subtitle: Text(
+                          'Current speed: ${autoScrollSpeed.toStringAsFixed(0)} px/s',
+                          style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
                         ),
-                        Slider(
-                          value: autoScrollSpeed,
-                          min: 8,
-                          max: 120,
-                          divisions: 28,
-                          label: autoScrollSpeed.toStringAsFixed(0),
-                          onChanged: autoScrollEnabled
-                              ? (val) => _saveFeedScrollSettings(
-                                  enabled: autoScrollEnabled,
-                                  speed: val,
-                                )
-                              : null,
+                        trailing: Switch(
+                          value: autoScrollEnabled,
+                          onChanged: (val) => _saveFeedScrollSettings(
+                            enabled: val,
+                            speed: autoScrollSpeed,
+                          ),
                         ),
-                        Text(
-                          'Configure here in System > Community > Live Feed; users see it live.',
-                          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                        ),
-                      ],
+                        children: [
+                          Slider(
+                            value: autoScrollSpeed,
+                            min: 8,
+                            max: 120,
+                            divisions: 28,
+                            label: autoScrollSpeed.toStringAsFixed(0),
+                            onChanged: autoScrollEnabled
+                                ? (val) => _saveFeedScrollSettings(
+                                    enabled: autoScrollEnabled,
+                                    speed: val,
+                                  )
+                                : null,
+                          ),
+                          Text(
+                            'Compact controls to keep more room for live comments.',
+                            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                          ),
+                        ],
+                      ),
                     ),
                   );
                 },

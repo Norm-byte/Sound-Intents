@@ -25,6 +25,7 @@ import 'ui/tabs/system_tab.dart';
 import 'ui/tabs/legal_tab.dart';
 import 'ui/tabs/documentation_tab.dart'; // Added for Operators Manual
 import 'ui/tabs/chat_management_tab.dart';
+import 'ui/tabs/community_tab.dart';
 import 'ui/tabs/monetization_tab.dart';
 import 'ui/tabs/app_content_tab.dart';
 import 'ui/notifications_screen.dart';
@@ -243,6 +244,7 @@ class _AdminHomePageState extends State<AdminHomePage>
       Tab(icon: Icon(Icons.perm_media), text: 'Media Library'),
       Tab(icon: Icon(Icons.mobile_screen_share), text: 'App Content'),
       Tab(icon: Icon(Icons.chat), text: 'Chat Rooms'),
+      Tab(icon: Icon(Icons.forum), text: 'Community'),
       Tab(icon: Icon(Icons.monetization_on), text: 'Deals/Offers'),
       Tab(icon: Icon(Icons.lightbulb), text: 'Topics'),
       Tab(icon: Icon(Icons.settings), text: 'System'),
@@ -347,6 +349,9 @@ class _AdminHomePageState extends State<AdminHomePage>
 
       // 6. Chat Rooms
       buildTab('chat_management', 'Chat Rooms', const ChatManagementTab()),
+
+      // 7. Community & Communication
+      buildTab('chat_management', 'Community', const CommunityTab()),
 
       // Monetization / Deals
       buildTab('monetization', 'Deals', const MonetizationTab()),
