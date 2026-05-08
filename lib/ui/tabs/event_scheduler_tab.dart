@@ -2318,10 +2318,10 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                           _saveCurrentSlot();
                                         },
                                         title: const Text(
-                                          'Use Trending Intent',
+                                          'Use Community Signal',
                                         ),
                                         subtitle: const Text(
-                                          'Auto-fill with the most popular user intent from the last hour',
+                                          'Auto-fill from recent user intent trends. Turn off to set your own shared intent.',
                                         ),
                                         secondary: const Icon(
                                           Icons.trending_up,

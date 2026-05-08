@@ -2877,8 +2877,8 @@ class _EventCreatorTabState extends State<EventCreatorTab>
                     // Only show Trending Intent option if it's a Global Event
                     if (_selectedEventType == 'global') ...[
                       SwitchListTile(
-                        title: const Text('Use Trending Intent'),
-                        subtitle: const Text('Automatically set intent based on user popularity'),
+                        title: const Text('Use Community Signal'),
+                        subtitle: const Text('Automatically set intent from recent user trends'),
                         value: _useTrendingIntent,
                         onChanged: (val) => setState(() => _useTrendingIntent = val),
                         contentPadding: EdgeInsets.zero,
@@ -2889,8 +2889,8 @@ class _EventCreatorTabState extends State<EventCreatorTab>
                       controller: _intentController,
                       decoration: InputDecoration(
                           labelText: 'Intent (e.g. Peace, Joy)',
-                          helperText: (_useTrendingIntent && _selectedEventType == 'global')
-                              ? 'Currently set to auto-update. Turn off to manually override.' 
+                            helperText: (_useTrendingIntent && _selectedEventType == 'global')
+                              ? 'Currently following the community signal. Turn off to set your own shared intent.' 
                               : 'Sets the shared intent for this event.',
                           border: const OutlineInputBorder()),
                     ),
