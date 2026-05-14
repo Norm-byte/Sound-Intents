@@ -2,10 +2,8 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import '../widgets/locked_tab_wrapper.dart';
 import 'admin_management_tab.dart';
 import 'user_management_tab.dart';
-import 'community_tab.dart';
 import 'welcome_screen_manager.dart';
 
 class SystemTab extends StatefulWidget {
@@ -18,14 +16,11 @@ class SystemTab extends StatefulWidget {
 class _SystemTabState extends State<SystemTab> with SingleTickerProviderStateMixin {
   late TabController _tabController;
   
-  // State for user management navigation
-  String? _selectedUserIdForManagement;
-
   @override
   void initState() {
     super.initState();
     // Initialize controller immediately to prevent build errors
-    _tabController = TabController(length: 8, vsync: this);
+    _tabController = TabController(length: 7, vsync: this);
   }
 
   @override
@@ -36,10 +31,9 @@ class _SystemTabState extends State<SystemTab> with SingleTickerProviderStateMix
 
   @override
   Widget build(BuildContext context) {
-    // Wrap entire content in LockedTabWrapper for consistent security/appearance
-    return LockedTabWrapper(
-      title: 'System Management',
-      child: Column(
+    // Outer LockedTabWrapper in main.dart handles access control.
+    // No inner lock needed here.
+    return Column(
         children: [
           Container(
             padding: const EdgeInsets.all(16),
@@ -73,7 +67,6 @@ class _SystemTabState extends State<SystemTab> with SingleTickerProviderStateMix
                   isScrollable: true,
                   tabs: const [
                     Tab(icon: Icon(Icons.people), text: 'Users'),
-                    Tab(icon: Icon(Icons.forum), text: 'Community'),
                     Tab(icon: Icon(Icons.security), text: 'Safety & Filter'),
                     Tab(icon: Icon(Icons.gavel), text: 'Legal & Compliance'),
                     Tab(icon: Icon(Icons.analytics), text: 'Performance'),
@@ -89,15 +82,7 @@ class _SystemTabState extends State<SystemTab> with SingleTickerProviderStateMix
             child: TabBarView(
               controller: _tabController,
               children: [
-                UserManagementTab(initialUserId: _selectedUserIdForManagement),
-                CommunityTab(
-                  onUserSelected: (userId) {
-                    setState(() {
-                      _selectedUserIdForManagement = userId;
-                    });
-                    _tabController.animateTo(0);
-                  },
-                ),
+                const UserManagementTab(),
                 const ChatSafetyTab(),
                 const ComplianceTab(),
                 const _PerformanceTab(),
@@ -108,7 +93,6 @@ class _SystemTabState extends State<SystemTab> with SingleTickerProviderStateMix
             ),
           ),
         ],
-      ),
     );
   }
 }

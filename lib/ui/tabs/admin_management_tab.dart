@@ -47,18 +47,38 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
   String? _storedSecurityPassword;
   String? _storedVipCode;
 
-  // Admin Permissions Defaults
+  // Admin Permissions Defaults — keys must match buildTab() calls in main.dart
   final Map<String, bool> _defaultAdminPermissions = {
     'dashboard': true,
-    'event_creator': false,
-    'event_scheduler': false,
+    'event_creator': false,       // Worldwide Events
+    'event_scheduler': false,     // National Events
     'media_library': false,
-    'chat_rooms': false, // Renamed from Chat Management
+    'app_content': false,         // App Content
+    'chat_management': false,     // Chat Rooms
     'topics': false,
-    'system': false,
-    'notifications': false, 
-    'legal': false, 
-    'documentation': true, // Auto-grant Documentation
+    'community': false,           // Community
+    'monetization': false,        // Deals/Offers
+    'system': false,              // System
+    'notifications': false,
+    'legal': false,
+    'documentation': true,        // Operators Manual — always granted
+  };
+
+  /// Human-readable tab names shown in permission checkboxes.
+  static const Map<String, String> _permissionLabels = {
+    'dashboard':       'Dashboard',
+    'event_creator':   'Worldwide Events',
+    'event_scheduler': 'National Events',
+    'media_library':   'Media Library',
+    'app_content':     'App Content',
+    'chat_management': 'Chat Rooms',
+    'topics':          'Topics',
+    'community':       'Community',
+    'monetization':    'Deals / Offers',
+    'system':          'System',
+    'notifications':   'Notifications',
+    'legal':           'Legal',
+    'documentation':   'Operators Manual',
   };
   
   // Current selection for new admin
@@ -789,10 +809,11 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
                   spacing: 16,
                   runSpacing: 8,
                   children: _newAdminPermissions.keys.map((key) {
+                    final label = _permissionLabels[key] ?? key.replaceAll('_', ' ');
                     return SizedBox(
                       width: 200,
                       child: CheckboxListTile(
-                        title: Text(key.replaceAll('_', ' ').toUpperCase(), style: const TextStyle(fontSize: 12)),
+                        title: Text(label, style: const TextStyle(fontSize: 12)),
                         value: _newAdminPermissions[key],
                         onChanged: (val) {
                           setState(() {
@@ -1845,10 +1866,11 @@ Widget _buildActiveAdminsTab_UNUSED() {
                   spacing: 16,
                   runSpacing: 8,
                   children: _newAdminPermissions.keys.map((key) {
+                    final label = _permissionLabels[key] ?? key.replaceAll('_', ' ');
                     return SizedBox(
                       width: 200,
                       child: CheckboxListTile(
-                        title: Text(key.replaceAll('_', ' ').toUpperCase(), style: const TextStyle(fontSize: 12)),
+                        title: Text(label, style: const TextStyle(fontSize: 12)),
                         value: _newAdminPermissions[key],
                         onChanged: (val) {
                           setState(() {

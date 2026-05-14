@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
+import '../widgets/video_widgets.dart';
 
 class CommunityTab extends StatefulWidget {
   final Function(String userId)? onUserSelected;
@@ -10,8 +12,7 @@ class CommunityTab extends StatefulWidget {
   State<CommunityTab> createState() => _CommunityTabState();
 }
 
-class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderStateMixin {
-  late TabController _tabController;
+class _CommunityTabState extends State<CommunityTab> {
   final TextEditingController _messageController = TextEditingController(); // For Pinned Message
   final TextEditingController _adminChatController = TextEditingController(); // For Admin Chat
   bool _isMessageLoaded = false;
@@ -20,18 +21,62 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
   String _selectedFeedId = 'global'; // 'global' or groupId
   String _selectedFeedName = 'Global Public Feed';
 
-  // Simple profanity list for moderation queue
-  final List<String> _badWords = ['badword', 'abuse', 'hate', 'violence', 'kill', 'damn', 'hell'];
+  // Community view toggle: 'queue' or 'feed'
+  String _communityView = 'queue';
+
+  static const Map<String, String> _moderationActionLabels = {
+    'no_action': 'No action needed',
+    'warned': 'User warned',
+    'content_removed': 'Content removed',
+    'content_removed_reel': 'Reel removed',
+    'user_suspended': 'User suspended',
+    'dismissed': 'Dismissed',
+  };
+
+  String _currentAdminActor() {
+    final admin = FirebaseAuth.instance.currentUser;
+    final email = admin?.email?.trim();
+    if (email != null && email.isNotEmpty) return email;
+    final name = admin?.displayName?.trim();
+    if (name != null && name.isNotEmpty) return name;
+    return admin?.uid ?? 'unknown_admin';
+  }
+
+  Map<String, dynamic> _buildModerationAuditFields({
+    required String status,
+    required String action,
+    String? note,
+  }) {
+    final admin = FirebaseAuth.instance.currentUser;
+    final actionLabel = _moderationActionLabels[action] ?? action;
+    final actor = _currentAdminActor();
+
+    return {
+      'status': status,
+      'resolvedAt': FieldValue.serverTimestamp(),
+      'resolvedAction': action,
+      'resolvedActionLabel': actionLabel,
+      'resolvedBy': actor,
+      'resolvedByUid': admin?.uid,
+      'resolvedByEmail': admin?.email,
+      'resolvedByDisplayName': admin?.displayName,
+      'moderationActor': actor,
+      'moderationActorUid': admin?.uid,
+      'moderationActorEmail': admin?.email,
+      'moderationActorDisplayName': admin?.displayName,
+      'moderationUpdatedAt': FieldValue.serverTimestamp(),
+      if (note != null && note.trim().isNotEmpty) 'resolutionNote': note.trim(),
+    };
+  }
+
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
   }
 
   @override
   void dispose() {
-    _tabController.dispose();
     _messageController.dispose();
     _adminChatController.dispose();
     super.dispose();
@@ -131,7 +176,7 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
   Widget build(BuildContext context) {
     return Column(
       children: [
-        // Compact section header and sub-tabs
+        // Compact section header with view toggle
         Container(
           color: Colors.white,
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
@@ -159,24 +204,35 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                     ),
                   ),
                   const Spacer(),
-                  Text(
-                    'Live moderation workspace',
-                    style: TextStyle(
-                      color: Colors.grey.shade600,
-                      fontSize: 12,
-                    ),
+                  // View toggle — always visible so you can switch freely
+                  StreamBuilder<QuerySnapshot>(
+                    stream: FirebaseFirestore.instance
+                        .collection('moderation_queue')
+                        .where('status', isEqualTo: 'pending')
+                        .snapshots(),
+                    builder: (context, snap) {
+                      final pendingCount = snap.hasData ? snap.data!.docs.length : 0;
+                      return Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _ViewToggleButton(
+                            label: 'Moderation Queue',
+                            icon: Icons.shield_outlined,
+                            selected: _communityView == 'queue',
+                            badge: pendingCount > 0 ? '$pendingCount' : null,
+                            onTap: () => setState(() => _communityView = 'queue'),
+                          ),
+                          const SizedBox(width: 6),
+                          _ViewToggleButton(
+                            label: 'Live Feed',
+                            icon: Icons.dynamic_feed_outlined,
+                            selected: _communityView == 'feed',
+                            onTap: () => setState(() => _communityView = 'feed'),
+                          ),
+                        ],
+                      );
+                    },
                   ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              TabBar(
-                controller: _tabController,
-                labelColor: Colors.indigo,
-                unselectedLabelColor: Colors.grey,
-                indicatorColor: Colors.indigo,
-                tabs: const [
-                  Tab(icon: Icon(Icons.gavel), text: 'Moderation Queue'),
-                  Tab(icon: Icon(Icons.forum), text: 'Live Feed'),
                 ],
               ),
             ],
@@ -185,13 +241,9 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
         
         // Content
         Expanded(
-          child: TabBarView(
-            controller: _tabController,
-            children: [
-              _buildModerationQueue(),
-              _buildLiveFeed(),
-            ],
-          ),
+          child: _communityView == 'feed'
+              ? _buildLiveFeed()
+              : _buildModerationQueue(),
         ),
       ],
     );
@@ -200,34 +252,28 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
   Widget _buildModerationQueue() {
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
-          .collection('community_posts')
-          .orderBy('timestamp', descending: true)
-          .limit(100) // Limit to recent posts for performance
+          .collection('moderation_queue')
+          .where('status', isEqualTo: 'pending')
           .snapshots(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
 
-        if (!snapshot.hasData) {
-          return const Center(child: Text('No data'));
+        if (snapshot.hasError) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                'Could not load moderation queue: ${snapshot.error}',
+                style: const TextStyle(color: Colors.redAccent),
+                textAlign: TextAlign.center,
+              ),
+            ),
+          );
         }
 
-        // Client-side filtering for profanity OR manually flagged
-        final flaggedPosts = snapshot.data!.docs.where((doc) {
-          final data = doc.data() as Map<String, dynamic>;
-          final content = (data['content'] as String? ?? '').toLowerCase();
-          
-          // Future V3: Check 'status' field here (e.g. status == 'open')
-          // if (data['status'] == 'resolved') return false; 
-          
-          final containsProfanity = _badWords.any((word) => content.contains(word));
-          final manualFlag = data['isFlagged'] == true; // Support future manual flagging
-          
-          return containsProfanity || manualFlag;
-        }).toList();
-
-        if (flaggedPosts.isEmpty) {
+        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
           return Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -240,7 +286,7 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  'No content flagged for profanity.',
+                  'No pending moderation reports.',
                   style: TextStyle(color: Colors.grey),
                 ),
               ],
@@ -248,17 +294,30 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
           );
         }
 
+        final reports = List<QueryDocumentSnapshot>.from(snapshot.data!.docs);
+        reports.sort((a, b) {
+          final aTs = ((a.data() as Map<String, dynamic>)['timestamp'] as Timestamp?);
+          final bTs = ((b.data() as Map<String, dynamic>)['timestamp'] as Timestamp?);
+          final aMs = aTs?.millisecondsSinceEpoch ?? 0;
+          final bMs = bTs?.millisecondsSinceEpoch ?? 0;
+          return bMs.compareTo(aMs);
+        });
+
         return ListView.builder(
           padding: const EdgeInsets.all(16),
-          itemCount: flaggedPosts.length,
+          itemCount: reports.length,
           itemBuilder: (context, index) {
-            final postDoc = flaggedPosts[index];
-            final post = postDoc.data() as Map<String, dynamic>;
-            final timestamp = (post['timestamp'] as Timestamp?)?.toDate();
+            final reportDoc = reports[index];
+            final report = reportDoc.data() as Map<String, dynamic>;
+            final timestamp = (report['timestamp'] as Timestamp?)?.toDate();
+            final reportedUserId = report['reportedUserId'] as String?;
+            final reportContext = report['context'] as String? ?? 'Unknown';
+            final reason = report['reason'] as String? ?? 'No reason given';
+            final isReelReport = _isReelReport(report);
 
             return Card(
               margin: const EdgeInsets.only(bottom: 12),
-              color: Colors.red.shade50, // Highlight flagged posts
+              color: Colors.red.shade50,
               child: ListTile(
                 leading: CircleAvatar(
                   backgroundColor: Colors.red.shade100,
@@ -266,20 +325,48 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                 ),
                 title: Row(
                   children: [
-                    Text(post['userName'] ?? 'Anonymous', style: const TextStyle(fontWeight: FontWeight.bold)),
+                    Flexible(
+                      child: Text(
+                        report['userName'] ?? reportedUserId ?? 'Unknown User',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
                     const SizedBox(width: 8),
                     if (timestamp != null)
                       Text(
                         DateFormat('MMM d, h:mm a').format(timestamp),
                         style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
                       ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.indigo.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(reportContext, style: const TextStyle(fontSize: 10, color: Colors.indigo)),
+                    ),
                   ],
                 ),
                 subtitle: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const SizedBox(height: 4),
-                    Text(post['content'] ?? ''),
+                    Text(report['content'] ?? ''),
+                    if (isReelReport && (report['reelTitle'] as String?)?.isNotEmpty == true)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          'Reel: ${report['reelTitle']}',
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Reason: $reason',
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600, fontStyle: FontStyle.italic),
+                    ),
                     const SizedBox(height: 8),
                     Wrap(
                       spacing: 8,
@@ -287,16 +374,7 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                         OutlinedButton.icon(
                           icon: const Icon(Icons.person_search, size: 16),
                           label: const Text('Manage User'),
-                          onPressed: () {
-                            final userId = post['userId'];
-                            if (userId != null && widget.onUserSelected != null) {
-                              widget.onUserSelected!(userId);
-                            } else {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Cannot navigate: User ID missing or handler not set')),
-                              );
-                            }
-                          },
+                          onPressed: () => _manageReportedUser(reportedUserId),
                           style: OutlinedButton.styleFrom(
                             foregroundColor: Colors.indigo,
                             side: const BorderSide(color: Colors.indigo),
@@ -304,39 +382,37 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                         ),
                         OutlinedButton.icon(
                           icon: const Icon(Icons.check, size: 16, color: Colors.green),
-                          label: const Text('Resolve (V3 Mock)', style: TextStyle(color: Colors.green)),
-                          onPressed: () async {
-                              // V3 Preparation: This button creates the 'status' and 'assignedTo' fields.
-                              // This ensures the data structure is ready for the future update.
-                              await postDoc.reference.set({
-                                'status': 'resolved',
-                                'resolvedAt': FieldValue.serverTimestamp(),
-                                'assignedTo': 'admin_legacy', // Placeholder for token system
-                              }, SetOptions(merge: true));
-                              
-                              if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('Marked as Resolved (Prepared for V3)')),
-                                );
-                              }
-                          },
+                          label: const Text('Resolve', style: TextStyle(color: Colors.green)),
+                          onPressed: () => _resolveReport(reportDoc),
                           style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.green)),
                         ),
                         OutlinedButton.icon(
-                          icon: const Icon(Icons.delete, size: 16, color: Colors.red),
-                          label: const Text('Delete Post', style: TextStyle(color: Colors.red)),
-                          onPressed: () async {
-                            await postDoc.reference.delete();
-                            if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Post deleted')),
-                              );
-                            }
-                          },
+                          icon: const Icon(Icons.close, size: 16, color: Colors.red),
+                          label: const Text('Dismiss', style: TextStyle(color: Colors.red)),
+                          onPressed: () => _dismissReport(reportDoc),
                           style: OutlinedButton.styleFrom(
                             side: const BorderSide(color: Colors.red),
                           ),
                         ),
+                        if (isReelReport)
+                          OutlinedButton.icon(
+                            icon: const Icon(Icons.open_in_new, size: 16),
+                            label: const Text('View Reel'),
+                            onPressed: () => _openReelFromReport(report),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.indigo,
+                              side: const BorderSide(color: Colors.indigo),
+                            ),
+                          ),
+                        if (isReelReport)
+                          OutlinedButton.icon(
+                            icon: const Icon(Icons.delete_forever, size: 16, color: Colors.red),
+                            label: const Text('Remove Reel', style: TextStyle(color: Colors.red)),
+                            onPressed: () => _removeFlaggedReel(reportDoc, report),
+                            style: OutlinedButton.styleFrom(
+                              side: const BorderSide(color: Colors.red),
+                            ),
+                          ),
                       ],
                     ),
                   ],
@@ -347,6 +423,329 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
         );
       },
     );
+  }
+
+  void _manageReportedUser(String? userId) {
+    if (userId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No user ID on this report')),
+      );
+      return;
+    }
+    if (widget.onUserSelected != null) {
+      widget.onUserSelected!(userId);
+    } else {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Reported User'),
+          content: SelectableText('User ID: $userId'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  bool _isReelReport(Map<String, dynamic> report) {
+    final context = (report['context'] as String? ?? '').toLowerCase();
+    final source = (report['source'] as String? ?? '').toLowerCase();
+    final type = (report['contentType'] as String? ?? '').toLowerCase();
+    return type == 'reel' || context.contains('reel') || source.contains('reel');
+  }
+
+  void _openReelFromReport(Map<String, dynamic> report) {
+    final rawUrl = (report['reelUrl'] as String? ?? '').trim();
+    final reelType = (report['reelType'] as String? ?? '').toLowerCase().trim();
+    final reelTitle = (report['reelTitle'] as String? ?? 'Reel Preview');
+
+    if (rawUrl.isEmpty) {
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Reel URL Not Available'),
+          content: const Text(
+            'This report was submitted before reel URL capture was enabled.\n\n'
+            'To review the reel, go to App Content → Reels and find it by title.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    // Extract YouTube video ID if applicable
+    String? videoId;
+    if (reelType == 'youtube' ||
+        rawUrl.contains('youtube.com') ||
+        rawUrl.contains('youtu.be')) {
+      final pattern = RegExp(
+        r'(?:youtube\.com/(?:watch\?v=|embed/|shorts/)|youtu\.be/)([a-zA-Z0-9_-]{11})',
+      );
+      videoId = pattern.firstMatch(rawUrl)?.group(1);
+    }
+
+    // Use EXACT same logic as _buildReelPreview in app_content_tab
+    Widget media;
+    if (reelType == 'youtube') {
+      media = SizedBox(
+        height: 360,
+        child: VideoGridItem(url: rawUrl, type: 'youtube', enablePreview: true),
+      );
+    } else if (reelType == 'video') {
+      media = SizedBox(
+        height: 360,
+        child: HtmlVideoPreview(
+          url: rawUrl,
+          autoPlay: false,
+          loop: false,
+          muted: false,
+          controls: true,
+          objectFit: 'contain',
+        ),
+      );
+    } else if (reelType == 'image') {
+      media = SizedBox(
+        height: 360,
+        child: Image.network(rawUrl, fit: BoxFit.cover),
+      );
+    } else {
+      media = SizedBox(
+        height: 120,
+        child: Center(
+          child: Text(
+            reelType == 'pdf' ? 'PDF Reel' : 'Link Reel',
+            style: const TextStyle(color: Colors.white70),
+          ),
+        ),
+      );
+    }
+
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        child: SizedBox(
+          width: 900,
+          height: 550,
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        reelTitle,
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.pop(ctx),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(child: media),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _removeFlaggedReel(
+    DocumentSnapshot reportDoc,
+    Map<String, dynamic> report,
+  ) async {
+    final rawUrl = (report['reelUrl'] as String? ?? '').trim();
+    if (rawUrl.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No reel URL found for this report.')),
+        );
+      }
+      return;
+    }
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove Reel?'),
+        content: const Text(
+          'This will remove the reel from App Content (home_screen reelItems) and any exact URL matches in Media Library.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Remove')),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    try {
+      final homeRef = FirebaseFirestore.instance.collection('app_config').doc('home_screen');
+      final homeDoc = await homeRef.get();
+      int removedFromHome = 0;
+
+      if (homeDoc.exists) {
+        final data = homeDoc.data() as Map<String, dynamic>? ?? {};
+        final raw = (data['reelItems'] as List?) ?? const [];
+        final items = raw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        final updated = items.where((item) {
+          final url = (item['url'] as String? ?? '').trim();
+          final keep = url != rawUrl;
+          if (!keep) removedFromHome++;
+          return keep;
+        }).toList();
+
+        await homeRef.set({'reelItems': updated}, SetOptions(merge: true));
+      }
+
+      final mediaQuery = await FirebaseFirestore.instance
+          .collection('media_library')
+          .where('url', isEqualTo: rawUrl)
+          .get();
+
+      for (final doc in mediaQuery.docs) {
+        await doc.reference.delete();
+      }
+
+      await reportDoc.reference.update({
+        ..._buildModerationAuditFields(
+          status: 'resolved',
+          action: 'content_removed_reel',
+          note: 'Removed from Home Reels and Media Library by moderator.',
+        ),
+        'removedFromHomeReels': removedFromHome,
+        'removedFromMediaLibrary': mediaQuery.docs.length,
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Reel removed. Home: $removedFromHome, Media Library: ${mediaQuery.docs.length}',
+            ),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to remove reel: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _resolveReport(DocumentSnapshot reportDoc) async {
+    final action = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Resolve Report — Action Taken'),
+        children: [
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, 'no_action'),
+            child: const ListTile(
+              leading: Icon(Icons.check_circle_outline, color: Colors.grey),
+              title: Text('No action needed'),
+              subtitle: Text('Report reviewed, content is acceptable'),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, 'warned'),
+            child: const ListTile(
+              leading: Icon(Icons.warning_amber, color: Colors.orange),
+              title: Text('User warned'),
+              subtitle: Text('Warning issued to the reported user'),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, 'content_removed'),
+            child: const ListTile(
+              leading: Icon(Icons.delete_outline, color: Colors.red),
+              title: Text('Content removed'),
+              subtitle: Text('The reported content has been deleted'),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, 'user_suspended'),
+            child: const ListTile(
+              leading: Icon(Icons.block, color: Colors.red),
+              title: Text('User suspended'),
+              subtitle: Text('User account has been suspended'),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx),
+            child: const ListTile(
+              leading: Icon(Icons.cancel_outlined, color: Colors.grey),
+              title: Text('Cancel'),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (action == null || !mounted) return;
+
+    try {
+      await reportDoc.reference.update(
+        _buildModerationAuditFields(status: 'resolved', action: action),
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Report resolved'), backgroundColor: Colors.green),
+        );
+      }
+    } catch (e) {
+      debugPrint('_resolveReport error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not resolve report: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _dismissReport(DocumentSnapshot reportDoc) async {
+    try {
+      await reportDoc.reference.update(
+        _buildModerationAuditFields(status: 'dismissed', action: 'dismissed'),
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Report dismissed')),
+        );
+      }
+    } catch (e) {
+      debugPrint('_dismissReport error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not dismiss report: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   Widget _buildLiveFeed() {
@@ -734,6 +1133,74 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
             child: const Text('Send Reply'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Small toggle pill button used in the Community tab header.
+class _ViewToggleButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final String? badge;
+  final VoidCallback onTap;
+
+  const _ViewToggleButton({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+    this.badge,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected ? Colors.indigo : Colors.grey.shade100,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: selected ? Colors.indigo : Colors.grey.shade300,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 14, color: selected ? Colors.white : Colors.grey.shade600),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: selected ? Colors.white : Colors.grey.shade700,
+              ),
+            ),
+            if (badge != null) ...[
+              const SizedBox(width: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                decoration: BoxDecoration(
+                  color: selected ? Colors.white24 : Colors.red,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  badge!,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: selected ? Colors.white : Colors.white,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }

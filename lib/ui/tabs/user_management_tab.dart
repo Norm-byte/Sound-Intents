@@ -16,9 +16,17 @@ class UserManagementTab extends StatefulWidget {
 class _UserManagementTabState extends State<UserManagementTab> {
   String _searchQuery = '';
   String _filterStatus = 'all'; // all, active, suspended, trial
-  String _viewMode = 'users'; // 'users' or 'inbox'
+  String _viewMode = 'users'; // 'users', 'resolved', or 'inbox'
   UserProfile? _selectedUser;
   int _initialDetailTabIndex = 0; // To open specific tab in detail panel
+
+  String _canonicalUserKey(UserProfile user) {
+    final email = user.email.trim().toLowerCase();
+    if (email.isNotEmpty && email != 'no-email@example.com') {
+      return 'email:$email';
+    }
+    return 'id:${user.id.toLowerCase()}';
+  }
 
   @override
   void initState() {
@@ -146,7 +154,7 @@ class _UserManagementTabState extends State<UserManagementTab> {
                         spacing: 8,
                         children: [
                           ChoiceChip(
-                            label: const Text('All Active'),
+                            label: const Text('All Non-Suspended'),
                             selected: _filterStatus == 'all',
                             onSelected: (_) => setState(() => _filterStatus = 'all'),
                           ),
@@ -252,7 +260,17 @@ class _UserManagementTabState extends State<UserManagementTab> {
                       return true;
                     }).toList();
 
-                    if (users.isEmpty) {
+                    // Guard against duplicate cards by collapsing equivalent user records.
+                    final seenUserKeys = <String>{};
+                    final dedupedUsers = <UserProfile>[];
+                    for (final user in users) {
+                      final key = _canonicalUserKey(user);
+                      if (seenUserKeys.add(key)) {
+                        dedupedUsers.add(user);
+                      }
+                    }
+
+                    if (dedupedUsers.isEmpty) {
                       return Center(
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
@@ -270,10 +288,10 @@ class _UserManagementTabState extends State<UserManagementTab> {
 
                     return ListView.separated(
                       padding: const EdgeInsets.all(16),
-                      itemCount: users.length,
+                      itemCount: dedupedUsers.length,
                       separatorBuilder: (_, __) => const SizedBox(height: 12),
                       itemBuilder: (context, index) {
-                        final user = users[index];
+                        final user = dedupedUsers[index];
                         final isSelected = _selectedUser?.id == user.id;
                         return _UserIndexCard(
                           user: user,

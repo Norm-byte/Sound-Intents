@@ -270,10 +270,17 @@ class _AdminHomePageState extends State<AdminHomePage>
   }
 
   List<Widget> _buildTabViews() {
-    // Helper to wrap locked tabs
+    final isSuperAdmin = widget.adminUser.isSuperAdmin;
+    // Helper to wrap locked tabs — passes permKey + isSuperAdmin so the
+    // session store can skip re-entry on subsequent visits to the same tab.
     Widget buildTab(String permKey, String title, Widget child) {
       if (_hasAccess(permKey)) return child;
-      return LockedTabWrapper(title: title, child: child);
+      return LockedTabWrapper(
+        title: title,
+        permKey: permKey,
+        isSuperAdmin: isSuperAdmin,
+        child: child,
+      );
     }
 
     return [
@@ -345,7 +352,7 @@ class _AdminHomePageState extends State<AdminHomePage>
       buildTab('media_library', 'Media Library', const MediaLibraryTab()),
 
       // 5. App Content (promoted to top-level for full-screen workflow)
-      buildTab('system', 'App Content', const AppContentTab()),
+      buildTab('app_content', 'App Content', const AppContentTab()),
 
       // 6. Chat Rooms
       buildTab('chat_management', 'Chat Rooms', const ChatManagementTab()),
@@ -354,7 +361,7 @@ class _AdminHomePageState extends State<AdminHomePage>
       buildTab('topics', 'Topics', const YoutubeLibraryTab()),
 
       // 8. Community & Communication
-      buildTab('chat_management', 'Community', const CommunityTab()),
+      buildTab('community', 'Community', const CommunityTab()),
 
       // 9. Monetization / Deals
       buildTab('monetization', 'Deals', const MonetizationTab()),

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -19,14 +18,6 @@ class LegalTab extends StatefulWidget {
 }
 
 class _LegalTabState extends State<LegalTab> {
-  // Locking State - RESTORED
-  bool _isLocked = true;
-  bool _isLoadingLockState = true;
-  final _unlockController = TextEditingController();
-  String? _storedSecurityPassword;
-  String? _storedVipCode;
-  String? _storedDirectVipCode;
-
   // Legal Content State
   String _selectedDocId = 'terms';
   Map<String, String?> _pdfUrls = {};
@@ -41,95 +32,7 @@ class _LegalTabState extends State<LegalTab> {
   @override
   void initState() {
     super.initState();
-    _loadLockState();
     _loadAllDocs();
-  }
-
-  Future<void> _loadLockState() async {
-    setState(() => _isLoadingLockState = true);
-    try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) return;
-
-      // 1. Get Security Password
-      final userDoc = await FirebaseFirestore.instance
-          .collection('admin_users')
-          .doc(user.uid)
-          .get();
-
-      _storedSecurityPassword = userDoc.data()?['security_password'];
-
-      // 2. Get VIP Code
-      final vipQuery = await FirebaseFirestore.instance
-          .collection('vip_codes')
-          .where('assignee', isEqualTo: user.email)
-          .get();
-
-      if (vipQuery.docs.isNotEmpty) {
-        final superAdminCode = vipQuery.docs.firstWhere(
-            (d) => d.data()['type'] == 'super_admin',
-            orElse: () => vipQuery.docs.first);
-        _storedVipCode = superAdminCode.data()['code'];
-      }
-
-      final directVipCode = userDoc.data()?['vipCode'];
-      if (directVipCode != null) {
-        _storedDirectVipCode = directVipCode;
-      }
-
-      // Auto-unlock if no password set
-      if (_storedSecurityPassword == null) {
-        setState(() => _isLocked = false);
-      }
-    } catch (e) {
-      debugPrint('Error loading lock state: $e');
-    } finally {
-      if (mounted) setState(() => _isLoadingLockState = false);
-    }
-  }
-
-  Future<void> _attemptUnlock() async {
-    final input = _unlockController.text.trim();
-    if (input.isEmpty) return;
-
-    bool unlocked = false;
-    if (_storedSecurityPassword != null && input == _storedSecurityPassword)
-      unlocked = true;
-    if (_storedVipCode != null && input == _storedVipCode) unlocked = true;
-    if (_storedDirectVipCode != null && input == _storedDirectVipCode)
-      unlocked = true;
-
-    if (!unlocked) {
-      try {
-        final query = await FirebaseFirestore.instance
-            .collection('vip_codes')
-            .where('code', isEqualTo: input)
-            .where('type', isEqualTo: 'super_admin')
-            .where('status', isEqualTo: 'active')
-            .limit(1)
-            .get();
-
-        if (query.docs.isNotEmpty) {
-          unlocked = true;
-        }
-      } catch (e) {
-        debugPrint('Error checking VIP code: $e');
-      }
-    }
-
-    if (unlocked) {
-      setState(() {
-        _isLocked = false;
-        _unlockController.clear();
-      });
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Incorrect password or VIP code'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
   }
 
   Widget _buildPdfViewer(String url) {
@@ -145,12 +48,6 @@ class _LegalTabState extends State<LegalTab> {
       url,
     );
   }
-
-/*
-  Future<void> _attemptUnlock() async {
-    ... Removed ...
-  }
-*/
 
   Future<void> _loadAllDocs() async {
     setState(() => _isLoading = true);
@@ -230,63 +127,6 @@ class _LegalTabState extends State<LegalTab> {
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoadingLockState) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    if (_isLocked) {
-      return Center(
-        child: Card(
-          elevation: 4,
-          child: Container(
-            width: 400,
-            padding: const EdgeInsets.all(32),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.lock, size: 64, color: Colors.indigo),
-                const SizedBox(height: 24),
-                const Text(
-                  'Legal Tab Locked',
-                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Please enter your Security Password or VIP Code to access legal document management.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.grey),
-                ),
-                const SizedBox(height: 24),
-                TextField(
-                  controller: _unlockController,
-                  obscureText: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Password / VIP Code',
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.vpn_key),
-                  ),
-                  onSubmitted: (_) => _attemptUnlock(),
-                ),
-                const SizedBox(height: 24),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: _attemptUnlock,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.indigo,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                    ),
-                    child: const Text('Unlock'),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
     final selectedDoc = _documents.firstWhere((d) => d['id'] == _selectedDocId);
     final selectedUrl = _pdfUrls[_selectedDocId];
 

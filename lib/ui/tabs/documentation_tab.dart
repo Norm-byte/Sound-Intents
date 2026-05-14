@@ -119,6 +119,22 @@ class DocumentationTab extends StatelessWidget {
           '• Pin crucial messages to the top of rooms.',
         ),
         _buildSection(
+          'Translation Toggle (User App)',
+          'Harmony now includes a per-device Translation Toggle in Community Room, published Chat Rooms, and Support Chat.\n'
+          '• Toggle ON: The app translates incoming message text for the reader based on their phone language.\n'
+          '• Toggle OFF: Users see original message text as posted.\n'
+          '• Sender behavior: Users can write in their own language; readers choose whether to view translated text.\n'
+          '• Current language targets: English, French, German, Dutch, Spanish, Romanian, Swedish, and Hindi.\n'
+          '• Fallback behavior: Unsupported locales currently fall back to English output.\n'
+          '• Operational note: Translation is intended for engagement and accessibility, but moderators should still review original context when handling sensitive reports.',
+        ),
+        _buildSection(
+          'Admin Translation Status',
+          'The Translation Toggle is currently implemented in the User App message surfaces.\n'
+          '• Included now: Community Room, Chat Rooms, and Support Chat for end users.\n'
+          '• Next phase (admin-side): add the same translate control in Admin moderation/reply views so operators can read and respond faster across languages.',
+        ),
+        _buildSection(
           'Media Library',
           'Upload and manage assets (videos, images). \n'
           '• Linking YouTube videos here makes them available for "Cinema Mode" events.',

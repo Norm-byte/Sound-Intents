@@ -67,6 +67,13 @@ service cloud.firestore {
     match /support_inbox/{document=**} {
       allow read, write: if true; // Write: Users send alerts. Read: Admins view inbox. 
     }
+
+    // Moderation Queue - User reports and admin actions
+    match /moderation_queue/{reportId} {
+      allow create: if true;
+      allow read: if isActiveAdmin();
+      allow update, delete: if isActiveAdmin();
+    }
     
     // Admin access requests - users can create their own, super-admins can read/update all
     match /admin_access_requests/{requestId} {

@@ -246,14 +246,18 @@ class FullVideoPlayer extends StatefulWidget {
 class _FullVideoPlayerState extends State<FullVideoPlayer> {
   late VideoPlayerController _controller;
   bool _initialized = false;
+  bool _playbackStarted = false;
 
   @override
   void initState() {
     super.initState();
     _controller = VideoPlayerController.networkUrl(Uri.parse(widget.url))
       ..initialize().then((_) {
-        setState(() => _initialized = true);
-        _controller.play();
+        _controller.setLooping(false);
+        _controller.setVolume(1.0);
+        if (mounted) {
+          setState(() => _initialized = true);
+        }
       });
   }
 
@@ -282,7 +286,15 @@ class _FullVideoPlayerState extends State<FullVideoPlayer> {
               ),
               onPressed: () {
                 setState(() {
-                  _controller.value.isPlaying ? _controller.pause() : _controller.play();
+                  if (_controller.value.isPlaying) {
+                    _controller.pause();
+                  } else {
+                    if (!_playbackStarted) {
+                      _controller.setVolume(1.0);
+                      _playbackStarted = true;
+                    }
+                    _controller.play();
+                  }
                 });
               },
             ),
@@ -320,8 +332,9 @@ class HtmlVideoPreview extends StatelessWidget {
       return const Center(child: Icon(Icons.videocam, color: Colors.white54, size: 48));
     }
 
-    // Unique view ID so each widget instance gets its own element.
-    final viewId = 'html-video-${url.hashCode}';
+    // Use a unique view ID per instance to avoid any stale browser video state.
+    final viewId =
+      'html-video-${DateTime.now().microsecondsSinceEpoch}-${url.hashCode}';
 
     // ignore: undefined_prefixed_name
     ui_web.platformViewRegistry.registerViewFactory(viewId, (int id) {
@@ -334,7 +347,12 @@ class HtmlVideoPreview extends StatelessWidget {
       if (controls) video.controls = true;
       if (autoPlay) video.autoplay = true;
       if (loop) video.loop = true;
-      if (muted) video.muted = true;
+      video.muted = muted;
+      video.defaultMuted = muted;
+      if (!muted) {
+        video.volume = 1.0;
+      }
+      video.setAttribute('playsinline', 'true');
       return video;
     });
 
