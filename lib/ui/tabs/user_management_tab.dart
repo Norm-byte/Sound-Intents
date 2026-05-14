@@ -1806,46 +1806,103 @@ DateTime? _safeDate(dynamic val) {
 void _showQuickReplyPicker(BuildContext context, TextEditingController controller) {
   showDialog(
     context: context,
-    builder: (ctx) => AlertDialog(
-      title: const Row(children: [Icon(Icons.flash_on, color: Colors.amber), SizedBox(width: 8), Text('Quick Replies')]),
-      content: SizedBox(
-        width: 400,
-        height: 500,
-        child: ListView.separated(
-          itemCount: kQuickReplies.length,
-          separatorBuilder: (_, __) => const Divider(height: 1),
-          itemBuilder: (context, index) {
-            final reply = kQuickReplies[index];
-            return ListTile(
-              visualDensity: VisualDensity.compact,
-              title: Text(reply.text, style: const TextStyle(fontSize: 13)),
-              subtitle: Text(reply.category.toUpperCase(), style: TextStyle(fontSize: 10, color: Colors.indigo.shade300, fontWeight: FontWeight.bold)),
-              onTap: () {
-                 final text = reply.text;
-                 final selection = controller.selection;
-                 if (selection.isValid && selection.start >= 0) {
-                   final newText = controller.text.replaceRange(selection.start, selection.end, text);
-                   controller.value = TextEditingValue(
-                     text: newText,
-                     selection: TextSelection.collapsed(offset: selection.start + text.length),
-                   );
-                 } else {
-                    // Append if not empty, else replace
-                   if (controller.text.isNotEmpty) {
-                      controller.text = '${controller.text}\n$text';
-                   } else {
-                      controller.text = text;
-                   }
-                 }
-                Navigator.pop(ctx);
+    builder: (ctx) => ValueListenableBuilder<bool>(
+      valueListenable: TranslationService.instance.enabledNotifier,
+      builder: (ctx, enabled, _) {
+        return AlertDialog(
+          title: Row(
+            children: [
+              const Icon(Icons.flash_on, color: Colors.amber),
+              const SizedBox(width: 8),
+              const Expanded(child: Text('Quick Replies')),
+              IconButton(
+                tooltip: enabled ? 'Disable Translator' : 'Enable Translator',
+                icon: Icon(
+                  Icons.translate,
+                  color: enabled ? Colors.indigo : Colors.grey,
+                ),
+                onPressed: () async {
+                  await TranslationService.instance.setEnabled(!enabled);
+                },
+              ),
+            ],
+          ),
+          content: SizedBox(
+            width: 440,
+            height: 520,
+            child: ListView.separated(
+              itemCount: kQuickReplies.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (context, index) {
+                final reply = kQuickReplies[index];
+                return ListTile(
+                  visualDensity: VisualDensity.compact,
+                  title: Text(reply.text, style: const TextStyle(fontSize: 13)),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        reply.category.toUpperCase(),
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: Colors.indigo.shade300,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      if (enabled) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          'Translated preview:',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Colors.grey.shade600,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        TranslatableText(
+                          reply.text,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey.shade700,
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  onTap: () {
+                    final text = reply.text;
+                    final selection = controller.selection;
+                    if (selection.isValid && selection.start >= 0) {
+                      final newText = controller.text.replaceRange(
+                        selection.start,
+                        selection.end,
+                        text,
+                      );
+                      controller.value = TextEditingValue(
+                        text: newText,
+                        selection: TextSelection.collapsed(
+                          offset: selection.start + text.length,
+                        ),
+                      );
+                    } else {
+                      if (controller.text.isNotEmpty) {
+                        controller.text = '${controller.text}\n$text';
+                      } else {
+                        controller.text = text;
+                      }
+                    }
+                    Navigator.pop(ctx);
+                  },
+                );
               },
-            );
-          },
-        ),
-      ),
-       actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-      ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ],
+        );
+      },
     ),
   );
 }

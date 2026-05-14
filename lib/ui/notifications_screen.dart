@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import '../services/translation_service.dart';
+import '../widgets/translatable_text.dart';
 
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
@@ -29,6 +31,19 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     'zone_JST', // Japan Standard Time
     'zone_IST', // India Standard Time
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    TranslationService.instance.init();
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _bodyController.dispose();
+    super.dispose();
+  }
 
   Future<void> _sendNotification() async {
     if (!_formKey.currentState!.validate()) return;
@@ -113,6 +128,35 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 style: TextStyle(color: Colors.grey),
               ),
               const SizedBox(height: 32),
+              Align(
+                alignment: Alignment.centerRight,
+                child: ValueListenableBuilder<bool>(
+                  valueListenable: TranslationService.instance.enabledNotifier,
+                  builder: (context, enabled, _) {
+                    return OutlinedButton.icon(
+                      onPressed: () async {
+                        await TranslationService.instance.setEnabled(!enabled);
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              !enabled
+                                  ? 'Translator enabled for push preview'
+                                  : 'Translator disabled for push preview',
+                            ),
+                          ),
+                        );
+                      },
+                      icon: Icon(
+                        Icons.translate,
+                        color: enabled ? Colors.indigo : Colors.grey,
+                      ),
+                      label: Text(enabled ? 'Translator: ON' : 'Translator: OFF'),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 16),
 
               // Target Topic
               DropdownButtonFormField<String>(
@@ -145,6 +189,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 ),
                 validator: (value) =>
                     value == null || value.isEmpty ? 'Please enter a title' : null,
+                onChanged: (_) => setState(() {}),
               ),
               const SizedBox(height: 24),
 
@@ -160,6 +205,64 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 maxLines: 3,
                 validator: (value) =>
                     value == null || value.isEmpty ? 'Please enter a message body' : null,
+                onChanged: (_) => setState(() {}),
+              ),
+              ValueListenableBuilder<bool>(
+                valueListenable: TranslationService.instance.enabledNotifier,
+                builder: (context, enabled, _) {
+                  if (!enabled) return const SizedBox.shrink();
+                  final title = _titleController.text.trim();
+                  final body = _bodyController.text.trim();
+                  if (title.isEmpty && body.isEmpty) {
+                    return const SizedBox.shrink();
+                  }
+                  return Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(top: 16),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.indigo.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.indigo.shade100),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Translated Push Preview',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            color: Colors.indigo.shade700,
+                          ),
+                        ),
+                        if (title.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            'Title',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey.shade700,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          TranslatableText(title),
+                        ],
+                        if (body.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            'Body',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey.shade700,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          TranslatableText(body),
+                        ],
+                      ],
+                    ),
+                  );
+                },
               ),
               const SizedBox(height: 32),
 
