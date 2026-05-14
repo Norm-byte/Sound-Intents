@@ -3,6 +3,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 import '../widgets/video_widgets.dart';
+import '../../services/translation_service.dart';
+import '../../widgets/translatable_text.dart';
 
 class CommunityTab extends StatefulWidget {
   final Function(String userId)? onUserSelected;
@@ -73,6 +75,7 @@ class _CommunityTabState extends State<CommunityTab> {
   @override
   void initState() {
     super.initState();
+    TranslationService.instance.init();
   }
 
   @override
@@ -204,6 +207,33 @@ class _CommunityTabState extends State<CommunityTab> {
                     ),
                   ),
                   const Spacer(),
+                  ValueListenableBuilder<bool>(
+                    valueListenable: TranslationService.instance.enabledNotifier,
+                    builder: (context, enabled, _) {
+                      return IconButton(
+                        tooltip: enabled
+                            ? 'Disable Translator'
+                            : 'Enable Translator',
+                        onPressed: () async {
+                          await TranslationService.instance.setEnabled(!enabled);
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                !enabled
+                                    ? 'Translator enabled for moderation and live feed'
+                                    : 'Translator disabled for moderation and live feed',
+                              ),
+                            ),
+                          );
+                        },
+                        icon: Icon(
+                          Icons.translate,
+                          color: enabled ? Colors.indigo : Colors.grey,
+                        ),
+                      );
+                    },
+                  ),
                   // View toggle — always visible so you can switch freely
                   StreamBuilder<QuerySnapshot>(
                     stream: FirebaseFirestore.instance
@@ -353,7 +383,7 @@ class _CommunityTabState extends State<CommunityTab> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const SizedBox(height: 4),
-                    Text(report['content'] ?? ''),
+                    TranslatableText(report['content'] ?? ''),
                     if (isReelReport && (report['reelTitle'] as String?)?.isNotEmpty == true)
                       Padding(
                         padding: const EdgeInsets.only(top: 4),
@@ -366,6 +396,40 @@ class _CommunityTabState extends State<CommunityTab> {
                     Text(
                       'Reason: $reason',
                       style: TextStyle(fontSize: 12, color: Colors.grey.shade600, fontStyle: FontStyle.italic),
+                    ),
+                    ValueListenableBuilder<bool>(
+                      valueListenable: TranslationService.instance.enabledNotifier,
+                      builder: (context, enabled, _) {
+                        if (!enabled || reason.trim().isEmpty) {
+                          return const SizedBox.shrink();
+                        }
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Reason (translated): ',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey.shade700,
+                                  fontStyle: FontStyle.italic,
+                                ),
+                              ),
+                              Expanded(
+                                child: TranslatableText(
+                                  reason,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey.shade700,
+                                    fontStyle: FontStyle.italic,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
                     ),
                     const SizedBox(height: 8),
                     Wrap(
@@ -1020,7 +1084,7 @@ class _CommunityTabState extends State<CommunityTab> {
                            // Badge to show origin if needed, but the dropdown context is enough
                         ],
                       ),
-                      subtitle: Text(content),
+                      subtitle: TranslatableText(content),
                       trailing: PopupMenuButton(
                         onSelected: (value) async {
                           if (value == 'delete') {

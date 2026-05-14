@@ -3,7 +3,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import '../../models/user_profile.dart';
 import '../../services/lock_service.dart';
+import '../../services/translation_service.dart';
 import '../../utils/quick_replies.dart';
+import '../../widgets/translatable_text.dart';
 
 class UserManagementTab extends StatefulWidget {
   final String? initialUserId;
@@ -31,6 +33,7 @@ class _UserManagementTabState extends State<UserManagementTab> {
   @override
   void initState() {
     super.initState();
+    TranslationService.instance.init();
     if (widget.initialUserId != null) {
       _loadInitialUser();
     }
@@ -351,8 +354,46 @@ class _UserManagementTabState extends State<UserManagementTab> {
           padding: const EdgeInsets.all(12),
           width: double.infinity,
           color: Colors.indigo.shade50,
-          child: const Text('Support Inbox (Recent Thread Activity)', 
-            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.indigo)),
+          child: Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Support Inbox (Recent Thread Activity)',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.indigo,
+                  ),
+                ),
+              ),
+              ValueListenableBuilder<bool>(
+                valueListenable: TranslationService.instance.enabledNotifier,
+                builder: (context, enabled, _) {
+                  return IconButton(
+                    tooltip: enabled
+                        ? 'Disable Translator'
+                        : 'Enable Translator',
+                    onPressed: () async {
+                      await TranslationService.instance.setEnabled(!enabled);
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            !enabled
+                                ? 'Translator enabled for support views'
+                                : 'Translator disabled for support views',
+                          ),
+                        ),
+                      );
+                    },
+                    icon: Icon(
+                      Icons.translate,
+                      color: enabled ? Colors.indigo : Colors.grey,
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
         ),
         Expanded(
           child: StreamBuilder<QuerySnapshot>(
@@ -415,7 +456,11 @@ class _UserManagementTabState extends State<UserManagementTab> {
                     subtitle: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                         Text(msg['content'] ?? 'New Message', maxLines: 2, overflow: TextOverflow.ellipsis),
+                         TranslatableText(
+                           msg['content'] ?? 'New Message',
+                           maxLines: 2,
+                           overflow: TextOverflow.ellipsis,
+                         ),
                       ],
                     ),
                     onTap: () async {
@@ -1365,6 +1410,12 @@ class _CommunicationsTabState extends State<_CommunicationsTab> {
   final ScrollController _scrollController = ScrollController();
 
   @override
+  void initState() {
+    super.initState();
+    TranslationService.instance.init();
+  }
+
+  @override
   void dispose() {
     _messageController.dispose();
     _scrollController.dispose();
@@ -1404,6 +1455,49 @@ class _CommunicationsTabState extends State<_CommunicationsTab> {
   Widget build(BuildContext context) {
     return Column(
       children: [
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+          child: Row(
+            children: [
+              Text(
+                'Customer Support Translation',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey.shade700,
+                ),
+              ),
+              const Spacer(),
+              ValueListenableBuilder<bool>(
+                valueListenable: TranslationService.instance.enabledNotifier,
+                builder: (context, enabled, _) {
+                  return TextButton.icon(
+                    onPressed: () async {
+                      await TranslationService.instance.setEnabled(!enabled);
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            !enabled
+                                ? 'Translator enabled for support views'
+                                : 'Translator disabled for support views',
+                          ),
+                        ),
+                      );
+                    },
+                    icon: Icon(
+                      Icons.translate,
+                      size: 18,
+                      color: enabled ? Colors.indigo : Colors.grey,
+                    ),
+                    label: Text(enabled ? 'ON' : 'OFF'),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
         Expanded(
           child: StreamBuilder<QuerySnapshot>(
             stream: FirebaseFirestore.instance
@@ -1497,7 +1591,7 @@ class _CommunicationsTabState extends State<_CommunicationsTab> {
                             ],
                           ),
                           const SizedBox(height: 4),
-                          Text(msg['content'] ?? ''),
+                          TranslatableText(msg['content'] ?? ''),
                         ],
                       ),
                     ),

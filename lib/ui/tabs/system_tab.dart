@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'admin_management_tab.dart';
 import 'user_management_tab.dart';
 import 'welcome_screen_manager.dart';
+import '../../services/translation_service.dart';
+import '../../widgets/translatable_text.dart';
 
 class SystemTab extends StatefulWidget {
   const SystemTab({super.key});
@@ -297,6 +298,7 @@ class _ChatSafetyTabState extends State<ChatSafetyTab> {
   void initState() {
     super.initState();
     _loadBannedWords();
+    TranslationService.instance.init();
   }
 
   Future<void> _loadBannedWords() async {
@@ -439,6 +441,35 @@ class _ChatSafetyTabState extends State<ChatSafetyTab> {
                    const Text('Blocked Words List', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
                    const SizedBox(height: 8),
                    const Text('Messages containing these words will be flagged for moderation.', style: TextStyle(color: Colors.grey)),
+                   const SizedBox(height: 8),
+                   Align(
+                     alignment: Alignment.centerLeft,
+                     child: ValueListenableBuilder<bool>(
+                       valueListenable: TranslationService.instance.enabledNotifier,
+                       builder: (context, enabled, _) {
+                         return OutlinedButton.icon(
+                           onPressed: () async {
+                             await TranslationService.instance.setEnabled(!enabled);
+                             if (!context.mounted) return;
+                             ScaffoldMessenger.of(context).showSnackBar(
+                               SnackBar(
+                                 content: Text(
+                                   !enabled
+                                       ? 'Translator enabled for Safety & Filter'
+                                       : 'Translator disabled for Safety & Filter',
+                                 ),
+                               ),
+                             );
+                           },
+                           icon: Icon(
+                             Icons.translate,
+                             color: enabled ? Colors.indigo : Colors.grey,
+                           ),
+                           label: Text(enabled ? 'Translator: ON' : 'Translator: OFF'),
+                         );
+                       },
+                     ),
+                   ),
                    const SizedBox(height: 16),
                    
                    Row(children: [
@@ -480,7 +511,7 @@ class _ChatSafetyTabState extends State<ChatSafetyTab> {
                            itemBuilder: (ctx, index) {
                              final word = _bannedWords[index];
                              return ListTile(
-                               title: Text(word),
+                               title: TranslatableText(word),
                                trailing: IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () => _removeWord(word)),
                              );
                            },
@@ -503,7 +534,43 @@ class _ChatSafetyTabState extends State<ChatSafetyTab> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Filter Test Tool', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Filter Test Tool',
+                          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                      ValueListenableBuilder<bool>(
+                        valueListenable: TranslationService.instance.enabledNotifier,
+                        builder: (context, enabled, _) {
+                          return IconButton(
+                            tooltip: enabled
+                                ? 'Disable Translator'
+                                : 'Enable Translator',
+                            onPressed: () async {
+                              await TranslationService.instance.setEnabled(!enabled);
+                              if (!context.mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    !enabled
+                                        ? 'Translator enabled for Safety & Filter'
+                                        : 'Translator disabled for Safety & Filter',
+                                  ),
+                                ),
+                              );
+                            },
+                            icon: Icon(
+                              Icons.translate,
+                              color: enabled ? Colors.indigo : Colors.grey,
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: 8),
                   const Text('Type a sentence to check if it would be flagged.', style: TextStyle(color: Colors.grey)),
                   const SizedBox(height: 24),
@@ -515,6 +582,42 @@ class _ChatSafetyTabState extends State<ChatSafetyTab> {
                       hintText: 'e.g. "This works fine" or "You are a [bad word]"',
                       border: OutlineInputBorder(),
                     ),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                  ValueListenableBuilder<bool>(
+                    valueListenable: TranslationService.instance.enabledNotifier,
+                    builder: (context, enabled, _) {
+                      if (!enabled || _testController.text.trim().isEmpty) {
+                        return const SizedBox.shrink();
+                      }
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 12),
+                        child: Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: Colors.indigo.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.indigo.shade100),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Translated preview',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.indigo.shade700,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              TranslatableText(_testController.text.trim()),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
                   ),
                   const SizedBox(height: 16),
                   SizedBox(
