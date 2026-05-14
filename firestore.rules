@@ -29,6 +29,33 @@ service cloud.firestore {
              request.resource.data.uid == request.auth.uid &&
              request.resource.data.role == 'super-admin';
     }
+
+        function isCommunityReactionOnlyUpdate() {
+          let oldLikes =
+            (resource.data.keys().hasAny(['likes']) && resource.data.likes is int)
+              ? resource.data.likes
+              : 0;
+          let newLikes = request.resource.data.likes;
+          let oldLikedBySize =
+            (resource.data.keys().hasAny(['likedBy']) &&
+                resource.data.likedBy is list)
+              ? resource.data.likedBy.size()
+              : 0;
+          let newLikedBySize =
+            request.resource.data.likedBy is list
+              ? request.resource.data.likedBy.size()
+              : -999;
+
+          return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+               'likes',
+               'likedBy',
+             ]) &&
+             newLikes is int &&
+             request.resource.data.likedBy is list &&
+             (newLikes == oldLikes + 1 || newLikes == oldLikes - 1) &&
+             (newLikedBySize == oldLikedBySize + 1 ||
+              newLikedBySize == oldLikedBySize - 1);
+        }
     
     // Admin users collection - only admins can read, only super-admins can write
     match /admin_users/{userId} {
@@ -182,7 +209,9 @@ service cloud.firestore {
       allow read: if true;
       // TEMPORARY: Allow public create for User App (no auth)
       allow create: if true; 
-      allow update, delete: if isActiveAdmin() || (isSignedIn() && request.auth.uid == resource.data.userId);
+      allow update, delete: if isActiveAdmin() ||
+                            (isSignedIn() && request.auth.uid == resource.data.userId) ||
+                            isCommunityReactionOnlyUpdate();
     }
 
     // App Configuration (Dynamic Content)

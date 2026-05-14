@@ -481,7 +481,31 @@ class _UserManagementTabState extends State<UserManagementTab> {
                           
                           // Lock Logic
                           if (_selectedUser?.id != user.id) {
-                            // ... Locking logic ...
+                            try {
+                              final lockedBy = await LockService().acquireLock(user.id, 'user');
+                              if (lockedBy != null) {
+                                if (context.mounted) {
+                                  showDialog(
+                                    context: context,
+                                    builder: (ctx) => AlertDialog(
+                                      title: Row(children: [
+                                        const Icon(Icons.lock, color: Colors.orange),
+                                        const SizedBox(width: 8),
+                                        const Text('Locked'),
+                                      ]),
+                                      content: Text('This support thread is currently being handled by administrator "$lockedBy".\n\nPlease wait for them to finish.'),
+                                      actions: [
+                                        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+                                      ],
+                                    ),
+                                  );
+                                }
+                                return;
+                              }
+                            } catch (e) {
+                              debugPrint('Lock error in support inbox (ignored): $e');
+                            }
+
                              if (_selectedUser != null) {
                                LockService().releaseLock(_selectedUser!.id, 'user').catchError((e) {});
                              }

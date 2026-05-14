@@ -123,10 +123,23 @@ class LockService {
   Future<void> releaseLock(String resourceId, String resourceType) async {
     if (_user == null) return;
     final lockRef = _firestore.collection('admin_locks').doc('${resourceType}_$resourceId');
-    
-    // Optimistically delete, but only if we own it? 
-    // For simplicity, we just delete it. If we unlocked someone else's stale lock, that's fine.
-    await lockRef.delete();
+
+    await _firestore.runTransaction((transaction) async {
+      final doc = await transaction.get(lockRef);
+      if (!doc.exists) return;
+
+      final data = doc.data() ?? <String, dynamic>{};
+      final lockedByUid = data['lockedByUid'] as String?;
+      final lockedAt = (data['lockedAt'] as Timestamp?)?.toDate();
+      final isStale =
+          lockedAt != null && DateTime.now().difference(lockedAt).inMinutes > 10;
+
+      // Only the lock owner can release a live lock.
+      // Any admin may clear a stale lock.
+      if (lockedByUid == _user!.uid || isStale) {
+        transaction.delete(lockRef);
+      }
+    });
   }
 
   /// Check lock status without trying to acquire
