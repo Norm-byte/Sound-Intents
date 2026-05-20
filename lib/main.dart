@@ -63,7 +63,7 @@ class HarmonyAdminApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Harmony Admin FIXED',
+      title: 'Harmony Admin',
       theme: ThemeData(
         useMaterial3: true,
         primarySwatch: Colors.indigo,
@@ -164,12 +164,12 @@ class _AdminAccessWrapper extends StatelessWidget {
           AdminUser admin;
           try {
             admin = AdminUser.fromJson(data);
+            // Debug: log what we received
+            debugPrint('ADMIN_DEBUG: User ${user.email} parsed with role=${admin.role}, permissions=${admin.permissions}, isSuperAdmin=${admin.isSuperAdmin}');
           } catch (e) {
             debugPrint('Error parsing admin user: $e');
-            // If parsing fails, show restricted screen so they can use "Fix My Account" to repair the data
             return const AccessRestrictedScreen(
-              reason:
-                  'Profile data corrupted. Please click "Fix My Account" to repair.',
+              reason: 'Profile data is invalid. Please contact your admin supervisor.',
             );
           }
 
@@ -263,10 +263,17 @@ class _AdminHomePageState extends State<AdminHomePage>
     final permissions = widget.adminUser.permissions;
     final isSuperAdmin = widget.adminUser.isSuperAdmin;
 
-    if (isSuperAdmin) return true;
-    if (permissions == null || permissions.isEmpty)
+    if (isSuperAdmin) {
+      debugPrint('ADMIN_DEBUG: _hasAccess($key) = TRUE (super-admin)');
+      return true;
+    }
+    if (permissions == null || permissions.isEmpty) {
+      debugPrint('ADMIN_DEBUG: _hasAccess($key) = FALSE (no permissions)');
       return false; // Default to locked if no permissions explicitly granted
-    return permissions.contains(key);
+    }
+    final hasIt = permissions.contains(key);
+    debugPrint('ADMIN_DEBUG: _hasAccess($key) = $hasIt (permissions=$permissions)');
+    return hasIt;
   }
 
   List<Widget> _buildTabViews() {

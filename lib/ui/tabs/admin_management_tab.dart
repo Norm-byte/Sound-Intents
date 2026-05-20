@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 import 'dart:math';
@@ -46,6 +47,8 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
   bool _isSettingPassword = false;
   String? _storedSecurityPassword;
   String? _storedVipCode;
+  String? _selectedAdminUid;
+  String? _selectedAdminEmail;
 
   // Admin Permissions Defaults — keys must match buildTab() calls in main.dart
   final Map<String, bool> _defaultAdminPermissions = {
@@ -181,50 +184,26 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
     }
 
     try {
-      // Create the admin user document in Firestore
-      // Note: We can't easily create the Auth user without logging out, 
-      // so we'll create the record and let them sign up or use a secondary process.
-      // For now, we'll assume this record acts as an invite/permission set.
-      
+      final normalizedEmail = _emailController.text.trim().toLowerCase();
+      final displayName = _nameController.text.trim();
+      final initialPassword = _passwordController.text.trim();
+
       // Calculate permissions list
       final allowedTabs = _newAdminPermissions.entries
           .where((e) => e.value)
           .map((e) => e.key)
           .toList();
 
-      // NEW: Generate VIP Code (Always for new admins)
-      String? vipCodeToShare;
-      String? vipCodeForRecord;
-
-      // Always generate
-      final code = _generateCode();
-      final formattedCode = '${code.substring(0, 4)}-${code.substring(4, 8)}';
-      vipCodeToShare = formattedCode;
-      vipCodeForRecord = formattedCode;
-
-      await FirebaseFirestore.instance.collection('vip_codes').add({
-        'code': formattedCode,
-        'assignee': _nameController.text.trim(),
-        'contactInfo': _emailController.text.trim(),
-        'status': 'active',
-        'vipQuotaTier': 'tier_beta',
-        'createdAt': FieldValue.serverTimestamp(),
-        'redeemedBy': null,
-        'redeemedAt': null,
-        'type': 'admin_gift',
-      });
-
-      await FirebaseFirestore.instance.collection('admin_users').add({
-        'email': _emailController.text.trim(),
-        'displayName': _nameController.text.trim(),
-        'role': 'admin',
-        'isActive': true,
+      final result = await FirebaseFunctions.instance
+          .httpsCallable('provisionAdminOperator')
+          .call({
+        'email': normalizedEmail,
+        'displayName': displayName,
+        'initialPassword': initialPassword,
         'permissions': allowedTabs,
-        'createdAt': FieldValue.serverTimestamp(),
-        'invitedBy': FirebaseAuth.instance.currentUser?.email,
-        'initialPassword': _passwordController.text.trim(),
-        'vipCode': vipCodeForRecord,
       });
+
+      final existed = (result.data as Map?)?['existed'] == true;
 
       // Send password reset email as an invite mechanism if possible, 
       // or just rely on them signing up with this email.
@@ -232,21 +211,24 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Admin user added! They can now access the admin panel with these permissions.'),
+          SnackBar(
+            content: Text(
+              existed
+                  ? 'Existing account linked as an operator and permissions updated.'
+                  : 'Admin user added. They can now access the admin panel with these permissions.',
+            ),
             backgroundColor: Colors.green,
           ),
         );
 
-        // Create Invitiation Message
-        final inviteMsg = "Welcome to the Harmony by Intent Admin Team, ${_nameController.text.trim()}.\n\n"
+        // Create invitation message for the operator login only.
+        final inviteMsg = "Welcome to the Harmony by Intent Admin Team, $displayName.\n\n"
             "Your Operator Access Credentials:\n"
-            "Email: ${_emailController.text.trim()}\n"
-            "Initial Password: ${_passwordController.text.trim()}\n"
-            "App VIP Code: $vipCodeToShare\n\n"
+          "Email: $normalizedEmail\n"
+            "Initial Password: $initialPassword\n\n"
             "Please log in to the Admin Panel to begin.";
 
-        _showShareDialog(vipCodeToShare, _nameController.text.trim(), _emailController.text.trim(), customMessage: inviteMsg);
+        _showShareDialog(initialPassword, displayName, normalizedEmail, customMessage: inviteMsg);
       
         setState(() {
           // _showAddForm = false; // Keep form open as requested
@@ -260,10 +242,75 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error adding admin: $e'), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text('Error adding admin: $e'),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     }
+  }
+
+  void _loadAdminIntoOnboardForm(String uid, Map<String, dynamic> data) {
+    final permissions = List<String>.from(data['permissions'] ?? const []);
+    final nextPermissions = Map<String, bool>.from(_defaultAdminPermissions);
+    for (final permission in permissions) {
+      if (nextPermissions.containsKey(permission)) {
+        nextPermissions[permission] = true;
+      }
+    }
+
+    setState(() {
+      _selectedAdminUid = uid;
+      _selectedAdminEmail = (data['email'] ?? '').toString();
+      _nameController.text = (data['displayName'] ?? '').toString();
+      _emailController.text = _selectedAdminEmail!;
+      _passwordController.clear();
+      _newAdminPermissions = nextPermissions;
+    });
+  }
+
+  void _clearOnboardSelection() {
+    setState(() {
+      _selectedAdminUid = null;
+      _selectedAdminEmail = null;
+      _nameController.clear();
+      _emailController.clear();
+      _passwordController.clear();
+      _newAdminPermissions = Map<String, bool>.from(_defaultAdminPermissions);
+    });
+  }
+
+  Future<void> _updateSelectedAdminPermissions() async {
+    final selectedUid = _selectedAdminUid;
+    if (selectedUid == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Select an operator from Current Admin Team first.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    final allowedTabs = _newAdminPermissions.entries
+        .where((e) => e.value)
+        .map((e) => e.key)
+        .toList();
+
+    await FirebaseFirestore.instance.collection('admin_users').doc(selectedUid).update({
+      'permissions': allowedTabs,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Permissions updated for ${_nameController.text.trim().isEmpty ? 'the selected operator' : _nameController.text.trim()}.'),
+        backgroundColor: Colors.green,
+      ),
+    );
   }
 
   void _resetPassword(String email) async {
@@ -802,6 +849,33 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
                   ],
                 ),
                 const SizedBox(height: 16),
+                if (_selectedAdminUid != null)
+                  Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(bottom: 16),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.blue.shade100),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.edit_note, color: Colors.indigo),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'Editing ${_nameController.text.trim()} (${_selectedAdminEmail ?? ''}). Adjust the checkboxes, then tap Update Operator Permissions.',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: _clearOnboardSelection,
+                          child: const Text('Clear'),
+                        ),
+                      ],
+                    ),
+                  ),
                 
                 const Text('Tab Permissions:', style: TextStyle(fontWeight: FontWeight.bold)),
                 const SizedBox(height: 8),
@@ -829,16 +903,40 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
                 ),
                 const SizedBox(height: 24),
                 Center(
-                  child: ElevatedButton.icon(
-                    onPressed: _addAdmin,
-                    icon: const Icon(Icons.save),
-                    label: const Text('Create Admin User'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.indigo, // Darker blue
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 16),
-                      textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                    ),
+                  child: Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    alignment: WrapAlignment.center,
+                    children: [
+                      ElevatedButton.icon(
+                        onPressed: _addAdmin,
+                        icon: const Icon(Icons.save),
+                        label: const Text('Create Admin User'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.indigo,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                          textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _selectedAdminUid == null ? null : _updateSelectedAdminPermissions,
+                        icon: const Icon(Icons.upgrade),
+                        label: const Text('Update Operator Permissions'),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                          textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Center(
+                  child: Text(
+                    'Tip: select a team member below to load their existing permissions into these checkboxes.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                    textAlign: TextAlign.center,
                   ),
                 ),
               ],
@@ -865,24 +963,40 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
                   itemCount: docs.length,
                   separatorBuilder: (ctx, i) => const Divider(height: 1),
                   itemBuilder: (context, index) {
-                    final data = docs[index].data() as Map<String, dynamic>;
+                    final doc = docs[index];
+                    final data = doc.data() as Map<String, dynamic>;
                     final name = data['displayName'] ?? 'Unknown';
                     final role = data['role'] ?? 'admin';
                     final isActive = data['isActive'] ?? true;
+                    final isSelected = _selectedAdminUid == doc.id;
                     // Hiding Super Admin from here as requested
                     if (role == 'super-admin') return const SizedBox.shrink();
 
-                    return ListTile(
-                      leading: CircleAvatar(
-                        backgroundColor: isActive ? Colors.indigo.shade100 : Colors.red.shade100,
-                        child: Icon(Icons.person, color: isActive ? Colors.indigo : Colors.red),
+                    return Material(
+                      color: isSelected ? Colors.indigo.shade50 : Colors.transparent,
+                      child: ListTile(
+                        onTap: () => _loadAdminIntoOnboardForm(doc.id, data),
+                        leading: CircleAvatar(
+                          backgroundColor: isActive ? Colors.indigo.shade100 : Colors.red.shade100,
+                          child: Icon(Icons.person, color: isActive ? Colors.indigo : Colors.red),
+                        ),
+                        title: Text(name),
+                        subtitle: Text('${data['email'] ?? ''} • ${role.toUpperCase()}'),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (isSelected)
+                              const Padding(
+                                padding: EdgeInsets.only(right: 8),
+                                child: Icon(Icons.check_circle, color: Colors.indigo),
+                              ),
+                            isActive 
+                                ? const Chip(label: Text('ACTIVE', style: TextStyle(color: Colors.white, fontSize: 10)), backgroundColor: Colors.green)
+                                : const Chip(label: Text('INACTIVE', style: TextStyle(color: Colors.white, fontSize: 10)), backgroundColor: Colors.red),
+                          ],
+                        ),
                       ),
-                      title: Text(name),
-                      subtitle: Text(role.toUpperCase()),
-                      trailing: isActive 
-                          ? const Chip(label: Text('ACTIVE', style: TextStyle(color: Colors.white, fontSize: 10)), backgroundColor: Colors.green)
-                          : const Chip(label: Text('INACTIVE', style: TextStyle(color: Colors.white, fontSize: 10)), backgroundColor: Colors.red),
-                    );
+                      );
                   },
                 ),
               );

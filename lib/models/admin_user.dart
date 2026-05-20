@@ -1,3 +1,5 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 class AdminUser {
   final String uid;
   final String email;
@@ -44,15 +46,25 @@ class AdminUser {
       displayName: json['displayName'] as String,
       role: json['role'] as String,
       isActive: json['isActive'] as bool? ?? true,
-      createdAt: DateTime.parse(json['createdAt'] as String),
-      lastLogin: json['lastLogin'] != null 
-          ? DateTime.parse(json['lastLogin'] as String)
-          : null,
-      lastActive: json['lastActive'] != null 
-          ? DateTime.parse(json['lastActive'] as String)
-          : null,
+      createdAt: _parseDate(json['createdAt']) ?? DateTime.now(),
+      lastLogin: _parseDate(json['lastLogin']),
+      lastActive: _parseDate(json['lastActive']),
       permissions: (json['permissions'] as List<dynamic>?)?.map((e) => e.toString()).toList(),
     );
+  }
+
+  static DateTime? _parseDate(dynamic value) {
+    if (value == null) return null;
+    if (value is DateTime) return value;
+    if (value is Timestamp) return value.toDate();
+    if (value is String && value.isNotEmpty) {
+      try {
+        return DateTime.parse(value);
+      } catch (_) {
+        return null;
+      }
+    }
+    return null;
   }
 
   AdminUser copyWith({

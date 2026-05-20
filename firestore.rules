@@ -73,9 +73,15 @@ service cloud.firestore {
                         request.resource.data.role == 'super-admin' &&
                         !existsAfter(/databases/$(database)/documents/admin_users/__check__));
       
-      // Allow update/delete only for super-admins
-      // Exception: Allow users to update their own "lastLogin" or self-heal if they are already super-admin
-      allow update: if isSuperAdmin() || (request.auth.uid == userId);
+      // Allow update/delete only for super-admins.
+      // Exception: user can only update their own session heartbeat timestamps.
+      allow update: if isSuperAdmin() ||
+                       (isSignedIn() &&
+                        request.auth.uid == userId &&
+                        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                          'lastLogin',
+                          'lastActive'
+                        ]));
       
       allow delete: if isSuperAdmin();
     }

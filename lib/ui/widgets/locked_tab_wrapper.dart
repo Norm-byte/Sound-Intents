@@ -59,7 +59,7 @@ class _LockedTabWrapperState extends State<LockedTabWrapper> {
             ),
             const SizedBox(height: 12),
             const Text(
-              'Contact a super-admin to request access.',
+              'Contact your admin supervisor to request access.',
               style: TextStyle(
                 fontSize: 12,
                 color: Colors.grey,
