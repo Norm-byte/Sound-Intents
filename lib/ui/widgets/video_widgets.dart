@@ -230,7 +230,26 @@ class YouTubePlayerWidget extends StatelessWidget {
       width: 800,
       height: 450,
       color: Colors.black,
-      child: HtmlElementView(viewType: viewId),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: HtmlElementView(viewType: viewId),
+          ),
+          // Absorb clicks on YouTube's title strip so it cannot hand off
+          // to an external YouTube page from inside the admin viewer.
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 64,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {},
+              child: const SizedBox.expand(),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../widgets/video_widgets.dart';
 // ignore: avoid_web_libraries_in_flutter
 // ignore: avoid_web_libraries_in_flutter
@@ -44,6 +43,68 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
   String? _selectedSubcategory; // For content creation/editing
   String? _previewSectionId; // For the phone preview navigation
   String? _previewSubcategory; // For subcategory navigation in preview
+  bool _useCompactTopicTileText = false;
+
+  String _normalizeTopicLabel(String input) {
+    return input
+        // Convert non-breaking spaces to normal spaces.
+        .replaceAll('\u00A0', ' ')
+        // Remove zero-width/invisible separators that can cause odd joins.
+        .replaceAll(RegExp(r'[\u200B\u200C\u200D\uFEFF]'), '')
+        // Normalize whitespace runs.
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  String _displayTopicLabel(String input, {bool hyphenate = false}) {
+    final normalized = _normalizeTopicLabel(input);
+    if (!hyphenate) return normalized;
+    return _softHyphenateLongWords(normalized);
+  }
+
+  String _softHyphenateLongWords(String input) {
+    final normalized = _normalizeTopicLabel(input);
+    return normalized.replaceAllMapped(RegExp(r'\S+'), (match) {
+      final token = match.group(0)!;
+      // Start helping earlier so words like "synchronicity" wrap cleanly.
+      if (token.length <= 10) return token;
+
+      final buffer = StringBuffer();
+      var start = 0;
+      while (start < token.length) {
+        final end = (start + 8 < token.length) ? start + 8 : token.length;
+        buffer.write(token.substring(start, end));
+        if (end < token.length) {
+          // Soft hyphen: rendered only when the line wraps.
+          buffer.write('\u00AD');
+        }
+        start = end;
+      }
+
+      return buffer.toString();
+    });
+  }
+
+  double _topicTileFontSize(String title) {
+    final compactLength = title.replaceAll(' ', '').length;
+    if (_useCompactTopicTileText) {
+      if (compactLength >= 12) return 8;
+      return 9;
+    }
+
+    if (compactLength >= 12) return 9;
+    return 10;
+  }
+
+  double _topicNavSubcategoryFontSize(String title) {
+    final compactLength = title.replaceAll(' ', '').length;
+    if (_useCompactTopicTileText) {
+      if (compactLength >= 12) return 12;
+      return 13;
+    }
+    if (compactLength >= 12) return 13;
+    return 14;
+  }
 
   @override
   void initState() {
@@ -289,7 +350,7 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
                       children: sections.map((section) {
                         return ListTile(
                           key: ValueKey(section.id),
-                          title: Text(section.title),
+                          title: Text(_displayTopicLabel(section.title)),
                           trailing: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
@@ -490,7 +551,7 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
                          itemCount: subcategories.length,
                          itemBuilder: (ctx, i) => ListTile(
                            dense: true,
-                           title: Text(subcategories[i]),
+                           title: Text(_displayTopicLabel(subcategories[i])),
                            trailing: Row(
                              mainAxisSize: MainAxisSize.min,
                              children: [
@@ -644,7 +705,7 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
                   ),
                   items: [
                     const DropdownMenuItem(value: null, child: Text('User Topics Landing View (General)')),
-                    ..._sections.map((s) => DropdownMenuItem(value: s.id, child: Text(s.title))),
+                    ..._sections.map((s) => DropdownMenuItem(value: s.id, child: Text(_displayTopicLabel(s.title)))),
                   ],
                   onChanged: (value) => setDialogState(() {
                       if (value != _selectedSectionId) {
@@ -892,7 +953,7 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
                   decoration: const InputDecoration(labelText: 'Section'),
                   items: [
                     const DropdownMenuItem(value: null, child: Text('None (General)')),
-                    ..._sections.map((s) => DropdownMenuItem(value: s.id, child: Text(s.title))),
+                    ..._sections.map((s) => DropdownMenuItem(value: s.id, child: Text(_displayTopicLabel(s.title)))),
                   ],
                   onChanged: (value) => setDialogState(() {
                       if (value != _selectedSectionId) {
@@ -1007,7 +1068,7 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
                     decoration: const InputDecoration(labelText: 'Section'),
                     items: [
                       const DropdownMenuItem(value: null, child: Text('User Topics Landing View Topics Landing View (General)')),
-                      ..._sections.map((s) => DropdownMenuItem(value: s.id, child: Text(s.title))),
+                      ..._sections.map((s) => DropdownMenuItem(value: s.id, child: Text(_displayTopicLabel(s.title)))),
                     ],
                     onChanged: (value) => setDialogState(() {
                         if (value != _selectedSectionId) {
@@ -1163,7 +1224,7 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
                   decoration: const InputDecoration(labelText: 'Section'),
                   items: [
                     const DropdownMenuItem(value: null, child: Text('None (General)')),
-                    ..._sections.map((s) => DropdownMenuItem(value: s.id, child: Text(s.title))),
+                    ..._sections.map((s) => DropdownMenuItem(value: s.id, child: Text(_displayTopicLabel(s.title)))),
                   ],
                   onChanged: (value) => setDialogState(() {
                      if (value != _selectedSectionId) {
@@ -1327,6 +1388,26 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
               const Text('• Use the "Star" icon on an item to feature it at the top.'),
               const Text('• Only one item can be featured at a time.'),
               const Text('• Use the trash icon to remove content.'),
+
+              const SizedBox(height: 16),
+              const Text('Category Tile Text Size:', style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  ChoiceChip(
+                    label: const Text('Standard'),
+                    selected: !_useCompactTopicTileText,
+                    onSelected: (_) => setState(() => _useCompactTopicTileText = false),
+                  ),
+                  ChoiceChip(
+                    label: const Text('Compact'),
+                    selected: _useCompactTopicTileText,
+                    onSelected: (_) => setState(() => _useCompactTopicTileText = true),
+                  ),
+                ],
+              ),
               
               const Divider(height: 32),
               const Text('Preview Navigation:', style: TextStyle(fontWeight: FontWeight.bold)),
@@ -1351,7 +1432,11 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
                     ListTile(
                       contentPadding: EdgeInsets.zero,
                       leading: Icon(isSelected ? Icons.folder_open : Icons.folder),
-                      title: Text(section.title),
+                      title: Text(
+                        _displayTopicLabel(section.title),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                       selected: isSelected,
                       selectedTileColor: Colors.indigo.withOpacity(0.1),
                       onTap: () => setState(() {
@@ -1363,7 +1448,12 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
                       ...section.subcategories.map((sub) => ListTile(
                         leading: const SizedBox(width: 24), // Indent
                         contentPadding: const EdgeInsets.only(left: 32, right: 16),
-                        title: Text(sub, style: const TextStyle(fontSize: 14)),
+                        title: Text(
+                          _displayTopicLabel(sub, hyphenate: true),
+                          style: TextStyle(fontSize: _topicNavSubcategoryFontSize(sub)),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                         selected: _previewSubcategory == sub,
                         selectedColor: Colors.purple,
                         onTap: () => setState(() => _previewSubcategory = sub),
@@ -1516,14 +1606,15 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
                                             alignment: Alignment.center,
                                             padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
                                             child: Text(
-                                              section.title,
-                                              style: const TextStyle(
+                                              _displayTopicLabel(section.title, hyphenate: true),
+                                              style: TextStyle(
                                                 color: Colors.white,
-                                                fontSize: 10, // Reduced to 10 for better fit
+                                                fontSize: _topicTileFontSize(section.title),
                                                 fontWeight: FontWeight.w600,
+                                                height: 1.1,
                                               ),
                                               textAlign: TextAlign.center,
-                                              maxLines: 3, 
+                                              maxLines: 2,
                                               overflow: TextOverflow.ellipsis,
                                             ),
                                           ),
@@ -1589,7 +1680,7 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
                               return CustomScrollView(
                                 slivers: [
                                   SliverAppBar(
-                                    title: Text(_previewSubcategory!),
+                                    title: Text(_displayTopicLabel(_previewSubcategory!)),
                                     backgroundColor: Colors.transparent,
                                     leading: IconButton(
                                       icon: const Icon(Icons.arrow_back, color: Colors.white),
@@ -1663,7 +1754,7 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
                             return CustomScrollView(
                               slivers: [
                                 SliverAppBar(
-                                  title: Text(section.title),
+                                  title: Text(_displayTopicLabel(section.title)),
                                   backgroundColor: Colors.transparent,
                                   leading: IconButton(
                                     icon: const Icon(Icons.arrow_back, color: Colors.white),
@@ -1732,11 +1823,12 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
                                                  alignment: Alignment.center,
                                                  padding: const EdgeInsets.all(4),
                                                  child: Text(
-                                                   sub,
-                                                   style: const TextStyle(
+                                                   _displayTopicLabel(sub, hyphenate: true),
+                                                   style: TextStyle(
                                                      color: Colors.white,
-                                                     fontSize: 12,
+                                                     fontSize: _topicTileFontSize(sub),
                                                      fontWeight: FontWeight.w600,
+                                                     height: 1.1,
                                                    ),
                                                    textAlign: TextAlign.center,
                                                    maxLines: 2,
@@ -1817,51 +1909,42 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
               ),
             ),
             const SizedBox(height: 12),
-            InkWell(
-              onTap: type == 'youtube'
-                  ? () {
-                      if (data['url'] != null) {
-                        launchUrl(Uri.parse(data['url']));
-                      }
-                    }
-                  : null,
-              child: Card(
-                margin: EdgeInsets.zero,
-                color: Colors.white.withOpacity(0.1),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Thumbnail
-                    AspectRatio(
-                      aspectRatio: 16 / 9,
-                      child: VideoGridItem(
-                        url: data['url'] ?? '',
-                        thumbnailUrl: data['thumbnailUrl'],
-                        type: type,
-                      ),
+            Card(
+              margin: EdgeInsets.zero,
+              color: Colors.white.withOpacity(0.1),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Thumbnail
+                  AspectRatio(
+                    aspectRatio: 16 / 9,
+                    child: VideoGridItem(
+                      url: data['url'] ?? '',
+                      thumbnailUrl: data['thumbnailUrl'],
+                      type: type,
                     ),
-                    Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            data['title'] ?? 'Untitled',
-                            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            data['description'] ?? '',
-                            style: const TextStyle(color: Colors.white70, fontSize: 14),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
-                      ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          data['title'] ?? 'Untitled',
+                          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          data['description'] ?? '',
+                          style: const TextStyle(color: Colors.white70, fontSize: 14),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -1917,57 +2000,48 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
 
     return Stack(
       children: [
-        InkWell(
-          onTap: type == 'youtube'
-              ? () {
-                  if (data['url'] != null) {
-                    launchUrl(Uri.parse(data['url']));
-                  }
-                }
-              : null,
-          child: Card(
-            margin: EdgeInsets.zero,
-            color: Colors.white.withOpacity(0.1),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  flex: 5,
-                  child: VideoGridItem(
-                    url: data['url'] ?? '',
-                    thumbnailUrl: data['thumbnailUrl'],
-                    type: type,
-                  ),
+        Card(
+          margin: EdgeInsets.zero,
+          color: Colors.white.withOpacity(0.1),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                flex: 5,
+                child: VideoGridItem(
+                  url: data['url'] ?? '',
+                  thumbnailUrl: data['thumbnailUrl'],
+                  type: type,
                 ),
-                Expanded(
-                  flex: 3,
-                  child: Padding(
-                    padding: const EdgeInsets.all(10),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          data['title'] ?? 'Untitled',
-                          maxLines: 2,
+              ),
+              Expanded(
+                flex: 3,
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        data['title'] ?? 'Untitled',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+                      ),
+                      const SizedBox(height: 4),
+                      Expanded(
+                        child: Text(
+                          data['description'] ?? '',
+                          maxLines: 3,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+                          style: const TextStyle(color: Colors.white60, fontSize: 11),
                         ),
-                        const SizedBox(height: 4),
-                        Expanded(
-                          child: Text(
-                            data['description'] ?? '',
-                            maxLines: 3,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: Colors.white60, fontSize: 11),
-                          ),
-                        ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
         // Admin Controls Overlay
