@@ -86,10 +86,27 @@ class _DashboardTabState extends State<DashboardTab> {
   Future<void> _loadAutoSystemState() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final enabled = prefs.getBool('auto_system_enabled') ?? false;
+      var enabled = prefs.getBool('auto_system_enabled') ?? false;
       final skipCurrentWeekOnce =
           prefs.getBool('auto_system_skip_current_week_autopublish_once') ??
               false;
+
+      // Firestore is the authoritative shared source so backend automation
+      // and dashboard UI stay in sync across devices/sessions.
+      try {
+        final remote = await FirebaseFirestore.instance
+            .collection('system_settings')
+            .doc('auto_system')
+            .get();
+        final remoteEnabled = remote.data()?['enabled'];
+        if (remoteEnabled is bool) {
+          enabled = remoteEnabled;
+          await prefs.setBool('auto_system_enabled', enabled);
+        }
+      } catch (e) {
+        debugPrint('Auto-system remote state unavailable, using local: $e');
+      }
+
       if (mounted) {
         setState(() {
           _isAutoSystemEnabled = enabled;
@@ -468,6 +485,18 @@ class _DashboardTabState extends State<DashboardTab> {
                     // Persist state
                     final prefs = await SharedPreferences.getInstance();
                     await prefs.setBool('auto_system_enabled', newValue);
+                    try {
+                      await FirebaseFirestore.instance
+                          .collection('system_settings')
+                          .doc('auto_system')
+                          .set({
+                        'enabled': newValue,
+                        'updatedAt': FieldValue.serverTimestamp(),
+                        'updatedBy': 'admin_dashboard',
+                      }, SetOptions(merge: true));
+                    } catch (e) {
+                      debugPrint('Failed to persist auto-system remote state: $e');
+                    }
 
                     if (_isAutoSystemEnabled) {
                       _checkAutoSystemRules(); // Run check immediately
@@ -475,7 +504,7 @@ class _DashboardTabState extends State<DashboardTab> {
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
-                          content: Text(_isAutoSystemEnabled ? 'Auto-System ACTIVATED: Managing current week + next week draft...' : 'Auto-System DEACTIVATED: Manual control only.'),
+                          content: Text(_isAutoSystemEnabled ? 'Auto-System ACTIVATED: Staged rollover ON (pre-publish upcoming week, then cleanup old week).' : 'Auto-System DEACTIVATED: Manual control only.'),
                           duration: const Duration(seconds: 2),
                           backgroundColor: _isAutoSystemEnabled ? Colors.green : Colors.orange,
                         ),
@@ -499,7 +528,7 @@ class _DashboardTabState extends State<DashboardTab> {
                         ),
                         const SizedBox(width: 4),
                         Text(
-                          _isAutoSystemEnabled ? 'Auto-System: ON' : 'Auto-System: PAUSED', 
+                          _isAutoSystemEnabled ? 'Auto-System: ON (Staged)' : 'Auto-System: PAUSED', 
                           style: TextStyle(
                             color: _isAutoSystemEnabled ? Colors.green : Colors.grey, 
                             fontWeight: FontWeight.bold, 
@@ -609,34 +638,20 @@ class _DashboardTabState extends State<DashboardTab> {
       }
     }).toList();
 
-    String slotStatusKey(DateTime start) =>
-        '${start.year}-${start.month}-${start.day}-${start.hour}-${start.minute}';
-
-    final Set<String> publishedSlotKeys = {};
-    for (var e in weekEvents) {
-      try {
-        final start = effectiveStarts[e.id] ?? DateTime.parse(e.startTimeUTC!);
-        if (e.isPublished) {
-          publishedSlotKeys.add(slotStatusKey(start));
-        }
-      } catch (_) {}
-    }
-
     // Analyze minute slots
     for (var e in weekEvents) {
       try {
          final start = effectiveStarts[e.id] ?? DateTime.parse(e.startTimeUTC!);
          final minute = start.minute;
-         final key = slotStatusKey(start);
          final isDraftLike = !e.isPublished || e.isDraft;
-         final hasPublishedTwin = publishedSlotKeys.contains(key);
          // Normalize minute to nearest bucket if needed, or exact match?
          // Assuming users create events exactly at 0, 15, 30, 45 or close to it.
          // Let's use strict mapping:
          if (hasContentAt.containsKey(minute)) {
              hasContentAt[minute] = true;
            if (e.isPublished) hasPublishedAt[minute] = true;
-             if (isDraftLike && !hasPublishedTwin) hasDraftsAt[minute] = true;
+             // Draft should glow even if an older published twin still exists.
+             if (isDraftLike) hasDraftsAt[minute] = true;
          }
       } catch (_) {}
     }
@@ -657,13 +672,11 @@ class _DashboardTabState extends State<DashboardTab> {
     for (var e in eventsInCurrentView) {
       try {
         final start = effectiveStarts[e.id] ?? DateTime.parse(e.startTimeUTC!);
-        final key = slotStatusKey(start);
         final isDraftLike = !e.isPublished || e.isDraft;
-        final hasPublishedTwin = publishedSlotKeys.contains(key);
         final current = currentViewHourStatus[start.hour] ?? 0;
 
         // Prioritize Draft (2) > Completed/Amber (3) > Published (1)
-        if (isDraftLike && !hasPublishedTwin) {
+        if (isDraftLike) {
           currentViewHourStatus[start.hour] = 2;
         } else {
           final sundaySlotTime = DateTime.utc(
@@ -698,18 +711,13 @@ class _DashboardTabState extends State<DashboardTab> {
     // Let's assume global week drafts for the main button color.
     final bool anyEventsInWeek = eventsInCurrentView.isNotEmpty;
     final bool anyPublishedInWeek = eventsInCurrentView.any((e) => e.isPublished);
-    final bool anyDraftOnlyInWeek = eventsInCurrentView.any((e) {
+    final bool anyDraftsInWeek = eventsInCurrentView.any((e) {
       try {
-        final start = effectiveStarts[e.id] ?? DateTime.parse(e.startTimeUTC!);
-        final key = slotStatusKey(start);
-        final isDraftLike = !e.isPublished || e.isDraft;
-        final hasPublishedTwin = publishedSlotKeys.contains(key);
-        return isDraftLike && !hasPublishedTwin;
+        return !e.isPublished || e.isDraft;
       } catch (_) {
         return false;
       }
     });
-    final bool anyDraftsInWeek = anyDraftOnlyInWeek && !anyPublishedInWeek;
 
     return Card(
       elevation: 2,

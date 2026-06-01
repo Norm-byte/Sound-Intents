@@ -45,7 +45,7 @@ class _LockedTabWrapperState extends State<LockedTabWrapper> {
   void _showAccessDeniedDialog() {
     showDialog(
       context: context,
-      barrierDismissible: true,
+      barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         icon: const Icon(Icons.lock_outline, size: 48, color: Colors.red),
         title: const Text('Access Denied'),
@@ -80,7 +80,47 @@ class _LockedTabWrapperState extends State<LockedTabWrapper> {
 
   @override
   Widget build(BuildContext context) {
-    // Tab is restricted. Render the child (hidden) but show access denied dialog on top.
-    return widget.child;
+    // Security: never render restricted child content for unauthorized users.
+    return Container(
+      color: const Color(0xFFF7F7F7),
+      alignment: Alignment.center,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520),
+        child: Card(
+          elevation: 2,
+          margin: const EdgeInsets.all(24),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.lock, size: 52, color: Colors.redAccent),
+                const SizedBox(height: 12),
+                Text(
+                  '${widget.title} is restricted',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                const Text(
+                  'Your account does not currently have permission to view this area.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 14, color: Colors.black87),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Ask a super-admin to update your operator permissions.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 12, color: Colors.black54),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }

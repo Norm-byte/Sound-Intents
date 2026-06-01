@@ -313,7 +313,24 @@ class _AdminHomePageState extends State<AdminHomePage>
               if (time != null) {
                 final slotId =
                     '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
-                _schedulerSelectionNotifier.value = slotId;
+                if (date != null) {
+                  final now = DateTime.now().toUtc();
+                  final today = DateTime.utc(now.year, now.month, now.day);
+                  final thisWeekMonday =
+                      today.subtract(Duration(days: today.weekday - 1));
+
+                  final selectedUtc =
+                      DateTime.utc(date.year, date.month, date.day);
+                  final selectedMonday = selectedUtc
+                      .subtract(Duration(days: selectedUtc.weekday - 1));
+
+                  final weekOffset =
+                      selectedMonday.difference(thisWeekMonday).inDays ~/ 7;
+                  _schedulerSelectionNotifier.value =
+                      'week:$weekOffset|slot:$slotId';
+                } else {
+                  _schedulerSelectionNotifier.value = slotId;
+                }
               }
             } else {
               ScaffoldMessenger.of(context)
@@ -458,6 +475,40 @@ class _AdminHomePageState extends State<AdminHomePage>
       return !start.isBefore(now);
     }).length;
 
+    // Authoritative conflict map from repository state.
+    // Key: slot minute identity (yyyyMMdd_HHmm), Value: event IDs to delete.
+    String _slotMinuteKey(DateTime utcStart) {
+      final date =
+          '${utcStart.year}${utcStart.month.toString().padLeft(2, '0')}${utcStart.day.toString().padLeft(2, '0')}';
+      final hhmm =
+          '${utcStart.hour.toString().padLeft(2, '0')}${utcStart.minute.toString().padLeft(2, '0')}';
+      return '${date}_$hhmm';
+    }
+
+    final Map<String, Set<String>> conflictingPublishedIdsBySlot = {};
+    try {
+      final repositoryEvents = await _repository.loadEvents();
+      for (final e in repositoryEvents) {
+        if (e.type == 'global') continue;
+        if (e.startTimeUTC == null) continue;
+        if (e.isPublished != true) continue;
+
+        final start = DateTime.parse(e.startTimeUTC!);
+        final inRange =
+            start.isAfter(weekStart.subtract(const Duration(seconds: 1))) &&
+                start.isBefore(weekEnd);
+        if (!inRange) continue;
+        if (minuteFilter != null && start.minute != minuteFilter) continue;
+
+        final slotKey = _slotMinuteKey(start);
+        conflictingPublishedIdsBySlot
+            .putIfAbsent(slotKey, () => <String>{})
+            .add(e.id);
+      }
+    } catch (e) {
+      debugPrint('Publish conflict sweep preload failed: $e');
+    }
+
     int count = 0;
     for (var e in eventsToPublish) {
       try {
@@ -466,10 +517,30 @@ class _AdminHomePageState extends State<AdminHomePage>
         final publishedId = e.id.startsWith('draft_slot_')
             ? e.id.replaceFirst('draft_slot_', 'slot_')
             : e.id;
+
+        // Delete competing published records for the exact same slot start.
+        // This prevents stale tails from older published variants at the same time.
+        final startKey = e.startTimeUTC;
+        if (startKey != null) {
+          final parsedStart = DateTime.tryParse(startKey);
+          final slotKey = parsedStart != null ? _slotMinuteKey(parsedStart) : null;
+          final competingIds = slotKey != null && conflictingPublishedIdsBySlot.containsKey(slotKey)
+              ? conflictingPublishedIdsBySlot[slotKey]!
+              .where((id) => id != publishedId)
+              .toList()
+              : const <String>[];
+          for (final id in competingIds) {
+            try {
+              await _repository.deleteEvent(id);
+            } catch (_) {}
+          }
+        }
+
         final updated = e.copyWith(
           id: publishedId,
           isPublished: true,
           isDraft: false,
+          updatedAt: DateTime.now().toUtc().toIso8601String(),
         );
         await _repository.saveEvent(updated);
         if (e.id.startsWith('draft_slot_') && e.id != publishedId) {

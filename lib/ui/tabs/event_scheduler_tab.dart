@@ -216,13 +216,49 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
     super.dispose();
   }
 
-  void _handleExternalSelection() {
-    final slotId = widget.selectionNotifier?.value;
-    if (slotId != null) {
-      _selectSlot(slotId);
-      // Clear the notifier so we don't re-select on rebuilds unnecessarily
-      widget.selectionNotifier!.value = null;
+  Future<void> _handleExternalSelection() async {
+    final selection = widget.selectionNotifier?.value;
+    if (selection == null) return;
+
+    int? requestedWeekOffset;
+    String slotId = selection;
+
+    // Backward-compatible payload parsing:
+    // - New format: week:<offset>|slot:<HH:mm>
+    // - Legacy format: <HH:mm>
+    if (selection.startsWith('week:') && selection.contains('|slot:')) {
+      final parts = selection.split('|slot:');
+      if (parts.length == 2) {
+        final weekPart = parts.first.replaceFirst('week:', '').trim();
+        final parsedOffset = int.tryParse(weekPart);
+        if (parsedOffset != null) {
+          requestedWeekOffset = parsedOffset;
+        }
+        slotId = parts.last.trim();
+      }
     }
+
+    if (requestedWeekOffset != null && requestedWeekOffset != _selectedWeekOffset) {
+      // Preserve any in-progress edits before switching week context.
+      if (_selectedSlotId != null && !_currentSlotFromLiveOnly) {
+        _saveCurrentSlot();
+      }
+
+      setState(() {
+        _selectedWeekOffset = requestedWeekOffset!;
+        _selectedSlotId = null;
+        _scheduledEventsData.clear();
+        _deletedSlots.clear();
+        _currentSlotFromLiveOnly = false;
+      });
+
+      await _loadDraftFromLocal();
+    }
+
+    _selectSlot(slotId);
+
+    // Clear the notifier so we don't re-select on rebuilds unnecessarily.
+    widget.selectionNotifier!.value = null;
   }
 
   /// Calculates the "Target Date" for the selected week offset
@@ -874,8 +910,6 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
   }
 
   String _getWeekDateRange(int offset) {
-    if (offset == 0) return 'This Week';
-    if (offset == 1) return 'Next Week';
     final now = DateTime.now();
     // Monday of current week
     final currentMonday = now.subtract(Duration(days: now.weekday - 1));
@@ -884,7 +918,10 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
     final targetSunday = targetMonday.add(const Duration(days: 6));
 
     final f = DateFormat('MMM d');
-    return '${f.format(targetMonday)} - ${f.format(targetSunday)}';
+    final range = '${f.format(targetMonday)} - ${f.format(targetSunday)}';
+    if (offset == 0) return '$range (This Week)';
+    if (offset == 1) return '$range (Next Week)';
+    return range;
   }
 
   int _getISOWeekNumber(DateTime date) {

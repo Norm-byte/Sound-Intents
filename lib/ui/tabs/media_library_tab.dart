@@ -1148,7 +1148,11 @@ class _MediaLibraryTabState extends State<MediaLibraryTab> {
         title: const Text('Rename Section'),
         content: TextField(
           controller: controller,
-          decoration: const InputDecoration(labelText: 'New Name'),
+          decoration: const InputDecoration(
+            labelText: 'New Name',
+            border: OutlineInputBorder(),
+          ),
+          autofocus: true,
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
