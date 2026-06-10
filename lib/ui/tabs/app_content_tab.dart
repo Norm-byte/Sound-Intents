@@ -37,6 +37,8 @@ class _AppContentTabState extends State<AppContentTab> {
 
   // Config Data
   String? _backgroundImageUrl;
+  String? _logoUrl;
+  double _logoSize = 80.0;
   bool _showBulletin = false;
   bool _showLiveStats = false;
   bool _showFeatured = false;
@@ -88,6 +90,8 @@ class _AppContentTabState extends State<AppContentTab> {
         _featuredUrlController.text = data['featuredUrl'] ?? '';
         _featuredTitleController.text = data['featuredTitle'] ?? '';
         _featuredBodyController.text = data['featuredBody'] ?? '';
+        _logoUrl = data['logoUrl'] as String?;
+        _logoSize = (data['logoSize'] as num?)?.toDouble() ?? 80.0;
 
         _showReelCarousel = data['showReelCarousel'] ?? false;
         _reelAutoRotateSeconds =
@@ -109,6 +113,19 @@ class _AppContentTabState extends State<AppContentTab> {
         // Defaults
         _titleController.text = 'Welcome to Harmony';
         _messageController.text = 'Your journey begins here.';
+      }
+
+      // Backward compatibility: if home_screen has no logo, fall back to welcome_screen.
+      if (_logoUrl == null) {
+        final welcomeDoc = await FirebaseFirestore.instance
+            .collection('app_config')
+            .doc('welcome_screen')
+            .get();
+        if (welcomeDoc.exists) {
+          final welcomeData = welcomeDoc.data()!;
+          _logoUrl = welcomeData['logoUrl'] as String?;
+          _logoSize = (welcomeData['logoSize'] as num?)?.toDouble() ?? 80.0;
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -181,9 +198,21 @@ class _AppContentTabState extends State<AppContentTab> {
         'featuredUrl': _featuredUrlController.text.trim(),
         'featuredTitle': _featuredTitleController.text.trim(),
         'featuredBody': _featuredBodyController.text.trim(),
+        'logoUrl': _logoUrl,
+        'logoSize': _logoSize,
         'showReelCarousel': _showReelCarousel,
         'reelAutoRotateSeconds': _reelAutoRotateSeconds,
         'reelItems': _reelItems,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true)).timeout(const Duration(seconds: 60));
+
+      // Welcome logo controls are stored on welcome_screen.
+      await FirebaseFirestore.instance
+          .collection('app_config')
+          .doc('welcome_screen')
+          .set({
+        'logoUrl': _logoUrl,
+        'logoSize': _logoSize,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true)).timeout(const Duration(seconds: 60));
 
@@ -204,18 +233,24 @@ class _AppContentTabState extends State<AppContentTab> {
           (serverData['featuredUrl'] as String? ?? '').trim();
         final publishedFeaturedType =
           (serverData['featuredType'] as String? ?? '').trim();
+        final publishedLogoUrl = (serverData['logoUrl'] as String?) ?? '';
+        final publishedLogoSize =
+          (serverData['logoSize'] as num?)?.toDouble() ?? 80.0;
         final publishedReelAutoRotateSeconds =
           (serverData['reelAutoRotateSeconds'] as num?)?.toInt() ?? 8;
         final publishedReelItems = (serverData['reelItems'] as List?) ?? const [];
       final expectedBulletinText = _bulletinController.text.trim();
         final expectedFeaturedUrl = _featuredUrlController.text.trim();
         final expectedFeaturedType = _featuredType.trim();
+      final expectedLogoUrl = _logoUrl ?? '';
       if (publishedShowBulletin != _showBulletin ||
           publishedBulletinText != expectedBulletinText ||
           publishedShowFeatured != _showFeatured ||
           publishedShowReelCarousel != _showReelCarousel ||
           publishedFeaturedUrl != expectedFeaturedUrl ||
           publishedFeaturedType != expectedFeaturedType ||
+          publishedLogoUrl != expectedLogoUrl ||
+          (publishedLogoSize - _logoSize).abs() > 0.01 ||
           publishedReelAutoRotateSeconds != _reelAutoRotateSeconds ||
           publishedReelItems.length != _reelItems.length) {
         throw Exception(
@@ -480,6 +515,181 @@ class _AppContentTabState extends State<AppContentTab> {
             ),
           );
         }),
+      ),
+    );
+  }
+
+  Future<void> _pickLogoFromMediaLibrary() async {
+    String? selectedSection;
+
+    await showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        child: StatefulBuilder(
+          builder: (context, setDialogState) {
+            return Container(
+              width: 800,
+              height: 600,
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Select App Logo',
+                          style: Theme.of(context).textTheme.titleLarge),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ],
+                  ),
+                  const Divider(),
+                  Row(
+                    children: [
+                      const Text('Filter by Section: '),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: StreamBuilder<List<MediaItem>>(
+                          stream: _mediaLibrary.getMediaStream(),
+                          builder: (context, snapshot) {
+                            if (!snapshot.hasData) {
+                              return const LinearProgressIndicator();
+                            }
+                            final allItems = snapshot.data!;
+                            final sections = allItems
+                                .map((e) => e.section)
+                                .toSet()
+                                .toList()
+                              ..sort();
+
+                            return DropdownButton<String>(
+                              value: selectedSection,
+                              hint: const Text('Select Category'),
+                              isExpanded: true,
+                              items: [
+                                const DropdownMenuItem(
+                                  value: 'All',
+                                  child: Text('All Categories'),
+                                ),
+                                ...sections.map(
+                                  (s) => DropdownMenuItem(
+                                    value: s,
+                                    child: Text(s),
+                                  ),
+                                ),
+                              ],
+                              onChanged: (val) {
+                                setDialogState(() => selectedSection = val);
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Expanded(
+                    child: StreamBuilder<List<MediaItem>>(
+                      stream:
+                          _mediaLibrary.getMediaStream(section: selectedSection),
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState ==
+                            ConnectionState.waiting) {
+                          return const Center(child: CircularProgressIndicator());
+                        }
+                        if (snapshot.hasError) {
+                          return Center(child: Text('Error: ${snapshot.error}'));
+                        }
+                        final allFiles = snapshot.data ?? [];
+                        if (allFiles.isEmpty) {
+                          return const Center(
+                            child: Text('No media found in this section.'),
+                          );
+                        }
+
+                        return GridView.builder(
+                          gridDelegate:
+                              const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 4,
+                            crossAxisSpacing: 10,
+                            mainAxisSpacing: 10,
+                          ),
+                          itemCount: allFiles.length,
+                          itemBuilder: (context, index) {
+                            final item = allFiles[index];
+                            final lower = item.url.toLowerCase();
+                            final isImage = item.type == 'image' ||
+                                lower.contains('.jpg') ||
+                                lower.contains('.jpeg') ||
+                                lower.contains('.png') ||
+                                lower.contains('.webp');
+
+                            return InkWell(
+                              onTap: () {
+                                if (!isImage) {
+                                  ScaffoldMessenger.of(this.context)
+                                      .showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                          'Logo must be an image (PNG/JPG/WEBP).'),
+                                      backgroundColor: Colors.orange,
+                                    ),
+                                  );
+                                  return;
+                                }
+                                setState(() => _logoUrl = item.url);
+                                Navigator.pop(context);
+                              },
+                              child: Card(
+                                clipBehavior: Clip.antiAlias,
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  children: [
+                                    Expanded(
+                                      child: isImage
+                                          ? Image.network(
+                                              item.url,
+                                              fit: BoxFit.cover,
+                                              errorBuilder: (ctx, _, __) =>
+                                                  const Center(
+                                                      child: Icon(
+                                                          Icons.broken_image)),
+                                            )
+                                          : Container(
+                                              color: Colors.grey.shade200,
+                                              child: const Center(
+                                                child: Icon(
+                                                  Icons.block,
+                                                  color: Colors.redAccent,
+                                                ),
+                                              ),
+                                            ),
+                                    ),
+                                    Padding(
+                                      padding: const EdgeInsets.all(4.0),
+                                      child: Text(
+                                        item.name,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(fontSize: 12),
+                                        textAlign: TextAlign.center,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
       ),
     );
   }
@@ -850,7 +1060,79 @@ class _AppContentTabState extends State<AppContentTab> {
 
                 const SizedBox(height: 32),
 
-                // 2. Bulletin Board
+                // 2. App Logo (Welcome Screen)
+                _buildSectionHeader('App Logo (Welcome Screen)'),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Logo source'),
+                  subtitle: Text(
+                    _logoUrl != null ? 'Custom logo selected' : 'Default icon',
+                  ),
+                  trailing: Wrap(
+                    spacing: 8,
+                    children: [
+                      if (_logoUrl != null)
+                        TextButton(
+                          onPressed: () => setState(() => _logoUrl = null),
+                          child: const Text('Remove',
+                              style: TextStyle(color: Colors.red)),
+                        ),
+                      ElevatedButton.icon(
+                        onPressed: _pickLogoFromMediaLibrary,
+                        icon: const Icon(Icons.photo_library),
+                        label: const Text('Select Logo'),
+                      ),
+                    ],
+                  ),
+                ),
+                if (_logoUrl != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Container(
+                        width: 84,
+                        height: 84,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.grey.shade300),
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.network(
+                            _logoUrl!,
+                            fit: BoxFit.contain,
+                            errorBuilder: (context, error, stackTrace) =>
+                                const Center(
+                              child: Icon(Icons.broken_image),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                Row(
+                  children: [
+                    const Text('Logo size'),
+                    const SizedBox(width: 12),
+                    SizedBox(
+                      width: 220,
+                      child: Slider(
+                        value: _logoSize,
+                        min: 40,
+                        max: 160,
+                        divisions: 24,
+                        label: '${_logoSize.round()} px',
+                        onChanged: (v) => setState(() => _logoSize = v),
+                      ),
+                    ),
+                    Text('${_logoSize.round()} px'),
+                  ],
+                ),
+
+                const SizedBox(height: 32),
+
+                // 3. Bulletin Board
                 _buildSectionHeader('Bulletin Board Overlay'),
                 SwitchListTile(
                   title: const Text('Show Bulletin Board'),
@@ -873,7 +1155,7 @@ class _AppContentTabState extends State<AppContentTab> {
 
                 const SizedBox(height: 32),
 
-                // 3. Live Stats
+                // 4. Live Stats
                 _buildSectionHeader('Live Stats'),
                 SwitchListTile(
                   title: const Text('Show Live Stats'),
@@ -885,7 +1167,7 @@ class _AppContentTabState extends State<AppContentTab> {
 
                 const SizedBox(height: 32),
 
-                // 4. Featured Content
+                // 5. Featured Content
                 _buildSectionHeader('Featured Content'),
                 SwitchListTile(
                   title: const Text('Show Featured Content'),
@@ -1001,7 +1283,7 @@ class _AppContentTabState extends State<AppContentTab> {
 
                 const SizedBox(height: 32),
 
-                // 5. Reel Carousel
+                // 6. Reel Carousel
                 _buildSectionHeader('Reel Carousel (Home Loop)'),
                 SwitchListTile(
                   title: const Text('Enable Reel Carousel'),
@@ -1344,8 +1626,26 @@ class _AppContentTabState extends State<AppContentTab> {
                                       const SizedBox(height: 40),
 
                                       // Main Text
-                                      const Icon(Icons.spa,
-                                          size: 60, color: Colors.white70),
+                                      if (_logoUrl != null)
+                                        SizedBox(
+                                          width: _logoSize,
+                                          height: _logoSize,
+                                          child: Image.network(
+                                            _logoUrl!,
+                                            fit: BoxFit.contain,
+                                            errorBuilder:
+                                                (context, error, stackTrace) =>
+                                                    Icon(
+                                              Icons.spa,
+                                              size: _logoSize,
+                                              color: Colors.white70,
+                                            ),
+                                          ),
+                                        )
+                                      else
+                                        Icon(Icons.spa,
+                                            size: _logoSize,
+                                            color: Colors.white70),
                                       const SizedBox(height: 16),
                                       Text(
                                         _titleController.text.isEmpty
@@ -1431,155 +1731,117 @@ class _AppContentTabState extends State<AppContentTab> {
                                                           false))
                                               .toList();
 
-                                          return Container(
-                                            constraints: const BoxConstraints(
-                                                minHeight: 150),
-                                            width: double.infinity,
-                                            decoration: BoxDecoration(
-                                              color: Colors.black54,
-                                              borderRadius:
-                                                  BorderRadius.circular(16),
-                                            ),
-                                            clipBehavior: Clip.antiAlias,
-                                            alignment: Alignment.center,
-                                            child: Stack(
-                                              children: [
-                                                SizedBox(
-                                                  width: double.infinity,
-                                                  child: _buildFeaturedPreview(),
-                                                ),
-                                                if (_showReelCarousel &&
-                                                    enabledReels.isNotEmpty)
-                                                  Positioned(
-                                                    top: 8,
-                                                    left: 8,
-                                                    child: Container(
-                                                      padding:
-                                                          const EdgeInsets.symmetric(
-                                                              horizontal: 8,
-                                                              vertical: 4),
-                                                      decoration: BoxDecoration(
-                                                        color: Colors.black
-                                                            .withOpacity(0.55),
-                                                        borderRadius:
-                                                            BorderRadius.circular(
-                                                                999),
-                                                      ),
-                                                      child: Text(
-                                                        'Reels: ${enabledReels.length} active',
-                                                        style: const TextStyle(
-                                                          color: Colors.white,
-                                                          fontSize: 10,
-                                                          fontWeight:
-                                                              FontWeight.w600,
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  ),
-                                                if (_showReelCarousel &&
-                                                    enabledReels.isNotEmpty)
-                                                  Positioned(
-                                                    top: 8,
-                                                    right: 8,
-                                                    child: Tooltip(
-                                                      message: 'Open Reels',
-                                                      child: GestureDetector(
-                                                        onTap:
-                                                            _openReelsFullscreenPreview,
-                                                        child: Container(
+                                          Widget featuredCard() {
+                                            return Container(
+                                              width: double.infinity,
+                                              padding: const EdgeInsets.all(12),
+                                              decoration: BoxDecoration(
+                                                color:
+                                                    Colors.white.withOpacity(0.1),
+                                                borderRadius:
+                                                    BorderRadius.circular(16),
+                                                border: Border.all(
+                                                    color: Colors.white24),
+                                              ),
+                                              child: Stack(
+                                                children: [
+                                                  Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment.start,
+                                                    children: [
+                                                      if (featuredTitle
+                                                          .isNotEmpty)
+                                                        Padding(
                                                           padding:
                                                               const EdgeInsets
-                                                                  .all(6),
-                                                          decoration: BoxDecoration(
-                                                            color: Colors.black
-                                                                .withOpacity(0.5),
-                                                            shape:
-                                                                BoxShape.circle,
-                                                          ),
-                                                          child: const Icon(
-                                                            Icons
-                                                                .play_circle_fill_rounded,
-                                                            color: Colors
-                                                                .amberAccent,
-                                                            size: 22,
-                                                          ),
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  ),
-                                                if (featuredTitle.isNotEmpty ||
-                                                    featuredBody.isNotEmpty)
-                                                  Positioned(
-                                                    left: 0,
-                                                    right: 0,
-                                                    bottom: 0,
-                                                    child: Container(
-                                                      padding:
-                                                          const EdgeInsets.fromLTRB(
-                                                              12, 16, 12, 12),
-                                                      decoration: BoxDecoration(
-                                                        gradient: LinearGradient(
-                                                          begin:
-                                                              Alignment.topCenter,
-                                                          end: Alignment
-                                                              .bottomCenter,
-                                                          colors: [
-                                                            Colors.transparent,
-                                                            Colors.black
-                                                                .withOpacity(0.78),
-                                                          ],
-                                                        ),
-                                                      ),
-                                                      child: Column(
-                                                        crossAxisAlignment:
-                                                            CrossAxisAlignment
-                                                                .start,
-                                                        children: [
-                                                          if (featuredTitle
-                                                              .isNotEmpty)
-                                                            Text(
-                                                              featuredTitle,
-                                                              maxLines: 2,
-                                                              overflow:
-                                                                  TextOverflow
-                                                                      .ellipsis,
-                                                              style:
-                                                                  const TextStyle(
-                                                                color:
-                                                                    Colors.white,
-                                                                fontSize: 14,
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .bold,
-                                                              ),
+                                                                  .only(
+                                                                  bottom: 8,
+                                                                  right: 72),
+                                                          child: Text(
+                                                            featuredTitle,
+                                                            style:
+                                                                const TextStyle(
+                                                              color:
+                                                                  Colors.white,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .bold,
+                                                              fontSize: 16,
                                                             ),
-                                                          if (featuredBody
-                                                              .isNotEmpty)
-                                                            Padding(
-                                                              padding:
-                                                                  const EdgeInsets
-                                                                      .only(top: 4),
-                                                              child: Text(
-                                                                featuredBody,
-                                                                maxLines: 3,
-                                                                overflow:
-                                                                    TextOverflow
-                                                                        .ellipsis,
+                                                            textAlign:
+                                                                TextAlign.left,
+                                                          ),
+                                                        ),
+                                                      if (featuredBody
+                                                          .isNotEmpty)
+                                                        Padding(
+                                                          padding:
+                                                              const EdgeInsets
+                                                                  .only(
+                                                                  bottom: 12,
+                                                                  right: 72),
+                                                          child: Text(
+                                                            featuredBody,
+                                                            style:
+                                                                const TextStyle(
+                                                              color: Colors
+                                                                  .white70,
+                                                              fontSize: 14,
+                                                            ),
+                                                            textAlign:
+                                                                TextAlign.left,
+                                                          ),
+                                                        ),
+                                                      _buildFeaturedPreview(),
+                                                    ],
+                                                  ),
+                                                  if (_showReelCarousel &&
+                                                      enabledReels.isNotEmpty)
+                                                    Positioned(
+                                                      top: 0,
+                                                      right: 0,
+                                                      child: Tooltip(
+                                                        message: 'Open Reels',
+                                                        child: GestureDetector(
+                                                          onTap:
+                                                              _openReelsFullscreenPreview,
+                                                          child: const Row(
+                                                            mainAxisSize:
+                                                                MainAxisSize
+                                                                    .min,
+                                                            children: [
+                                                              Icon(
+                                                                Icons
+                                                                    .play_circle_fill_rounded,
+                                                                color: Colors
+                                                                    .white70,
+                                                                size: 26,
+                                                              ),
+                                                              SizedBox(
+                                                                  width: 4),
+                                                              Text(
+                                                                'Reels',
                                                                 style:
-                                                                    const TextStyle(
+                                                                    TextStyle(
                                                                   color: Colors
                                                                       .white70,
-                                                                  fontSize: 11,
+                                                                  fontSize: 13,
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .w600,
                                                                 ),
                                                               ),
-                                                            ),
-                                                        ],
+                                                            ],
+                                                          ),
+                                                        ),
                                                       ),
                                                     ),
-                                                  ),
-                                              ],
-                                            ),
-                                          );
+                                                ],
+                                              ),
+                                            );
+                                          }
+
+                                          return featuredCard();
                                         })
                                       else if (_showReelCarousel)
                                         Container(
@@ -2018,14 +2280,14 @@ class _AdminPreviewFlipCardState extends State<_AdminPreviewFlipCard>
         children: [
           widget.frontCard,
           Positioned(
-            top: 8,
-            right: 8,
+            top: 0,
+            right: 0,
             child: Tooltip(
               message: 'View Reel Carousel',
               child: GestureDetector(
                 onTap: _flipToCarousel,
                 child: Container(
-                  padding: const EdgeInsets.all(5),
+                  padding: const EdgeInsets.all(6),
                   decoration: BoxDecoration(
                     color: Colors.black.withOpacity(0.55),
                     shape: BoxShape.circle,
@@ -2033,7 +2295,7 @@ class _AdminPreviewFlipCardState extends State<_AdminPreviewFlipCard>
                   child: const Icon(
                     Icons.view_carousel_outlined,
                     color: Colors.amberAccent,
-                    size: 18,
+                    size: 20,
                   ),
                 ),
               ),
