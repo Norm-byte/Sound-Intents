@@ -330,20 +330,46 @@ class _ChatSafetyTabState extends State<ChatSafetyTab> {
       return;
     }
 
+    final updatedWords = <String>{..._bannedWords, word}.toList()..sort();
+    final previousWords = List<String>.from(_bannedWords);
+
     setState(() {
-      _bannedWords.add(word);
-      _bannedWords.sort();
+      _bannedWords = updatedWords;
       _addWordController.clear();
     });
 
-    await _saveWords();
+    try {
+      await _saveWords(updatedWords);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _bannedWords = previousWords;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to add word: $e'), backgroundColor: Colors.red),
+      );
+    }
   }
 
   Future<void> _removeWord(String word) async {
+    final previousWords = List<String>.from(_bannedWords);
+    final updatedWords = List<String>.from(_bannedWords)..remove(word);
+
     setState(() {
-      _bannedWords.remove(word);
+      _bannedWords = updatedWords;
     });
-    await _saveWords();
+
+    try {
+      await _saveWords(updatedWords);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _bannedWords = previousWords;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to remove word: $e'), backgroundColor: Colors.red),
+      );
+    }
   }
 
   Future<void> _seedDefaults() async {
@@ -389,19 +415,36 @@ class _ChatSafetyTabState extends State<ChatSafetyTab> {
       "ficken", "verdammt", "arsch", "miststueck"
     ];
     
-    _bannedWords.addAll(defaults);
-    // Unique
-    _bannedWords = _bannedWords.toSet().toList()..sort();
-    
-    await _saveWords();
-    setState(() => _isLoading = false);
-    
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Standards-Based Safety Blocklist Loaded.')));
+    final previousWords = List<String>.from(_bannedWords);
+    try {
+      final updatedWords = <String>{..._bannedWords, ...defaults}.toList()..sort();
+      await _saveWords(updatedWords);
+      if (!mounted) return;
+      setState(() {
+        _bannedWords = updatedWords;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Standards-Based Safety Blocklist Loaded.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _bannedWords = previousWords;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not load safety blocklist: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
-  Future<void> _saveWords() async {
+  Future<void> _saveWords(List<String> words) async {
     await FirebaseFirestore.instance.collection('system_settings').doc('profanity_filter').set({
-      'banned_words': _bannedWords,
+      'banned_words': words,
       'last_updated': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
   }

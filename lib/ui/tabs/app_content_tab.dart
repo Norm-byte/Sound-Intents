@@ -1417,56 +1417,170 @@ class _AppContentTabState extends State<AppContentTab> {
                                       const SizedBox(height: 16),
 
                                       if (_showFeatured)
-                                        Container(
-                                          constraints: const BoxConstraints(
-                                              minHeight: 150),
-                                          width: double.infinity,
-                                          decoration: BoxDecoration(
-                                            color: Colors.black54,
-                                            borderRadius:
-                                                BorderRadius.circular(16),
-                                          ),
-                                          clipBehavior: Clip.antiAlias,
-                                          alignment: Alignment.center,
-                                          child: Stack(
-                                            children: [
-                                              SizedBox(
-                                                width: double.infinity,
-                                                child: _buildFeaturedPreview(),
-                                              ),
-                                              if (_showReelCarousel &&
-                                                  _reelItems.isNotEmpty)
-                                                Positioned(
-                                                  top: 8,
-                                                  right: 8,
-                                                  child: Tooltip(
-                                                    message: 'Open Reels',
-                                                    child: GestureDetector(
-                                                      onTap:
-                                                          _openReelsFullscreenPreview,
-                                                      child: Container(
-                                                        padding:
-                                                            const EdgeInsets
-                                                                .all(6),
-                                                        decoration: BoxDecoration(
-                                                          color: Colors.black
-                                                              .withOpacity(0.5),
-                                                          shape: BoxShape.circle,
-                                                        ),
-                                                        child: const Icon(
-                                                          Icons
-                                                              .play_circle_fill_rounded,
-                                                          color:
-                                                              Colors.amberAccent,
-                                                          size: 22,
+                                        Builder(builder: (_) {
+                                          final featuredTitle =
+                                              _featuredTitleController.text.trim();
+                                          final featuredBody =
+                                              _featuredBodyController.text.trim();
+                                          final enabledReels = _reelItems
+                                              .where((item) =>
+                                                  item['enabled'] != false &&
+                                                  ((item['url'] as String?)
+                                                              ?.trim()
+                                                              .isNotEmpty ??
+                                                          false))
+                                              .toList();
+
+                                          return Container(
+                                            constraints: const BoxConstraints(
+                                                minHeight: 150),
+                                            width: double.infinity,
+                                            decoration: BoxDecoration(
+                                              color: Colors.black54,
+                                              borderRadius:
+                                                  BorderRadius.circular(16),
+                                            ),
+                                            clipBehavior: Clip.antiAlias,
+                                            alignment: Alignment.center,
+                                            child: Stack(
+                                              children: [
+                                                SizedBox(
+                                                  width: double.infinity,
+                                                  child: _buildFeaturedPreview(),
+                                                ),
+                                                if (_showReelCarousel &&
+                                                    enabledReels.isNotEmpty)
+                                                  Positioned(
+                                                    top: 8,
+                                                    left: 8,
+                                                    child: Container(
+                                                      padding:
+                                                          const EdgeInsets.symmetric(
+                                                              horizontal: 8,
+                                                              vertical: 4),
+                                                      decoration: BoxDecoration(
+                                                        color: Colors.black
+                                                            .withOpacity(0.55),
+                                                        borderRadius:
+                                                            BorderRadius.circular(
+                                                                999),
+                                                      ),
+                                                      child: Text(
+                                                        'Reels: ${enabledReels.length} active',
+                                                        style: const TextStyle(
+                                                          color: Colors.white,
+                                                          fontSize: 10,
+                                                          fontWeight:
+                                                              FontWeight.w600,
                                                         ),
                                                       ),
                                                     ),
                                                   ),
-                                                ),
-                                            ],
-                                          ),
-                                        )
+                                                if (_showReelCarousel &&
+                                                    enabledReels.isNotEmpty)
+                                                  Positioned(
+                                                    top: 8,
+                                                    right: 8,
+                                                    child: Tooltip(
+                                                      message: 'Open Reels',
+                                                      child: GestureDetector(
+                                                        onTap:
+                                                            _openReelsFullscreenPreview,
+                                                        child: Container(
+                                                          padding:
+                                                              const EdgeInsets
+                                                                  .all(6),
+                                                          decoration: BoxDecoration(
+                                                            color: Colors.black
+                                                                .withOpacity(0.5),
+                                                            shape:
+                                                                BoxShape.circle,
+                                                          ),
+                                                          child: const Icon(
+                                                            Icons
+                                                                .play_circle_fill_rounded,
+                                                            color: Colors
+                                                                .amberAccent,
+                                                            size: 22,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                if (featuredTitle.isNotEmpty ||
+                                                    featuredBody.isNotEmpty)
+                                                  Positioned(
+                                                    left: 0,
+                                                    right: 0,
+                                                    bottom: 0,
+                                                    child: Container(
+                                                      padding:
+                                                          const EdgeInsets.fromLTRB(
+                                                              12, 16, 12, 12),
+                                                      decoration: BoxDecoration(
+                                                        gradient: LinearGradient(
+                                                          begin:
+                                                              Alignment.topCenter,
+                                                          end: Alignment
+                                                              .bottomCenter,
+                                                          colors: [
+                                                            Colors.transparent,
+                                                            Colors.black
+                                                                .withOpacity(0.78),
+                                                          ],
+                                                        ),
+                                                      ),
+                                                      child: Column(
+                                                        crossAxisAlignment:
+                                                            CrossAxisAlignment
+                                                                .start,
+                                                        children: [
+                                                          if (featuredTitle
+                                                              .isNotEmpty)
+                                                            Text(
+                                                              featuredTitle,
+                                                              maxLines: 2,
+                                                              overflow:
+                                                                  TextOverflow
+                                                                      .ellipsis,
+                                                              style:
+                                                                  const TextStyle(
+                                                                color:
+                                                                    Colors.white,
+                                                                fontSize: 14,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .bold,
+                                                              ),
+                                                            ),
+                                                          if (featuredBody
+                                                              .isNotEmpty)
+                                                            Padding(
+                                                              padding:
+                                                                  const EdgeInsets
+                                                                      .only(top: 4),
+                                                              child: Text(
+                                                                featuredBody,
+                                                                maxLines: 3,
+                                                                overflow:
+                                                                    TextOverflow
+                                                                        .ellipsis,
+                                                                style:
+                                                                    const TextStyle(
+                                                                  color: Colors
+                                                                      .white70,
+                                                                  fontSize: 11,
+                                                                ),
+                                                              ),
+                                                            ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                          );
+                                        })
                                       else if (_showReelCarousel)
                                         Container(
                                           width: double.infinity,

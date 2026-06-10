@@ -319,6 +319,8 @@ class _MediaLibraryTabState extends State<MediaLibraryTab> {
           onTap: () => _showMediaDetails(item),
           onDelete: () => _confirmDelete(item),
           onRename: () => _showRenameMediaDialog(item),
+          onCopy: () => _showMoveMediaDialog(item, isCopy: true),
+          onMove: () => _showMoveMediaDialog(item, isCopy: false),
         );
       },
     );
@@ -1336,6 +1338,8 @@ class _MediaCard extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback onDelete;
   final VoidCallback onRename;
+  final VoidCallback onCopy;
+  final VoidCallback onMove;
 
 
   const _MediaCard({
@@ -1344,6 +1348,8 @@ class _MediaCard extends StatelessWidget {
     required this.onTap, 
     required this.onDelete,
     required this.onRename,
+    required this.onCopy,
+    required this.onMove,
   });
 
   @override
@@ -1545,10 +1551,14 @@ class _MediaCard extends StatelessWidget {
                 icon: const Icon(Icons.more_vert, size: 20),
                 onSelected: (value) {
                   if (value == 'rename') onRename();
+                  if (value == 'copy') onCopy();
+                  if (value == 'move') onMove();
                   if (value == 'delete') onDelete();
                 },
                 itemBuilder: (context) => [
                   const PopupMenuItem(value: 'rename', child: Text('Rename')),
+                  const PopupMenuItem(value: 'copy', child: Text('Copy to...')),
+                  const PopupMenuItem(value: 'move', child: Text('Move to...')),
                   const PopupMenuItem(value: 'delete', child: Text('Delete', style: TextStyle(color: Colors.red))),
                 ],
               ),
