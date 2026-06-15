@@ -21,6 +21,8 @@ class _UserManagementTabState extends State<UserManagementTab> {
   String _viewMode = 'users'; // 'users', 'resolved', or 'inbox'
   UserProfile? _selectedUser;
   int _initialDetailTabIndex = 0; // To open specific tab in detail panel
+  late final Stream<QuerySnapshot> _usersStream;
+  late final Stream<QuerySnapshot> _supportInboxStream;
 
   String _canonicalUserKey(UserProfile user) {
     final email = user.email.trim().toLowerCase();
@@ -30,10 +32,122 @@ class _UserManagementTabState extends State<UserManagementTab> {
     return 'id:${user.id.toLowerCase()}';
   }
 
+  bool _isRemoved(UserProfile user) => user.status.toLowerCase() == 'removed';
+
+  bool _isLikelyLegacyGhost(UserProfile user) {
+    final hasEmail = user.email.trim().isNotEmpty && user.email.trim().toLowerCase() != 'no-email@example.com';
+    final hasName = user.name.trim().isNotEmpty && user.name.trim().toLowerCase() != 'unknown user';
+    final hasUsername = (user.username ?? '').trim().isNotEmpty;
+    final hasFullName = (user.fullName ?? '').trim().isNotEmpty;
+    final hasIdentity = hasEmail || hasName || hasUsername || hasFullName;
+
+    if (hasIdentity) return false;
+
+    final hasActivity = user.eventsJoined > 0 || user.messagesReceived > 0;
+    final hasLifecycleData = (user.joinDate ?? '').trim().isNotEmpty || (user.lastActive ?? '').trim().isNotEmpty;
+    return !hasActivity && !hasLifecycleData;
+  }
+
+  bool _isPlaceholderName(String value) {
+    final v = value.trim().toLowerCase();
+    if (v.isEmpty) return true;
+    return v == 'guest' ||
+        v == 'member' ||
+        v == 'unknown user' ||
+        v == 'anonymous' ||
+        v == 'anon' ||
+        v == 'user';
+  }
+
+  bool _isGuestLikeRecord(UserProfile user) {
+    final nameLooksPlaceholder = _isPlaceholderName(user.name) &&
+        _isPlaceholderName(user.username ?? '') &&
+        _isPlaceholderName(user.displayName ?? '') &&
+        _isPlaceholderName(user.fullName ?? '');
+
+    final email = user.email.trim().toLowerCase();
+    final emailMissingOrGuest = email.isEmpty ||
+        email == 'no-email@example.com' ||
+        email.startsWith('guest') ||
+        email.contains('anonymous');
+
+    return nameLooksPlaceholder && emailMissingOrGuest;
+  }
+
+  Future<void> _cleanupGuestRecords() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Guest Records?'),
+        content: const Text(
+          'This will remove guest/placeholder user records from Firestore.\n\n'
+          'If hard delete is blocked by rules, records will be archived and hidden.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    int removedCount = 0;
+    int archivedCount = 0;
+
+    try {
+      final snapshot = await FirebaseFirestore.instance.collection('users').get();
+      for (final doc in snapshot.docs) {
+        final user = UserProfile.fromFirestore(doc.id, doc.data());
+        final shouldRemove = _isGuestLikeRecord(user) || _isLikelyLegacyGhost(user);
+        if (!shouldRemove) continue;
+
+        try {
+          await doc.reference.delete();
+          removedCount++;
+        } catch (_) {
+          await doc.reference.set({
+            'status': 'removed',
+            'deletedByAdmin': true,
+            'deletedAt': FieldValue.serverTimestamp(),
+            'lastAdminAction': 'Archived by guest cleanup tool (hard delete blocked)',
+          }, SetOptions(merge: true));
+          archivedCount++;
+        }
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Guest cleanup complete. Deleted: $removedCount, Archived: $archivedCount.'),
+          backgroundColor: Colors.green,
+        ),
+      );
+      setState(() {});
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Guest cleanup failed: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     TranslationService.instance.init();
+    _usersStream = FirebaseFirestore.instance.collection('users').snapshots();
+    _supportInboxStream = FirebaseFirestore.instance
+        .collection('support_inbox')
+        .orderBy('timestamp', descending: true)
+        .snapshots();
     if (widget.initialUserId != null) {
       _loadInitialUser();
     }
@@ -99,6 +213,13 @@ class _UserManagementTabState extends State<UserManagementTab> {
                           style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                         ),
                         const Spacer(),
+                        if (_viewMode == 'users' || _viewMode == 'resolved')
+                          TextButton.icon(
+                            onPressed: _cleanupGuestRecords,
+                            icon: const Icon(Icons.cleaning_services, size: 18),
+                            label: const Text('Delete Guest Records'),
+                          ),
+                        const SizedBox(width: 8),
                         // View Toggle
                         Container(
                           decoration: BoxDecoration(
@@ -224,7 +345,7 @@ class _UserManagementTabState extends State<UserManagementTab> {
 
   Widget _buildUserList() {
     return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance.collection('users').snapshots(),
+      stream: _usersStream,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
@@ -239,9 +360,19 @@ class _UserManagementTabState extends State<UserManagementTab> {
                     final users = userDocs.map((doc) {
                       return UserProfile.fromFirestore(doc.id, doc.data() as Map<String, dynamic>);
                     }).where((user) {
+                      // Hide admin-archived records from normal views.
+                      if (_isRemoved(user)) return false;
+                      // Hide legacy placeholder docs with no identity or activity.
+                      if (_isLikelyLegacyGhost(user)) return false;
+                      // Hide guest/anonymous placeholder records by default.
+                      if (_isGuestLikeRecord(user)) return false;
+
                       // Apply search filter
                       if (_searchQuery.isNotEmpty) {
                         final match = user.name.toLowerCase().contains(_searchQuery) ||
+                            (user.fullName ?? '').toLowerCase().contains(_searchQuery) ||
+                            (user.username ?? '').toLowerCase().contains(_searchQuery) ||
+                            (user.displayName ?? '').toLowerCase().contains(_searchQuery) ||
                             user.email.toLowerCase().contains(_searchQuery) ||
                             user.id.toLowerCase().contains(_searchQuery);
                         if (!match) return false;
@@ -397,10 +528,7 @@ class _UserManagementTabState extends State<UserManagementTab> {
         ),
         Expanded(
           child: StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection('support_inbox') // Now using the summarized inbox
-                .orderBy('timestamp', descending: true)
-                .snapshots(),
+            stream: _supportInboxStream,
             builder: (context, snapshot) {
               if (snapshot.hasError) {
                 return Center(child: Text('Error: ${snapshot.error}', style: const TextStyle(color: Colors.red)));
@@ -609,14 +737,20 @@ class _UserIndexCard extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              user.name,
+                              _primaryDisplayName(user),
                               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                               overflow: TextOverflow.ellipsis,
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              user.email,
+                              _secondaryIdentityLine(user),
                               style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'ID: ${user.id}',
+                              style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
                               overflow: TextOverflow.ellipsis,
                             ),
                             const SizedBox(height: 8),
@@ -672,6 +806,33 @@ class _UserIndexCard extends StatelessWidget {
         );
       },
     );
+  }
+
+  String _primaryDisplayName(UserProfile user) {
+    final candidates = <String?>[
+      user.username,
+      user.name,
+      user.displayName,
+      user.fullName,
+    ];
+
+    for (final candidate in candidates) {
+      final value = (candidate ?? '').trim();
+      if (value.isNotEmpty && value.toLowerCase() != 'unknown user') {
+        return value;
+      }
+    }
+    return 'Unknown User';
+  }
+
+  String _secondaryIdentityLine(UserProfile user) {
+    final email = user.email.trim();
+    if (email.isNotEmpty && email.toLowerCase() != 'no-email@example.com') {
+      return email;
+    }
+    final fullName = (user.fullName ?? '').trim();
+    if (fullName.isNotEmpty) return fullName;
+    return 'No email on record';
   }
 
   Color _statusColor(String status) {
@@ -750,6 +911,23 @@ class _UserDetailPanelState extends State<_UserDetailPanel> with SingleTickerPro
   late TabController _tabController;
   final _noteController = TextEditingController();
 
+  String _friendlyFirestoreError(Object error) {
+    final raw = error.toString();
+    final text = raw.replaceFirst('Exception: ', '').trim();
+    final lower = text.toLowerCase();
+
+    if (lower.contains('permission-denied')) {
+      return 'Permission denied by Firestore rules for this record.';
+    }
+    if (lower.contains('unavailable') || lower.contains('network') || lower.contains('timeout')) {
+      return 'Network/Firestore timeout. Please retry.';
+    }
+    if (text.length > 180) {
+      return 'Firestore operation failed for this user record. Please retry or archive instead.';
+    }
+    return text;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -794,6 +972,15 @@ class _UserDetailPanelState extends State<_UserDetailPanel> with SingleTickerPro
                       widget.user.name,
                       style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                     ),
+                    if ((widget.user.fullName ?? '').trim().isNotEmpty &&
+                        widget.user.fullName!.trim().toLowerCase() != widget.user.name.trim().toLowerCase())
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          widget.user.fullName!,
+                          style: TextStyle(fontSize: 12, color: Colors.grey.shade700, fontWeight: FontWeight.w600),
+                        ),
+                      ),
                     Text(
                       widget.user.email,
                       style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
@@ -1057,14 +1244,36 @@ class _UserDetailPanelState extends State<_UserDetailPanel> with SingleTickerPro
   Future<void> _performUserAction(String action) async {
     try {
       if (action == 'delete') {
-         await FirebaseFirestore.instance.collection('users').doc(widget.user.id).delete();
-         if (mounted) {
-           ScaffoldMessenger.of(context).showSnackBar(
-             const SnackBar(content: Text('User deleted successfully.'), backgroundColor: Colors.red),
-           );
-           widget.onUpdate();
+         try {
+           await FirebaseFirestore.instance.collection('users').doc(widget.user.id).delete();
+           if (mounted) {
+             ScaffoldMessenger.of(context).showSnackBar(
+               const SnackBar(content: Text('User deleted successfully.'), backgroundColor: Colors.red),
+             );
+             widget.onUpdate();
+           }
+           return;
+         } catch (_) {
+           // Fallback for environments where hard delete is restricted by rules:
+           // archive and hide the card from normal admin views.
+           await FirebaseFirestore.instance.collection('users').doc(widget.user.id).set({
+             'status': 'removed',
+             'deletedByAdmin': true,
+             'deletedAt': FieldValue.serverTimestamp(),
+             'lastAdminAction': 'Archived by admin (hard delete blocked)',
+           }, SetOptions(merge: true));
+
+           if (mounted) {
+             ScaffoldMessenger.of(context).showSnackBar(
+               const SnackBar(
+                 content: Text('Hard delete blocked by Firestore rules. User archived and hidden from list.'),
+                 backgroundColor: Colors.orange,
+               ),
+             );
+             widget.onUpdate();
+           }
+           return;
          }
-         return;
       }
 
       final Map<String, dynamic> updates = {
@@ -1105,7 +1314,7 @@ class _UserDetailPanelState extends State<_UserDetailPanel> with SingleTickerPro
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-           SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+           SnackBar(content: Text(_friendlyFirestoreError(e)), backgroundColor: Colors.red),
         );
       }
     }
@@ -1232,6 +1441,11 @@ class _OverviewTab extends StatelessWidget {
   final UserProfile user;
   const _OverviewTab({required this.user});
 
+  String _displayOrUnknown(String? value) {
+    final text = value?.trim() ?? '';
+    return text.isEmpty ? 'Unknown' : text;
+  }
+
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
@@ -1241,12 +1455,24 @@ class _OverviewTab extends StatelessWidget {
         children: [
           const Text('User Information', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 16),
+          _InfoRow(label: 'Username', value: _displayOrUnknown(user.username ?? user.name)),
+          _InfoRow(label: 'Full Name', value: _displayOrUnknown(user.fullName)),
+          _InfoRow(label: 'Display Name', value: _displayOrUnknown(user.displayName)),
+          _InfoRow(label: 'Email', value: user.email),
+          _InfoRow(label: 'Country', value: _displayOrUnknown(user.country)),
           _InfoRow(label: 'User ID', value: user.id),
           _InfoRow(label: 'Join Date', value: user.joinDate ?? 'Unknown'),
           _InfoRow(label: 'Last Active', value: user.lastActive ?? 'Never'),
+          _InfoRow(label: 'Time Zone', value: _displayOrUnknown(user.timeZone)),
+          _InfoRow(label: 'Platform', value: _displayOrUnknown(user.platform)),
+          _InfoRow(label: 'Status', value: user.status),
           _InfoRow(label: 'Events Joined', value: user.eventsJoined.toString()),
+          _InfoRow(label: 'Messages Received', value: user.messagesReceived.toString()),
+          _InfoRow(label: 'Auto Renew', value: user.willRenew ? 'On' : 'Off'),
           _InfoRow(label: 'Subscription Plan', value: user.subscriptionPlan),
           if (user.renewalDate != null) _InfoRow(label: 'Next Renewal', value: user.renewalDate!),
+          if ((user.vipQuotaTier ?? '').trim().isNotEmpty)
+            _InfoRow(label: 'VIP Tier', value: user.vipQuotaTier!),
           
           if (user.status == 'suspended') ...[
              const SizedBox(height: 16),

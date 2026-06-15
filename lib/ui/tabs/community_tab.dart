@@ -71,6 +71,69 @@ class _CommunityTabState extends State<CommunityTab> {
     };
   }
 
+  Future<void> _deleteLiveFeedMessage(
+    BuildContext context,
+    DocumentSnapshot postDoc,
+    Map<String, dynamic> post,
+  ) async {
+    try {
+      await postDoc.reference.delete();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Message deleted')),
+      );
+      return;
+    } on FirebaseException catch (e) {
+      // Fallback to moderation-style soft delete when hard delete is blocked.
+      try {
+        final currentText = (post['content'] ?? post['text'] ?? '').toString();
+        final replacement = currentText.isNotEmpty
+            ? '[Message removed by moderator]'
+            : '[Removed]';
+        final admin = FirebaseAuth.instance.currentUser;
+
+        final isGlobal = _selectedFeedId == 'global';
+        final patch = <String, dynamic>{
+          'deleted': true,
+          'deletedAt': FieldValue.serverTimestamp(),
+          'deletedByUid': admin?.uid,
+          'deletedByEmail': admin?.email,
+          'moderationUpdatedAt': FieldValue.serverTimestamp(),
+          if (isGlobal)
+            'content': replacement
+          else
+            'text': replacement,
+        };
+
+        await postDoc.reference.set(patch, SetOptions(merge: true));
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Message removed (soft delete).'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      } catch (_) {
+        if (!mounted) return;
+        final code = e.code.isNotEmpty ? e.code : 'unknown';
+        final friendly = code == 'permission-denied'
+            ? 'Delete blocked by permissions for this message.'
+            : 'Delete failed ($code).';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(friendly), backgroundColor: Colors.red),
+        );
+        return;
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Delete failed: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
+
 
   @override
   void initState() {
@@ -1088,12 +1151,7 @@ class _CommunityTabState extends State<CommunityTab> {
                       trailing: PopupMenuButton(
                         onSelected: (value) async {
                           if (value == 'delete') {
-                            await postDoc.reference.delete();
-                            if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Message deleted')),
-                              );
-                            }
+                            await _deleteLiveFeedMessage(context, postDoc, post);
                           } else if (value == 'suspend') {
                             final userId = post['userId'];
                             if (userId != null) {

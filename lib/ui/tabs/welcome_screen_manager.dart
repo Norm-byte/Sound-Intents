@@ -23,11 +23,37 @@ class _WelcomeScreenManagerState extends State<WelcomeScreenManager> {
   double _logoSize = 80.0;
   bool _isLoading = false;
   bool _isSaving = false;
+  String? _loadError;
 
   @override
   void initState() {
     super.initState();
+    _applyDefaults();
     _loadConfig();
+  }
+
+  void _applyDefaults() {
+    _titleController.text = 'Harmony by Intent';
+    _subtitleController.text = 'Connect with simultaneous intent.\nExperience peace together.';
+    _buttonTextController.text = 'Get Started';
+    _backgroundImageUrl = null;
+    _logoUrl = null;
+    _logoSize = 80.0;
+  }
+
+  String _friendlyFirestoreError(Object error) {
+    final raw = error.toString().replaceFirst('Exception: ', '').trim();
+    final lower = raw.toLowerCase();
+    if (lower.contains('permission-denied')) {
+      return 'Permission denied while loading Welcome Screen config.';
+    }
+    if (lower.contains('unavailable') || lower.contains('network') || lower.contains('timeout')) {
+      return 'Network timeout while loading Welcome Screen config.';
+    }
+    if (raw.length > 180) {
+      return 'Failed to load Welcome Screen config from Firestore.';
+    }
+    return raw;
   }
 
   Future<void> _loadConfig() async {
@@ -36,7 +62,8 @@ class _WelcomeScreenManagerState extends State<WelcomeScreenManager> {
       final doc = await FirebaseFirestore.instance
           .collection('app_config')
           .doc('welcome_screen')
-          .get();
+          .get()
+          .timeout(const Duration(seconds: 20));
 
       if (doc.exists) {
         final data = doc.data()!;
@@ -47,15 +74,15 @@ class _WelcomeScreenManagerState extends State<WelcomeScreenManager> {
         _logoUrl = data['logoUrl'];
         _logoSize = (data['logoSize'] ?? 80.0).toDouble();
       } else {
-        // Defaults
-        _titleController.text = 'Harmony by Intent';
-        _subtitleController.text = 'Connect with simultaneous intent.\nExperience peace together.';
-        _buttonTextController.text = 'Get Started';
+        _applyDefaults();
       }
+      _loadError = null;
     } catch (e) {
+      _applyDefaults();
+      _loadError = _friendlyFirestoreError(e);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading config: $e')),
+          SnackBar(content: Text(_loadError!), backgroundColor: Colors.red),
         );
       }
     } finally {
@@ -111,7 +138,21 @@ class _WelcomeScreenManagerState extends State<WelcomeScreenManager> {
                 child: StreamBuilder<List<MediaItem>>(
                   stream: _mediaLibrary.getMediaStream(),
                   builder: (context, snapshot) {
-                    if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+                    if (snapshot.hasError) {
+                      return Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16.0),
+                          child: Text(
+                            _friendlyFirestoreError(snapshot.error!),
+                            style: const TextStyle(color: Colors.red),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      );
+                    }
+                    if (snapshot.connectionState == ConnectionState.waiting || !snapshot.hasData) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
                     final images = snapshot.data!.where((i) => i.type == 'image').toList();
                     
                     if (images.isEmpty) return const Center(child: Text('No images found in library'));
@@ -180,6 +221,34 @@ class _WelcomeScreenManagerState extends State<WelcomeScreenManager> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (_loadError != null) ...[
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    margin: const EdgeInsets.only(bottom: 16),
+                    decoration: BoxDecoration(
+                      color: Colors.red.shade50,
+                      border: Border.all(color: Colors.red.shade200),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.error_outline, color: Colors.red),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _loadError!,
+                            style: TextStyle(color: Colors.red.shade900),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: _loadConfig,
+                          child: const Text('Retry'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
                 const Text('Welcome Screen Configuration', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 24),
                 

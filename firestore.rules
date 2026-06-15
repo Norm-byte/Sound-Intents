@@ -249,6 +249,24 @@ service cloud.firestore {
       }
     }
 
+    // Username reservations (race-proof uniqueness)
+    match /usernames/{usernameId} {
+      allow read: if true;
+
+      // Create reservation only for the signed-in owner, keyed by lowercase username doc id.
+      allow create: if isSignedIn() &&
+                       request.resource.data.ownerUid == request.auth.uid &&
+                       request.resource.data.usernameLower == usernameId;
+
+      // Allow owner to refresh/update their reservation, but not transfer ownership.
+      allow update: if isSignedIn() &&
+                       resource.data.ownerUid == request.auth.uid &&
+                       request.resource.data.ownerUid == resource.data.ownerUid &&
+                       request.resource.data.usernameLower == resource.data.usernameLower;
+
+      allow delete: if isSuperAdmin();
+    }
+
     // Collection Group Query for Messages (Support Inbox)
     match /{path=**}/messages/{messageId} {
       allow read: if isActiveAdmin();

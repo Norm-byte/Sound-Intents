@@ -949,9 +949,32 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
 
           // Simple Read-Only List
           StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance.collection('admin_users').orderBy('createdAt', descending: true).snapshots(),
+            stream: FirebaseFirestore.instance
+                .collection('admin_users')
+                .orderBy('createdAt', descending: true)
+                .snapshots()
+                .timeout(
+                  const Duration(seconds: 20),
+                  onTimeout: (sink) => sink.addError('Request timed out while loading admin team.'),
+                ),
             builder: (context, snapshot) {
-              if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+              if (snapshot.hasError) {
+                return Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: SelectableText(
+                      'Error loading admin team: ${snapshot.error}',
+                      style: const TextStyle(color: Colors.red),
+                    ),
+                  ),
+                );
+              }
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              if (!snapshot.hasData) {
+                return const Center(child: Text('No admin data available.'));
+              }
               final docs = snapshot.data!.docs;
               
               if (docs.isEmpty) return const Text('No other admins found.');
@@ -1040,11 +1063,65 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
   Widget _buildSuperAdminTab() {
     final currentUser = FirebaseAuth.instance.currentUser;
 
+    if (currentUser == null) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.lock_outline, size: 64, color: Colors.grey.shade400),
+            const SizedBox(height: 12),
+            const Text(
+              'Session expired. Please sign in again.',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
+      );
+    }
+
     return StreamBuilder<DocumentSnapshot>(
-      stream: FirebaseFirestore.instance.collection('admin_users').doc(currentUser?.uid).snapshots(),
+      stream: FirebaseFirestore.instance
+          .collection('admin_users')
+          .doc(currentUser.uid)
+          .snapshots()
+          .timeout(
+            const Duration(seconds: 20),
+            onTimeout: (sink) => sink.addError('Request timed out while loading super admin profile.'),
+          ),
       builder: (context, snapshot) {
         if (snapshot.hasError) return Center(child: SelectableText('Error loading profile: ${snapshot.error}', style: const TextStyle(color: Colors.red)));
-        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (!snapshot.hasData || !(snapshot.data?.exists ?? false)) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.person_search, size: 44, color: Colors.orange),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Admin profile record not found yet.',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Press Sync Profile to rebuild your admin profile document.',
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 12),
+                  ElevatedButton.icon(
+                    onPressed: _isSyncing ? null : _syncAuthData,
+                    icon: const Icon(Icons.sync),
+                    label: const Text('Sync Profile'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
         
         final userData = snapshot.data!.data() as Map<String, dynamic>? ?? {};
         final role = userData['role'] ?? 'admin';
@@ -1169,10 +1246,22 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
     final currentUser = FirebaseAuth.instance.currentUser;
     
     return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance.collection('admin_users').where('role', isEqualTo: 'super-admin').snapshots(),
+      stream: FirebaseFirestore.instance
+          .collection('admin_users')
+          .where('role', isEqualTo: 'super-admin')
+          .snapshots()
+          .timeout(
+            const Duration(seconds: 20),
+            onTimeout: (sink) => sink.addError('Request timed out while loading super admin list.'),
+          ),
       builder: (context, snapshot) {
         if (snapshot.hasError) return Center(child: SelectableText('Error loading admins: ${snapshot.error}', style: const TextStyle(color: Colors.red)));
-        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (!snapshot.hasData) {
+          return const Center(child: Text('No super-admin records found.'));
+        }
         final admins = snapshot.data!.docs;
 
         return SingleChildScrollView(
@@ -1670,7 +1759,13 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
 
   Widget _buildMasterAdminList() {
     return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance.collection('admin_users').snapshots(),
+      stream: FirebaseFirestore.instance
+          .collection('admin_users')
+          .snapshots()
+          .timeout(
+            const Duration(seconds: 20),
+            onTimeout: (sink) => sink.addError('Request timed out while loading admin records.'),
+          ),
       builder: (context, snapshot) {
          if (snapshot.hasError) {
            return Center(
@@ -1687,7 +1782,12 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
              ),
            );
          }
-         if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+         if (snapshot.connectionState == ConnectionState.waiting) {
+           return const Center(child: CircularProgressIndicator());
+         }
+         if (!snapshot.hasData) {
+           return const Center(child: Text('No admin records found.'));
+         }
          
          // Filter out Super Admins from this list as per requirement
          final docs = snapshot.data!.docs.where((doc) {
@@ -1850,7 +1950,14 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
           const SizedBox(height: 24),
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance.collection('vip_codes').orderBy('createdAt', descending: true).snapshots(),
+              stream: FirebaseFirestore.instance
+                  .collection('vip_codes')
+                  .orderBy('createdAt', descending: true)
+                  .snapshots()
+                  .timeout(
+                    const Duration(seconds: 20),
+                    onTimeout: (sink) => sink.addError('Request timed out while loading VIP codes.'),
+                  ),
               builder: (context, snapshot) {
                 if (snapshot.hasError) {
                   return Center(
@@ -1867,7 +1974,12 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
                     ),
                   );
                 }
-                if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (!snapshot.hasData) {
+                  return const Center(child: Text('No VIP codes found.'));
+                }
                 return ListView.separated(
                   itemCount: snapshot.data!.docs.length,
                   separatorBuilder: (ctx, i) => const Divider(),

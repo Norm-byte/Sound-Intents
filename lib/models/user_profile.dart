@@ -4,7 +4,13 @@ import 'package:intl/intl.dart';
 class UserProfile {
   final String id;
   final String name;
+  final String? fullName;
+  final String? username;
+  final String? displayName;
   final String email;
+  final String? country;
+  final String? timeZone;
+  final String? platform;
   final String status; // active, trial, suspended
   final int eventsJoined;
   final int messagesReceived;
@@ -20,7 +26,13 @@ class UserProfile {
   UserProfile({
     required this.id,
     required this.name,
+    this.fullName,
+    this.username,
+    this.displayName,
     required this.email,
+    this.country,
+    this.timeZone,
+    this.platform,
     required this.status,
     required this.eventsJoined,
     required this.messagesReceived,
@@ -44,10 +56,26 @@ class UserProfile {
       return null;
     }
 
+    String? parseFirstDate(List<dynamic> values) {
+      for (final value in values) {
+        final parsed = parseDate(value);
+        if (parsed != null && parsed.trim().isNotEmpty) {
+          return parsed;
+        }
+      }
+      return null;
+    }
+
     String safeString(dynamic value, String fallback) {
       if (value is String) return value;
       if (value != null) return value.toString();
       return fallback;
+    }
+
+    String? safeOptionalString(dynamic value) {
+      if (value == null) return null;
+      final text = value.toString().trim();
+      return text.isEmpty ? null : text;
     }
 
     int safeInt(dynamic value) {
@@ -60,13 +88,26 @@ class UserProfile {
     return UserProfile(
       id: id,
       name: safeString(data['name'], 'Unknown User'),
+      fullName: safeOptionalString(data['fullName']),
+      username: safeOptionalString(data['username'] ?? data['userName']),
+      displayName: safeOptionalString(data['displayName']),
       email: safeString(data['email'], 'no-email@example.com'),
+      country: safeOptionalString(data['country'] ?? data['countryCode']),
+      timeZone: safeOptionalString(data['timeZone']),
+      platform: safeOptionalString(data['platform']),
       status: safeString(data['status'], 'trial'),
       eventsJoined: safeInt(data['eventsJoined']),
       messagesReceived: safeInt(data['messagesReceived']),
       subscriptionPlan: safeString(data['subscriptionPlan'], 'Free'),
       renewalDate: parseDate(data['renewalDate']),
-      joinDate: parseDate(data['joinDate']),
+      joinDate: parseFirstDate([
+        data['joinDate'],
+        data['createdAt'],
+        data['created_at'],
+        data['signupDate'],
+        data['signUpDate'],
+        data['accountCreatedAt'],
+      ]),
       lastActive: parseDate(data['lastActive']),
       suspensionExpiry: (data['suspensionExpiry'] as Timestamp?)?.toDate(),
       lastAdminAction: data['lastAdminAction'] as String?,
@@ -79,7 +120,13 @@ class UserProfile {
   Map<String, dynamic> toMap() {
     return {
       'name': name,
+      'fullName': fullName,
+      'username': username,
+      'displayName': displayName,
       'email': email,
+      'country': country,
+      'timeZone': timeZone,
+      'platform': platform,
       'status': status,
       'eventsJoined': eventsJoined,
       'messagesReceived': messagesReceived,
@@ -96,7 +143,13 @@ class UserProfile {
 
   UserProfile copyWith({
     String? name,
+    String? fullName,
+    String? username,
+    String? displayName,
     String? email,
+    String? country,
+    String? timeZone,
+    String? platform,
     String? status,
     int? eventsJoined,
     int? messagesReceived,
@@ -112,7 +165,13 @@ class UserProfile {
     return UserProfile(
       id: id,
       name: name ?? this.name,
+      fullName: fullName ?? this.fullName,
+      username: username ?? this.username,
+      displayName: displayName ?? this.displayName,
       email: email ?? this.email,
+      country: country ?? this.country,
+      timeZone: timeZone ?? this.timeZone,
+      platform: platform ?? this.platform,
       status: status ?? this.status,
       eventsJoined: eventsJoined ?? this.eventsJoined,
       messagesReceived: messagesReceived ?? this.messagesReceived,

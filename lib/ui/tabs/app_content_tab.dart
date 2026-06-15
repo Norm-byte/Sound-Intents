@@ -1007,57 +1007,68 @@ class _AppContentTabState extends State<AppContentTab> {
                   maxLines: 2,
                   onChanged: (_) => setState(() {}),
                 ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    if (_backgroundImageUrl != null)
-                      Container(
-                        width: 60,
-                        height: 60,
-                        margin: const EdgeInsets.only(right: 16),
+
+                const SizedBox(height: 24),
+                _buildSectionHeader('Visuals'),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Background Image'),
+                  subtitle: Text(
+                    _backgroundImageUrl != null
+                        ? 'Image selected'
+                        : 'No image selected (app gradient background)',
+                  ),
+                  trailing: Wrap(
+                    spacing: 8,
+                    children: [
+                      if (_backgroundImageUrl != null)
+                        TextButton(
+                          onPressed: () => setState(() {
+                            _backgroundImageUrl = null;
+                            _backgroundVideoController?.dispose();
+                            _backgroundVideoController = null;
+                          }),
+                          child: const Text(
+                            'Remove',
+                            style: TextStyle(color: Colors.red),
+                          ),
+                        ),
+                      ElevatedButton.icon(
+                        onPressed: () => _pickFromMediaLibrary(isBackground: true),
+                        icon: const Icon(Icons.photo_library),
+                        label: const Text('Select Background'),
+                      ),
+                    ],
+                  ),
+                ),
+
+                if (_backgroundImageUrl != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Container(
+                        width: 84,
+                        height: 84,
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.grey.shade300),
                           color: Colors.grey.shade200,
-                          image: _backgroundImageUrl != null &&
-                                  !_isVideo(_backgroundImageUrl!)
+                          image: !_isVideo(_backgroundImageUrl!)
                               ? DecorationImage(
                                   image: NetworkImage(_backgroundImageUrl!),
                                   fit: BoxFit.cover,
                                 )
                               : null,
                         ),
-                        child: _backgroundImageUrl != null &&
-                                _isVideo(_backgroundImageUrl!)
+                        child: _isVideo(_backgroundImageUrl!)
                             ? const Icon(Icons.videocam, color: Colors.black54)
                             : null,
                       ),
-                    Expanded(
-                      child: Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          ElevatedButton.icon(
-                            onPressed: () =>
-                                _pickFromMediaLibrary(isBackground: true),
-                            icon: const Icon(Icons.photo_library),
-                            label: const Text('Select from Library'),
-                          ),
-                          if (_backgroundImageUrl != null)
-                            TextButton(
-                              onPressed: () => setState(() {
-                                _backgroundImageUrl = null;
-                                _backgroundVideoController?.dispose();
-                                _backgroundVideoController = null;
-                              }),
-                              child: const Text('Remove',
-                                  style: TextStyle(color: Colors.red)),
-                            ),
-                        ],
-                      ),
                     ),
-                  ],
-                ),
+                  ),
 
+                const SizedBox(height: 16),
                 const SizedBox(height: 32),
 
                 // 2. App Logo (Welcome Screen)
