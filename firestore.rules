@@ -30,6 +30,42 @@ service cloud.firestore {
              request.resource.data.role == 'super-admin';
     }
 
+    function isSuspendedUser(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId)) &&
+             get(/databases/$(database)/documents/users/$(userId)).data.status == 'suspended' &&
+             (
+               !(get(/databases/$(database)/documents/users/$(userId)).data.suspensionExpiry is timestamp) ||
+               get(/databases/$(database)/documents/users/$(userId)).data.suspensionExpiry > request.time
+             );
+    }
+
+    function canPostCommunity(userId) {
+      return isActiveAdmin() ||
+             userId == 'admin_host' ||
+             (
+               isSignedIn() &&
+               !isSuspendedUser(request.auth.uid)
+             ) ||
+             (
+               userId is string &&
+               userId.size() > 0 &&
+               (
+                 !exists(/databases/$(database)/documents/users/$(userId)) ||
+                 !isSuspendedUser(userId)
+               )
+             );
+    }
+
+    function isLegacyCommunityPostPayload() {
+      return request.resource.data.keys().hasAny(['content']) &&
+             request.resource.data.keys().hasAny(['userName']);
+    }
+
+    function isLegacyCommunityMessagePayload() {
+      return request.resource.data.keys().hasAny(['text']) &&
+             request.resource.data.keys().hasAny(['sender']);
+    }
+
         function isCommunityReactionOnlyUpdate() {
           let oldLikes =
             (resource.data.keys().hasAny(['likes']) && resource.data.likes is int)
@@ -213,8 +249,8 @@ service cloud.firestore {
     // Community Posts - Public read, Authenticated write
     match /community_posts/{postId} {
       allow read: if true;
-      // TEMPORARY: Allow public create for User App (no auth)
-      allow create: if true; 
+      // Suspension enforcement deferred to next app update; keep create open.
+      allow create: if true;
       allow update, delete: if isActiveAdmin() ||
                             (isSignedIn() && request.auth.uid == resource.data.userId) ||
                             isCommunityReactionOnlyUpdate();

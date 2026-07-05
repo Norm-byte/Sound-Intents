@@ -952,11 +952,7 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
             stream: FirebaseFirestore.instance
                 .collection('admin_users')
                 .orderBy('createdAt', descending: true)
-                .snapshots()
-                .timeout(
-                  const Duration(seconds: 20),
-                  onTimeout: (sink) => sink.addError('Request timed out while loading admin team.'),
-                ),
+                .snapshots(),
             builder: (context, snapshot) {
               if (snapshot.hasError) {
                 return Center(
@@ -1083,11 +1079,7 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
       stream: FirebaseFirestore.instance
           .collection('admin_users')
           .doc(currentUser.uid)
-          .snapshots()
-          .timeout(
-            const Duration(seconds: 20),
-            onTimeout: (sink) => sink.addError('Request timed out while loading super admin profile.'),
-          ),
+          .snapshots(),
       builder: (context, snapshot) {
         if (snapshot.hasError) return Center(child: SelectableText('Error loading profile: ${snapshot.error}', style: const TextStyle(color: Colors.red)));
         if (snapshot.connectionState == ConnectionState.waiting) {
@@ -1249,11 +1241,7 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
       stream: FirebaseFirestore.instance
           .collection('admin_users')
           .where('role', isEqualTo: 'super-admin')
-          .snapshots()
-          .timeout(
-            const Duration(seconds: 20),
-            onTimeout: (sink) => sink.addError('Request timed out while loading super admin list.'),
-          ),
+          .snapshots(),
       builder: (context, snapshot) {
         if (snapshot.hasError) return Center(child: SelectableText('Error loading admins: ${snapshot.error}', style: const TextStyle(color: Colors.red)));
         if (snapshot.connectionState == ConnectionState.waiting) {
@@ -1761,11 +1749,7 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
           .collection('admin_users')
-          .snapshots()
-          .timeout(
-            const Duration(seconds: 20),
-            onTimeout: (sink) => sink.addError('Request timed out while loading admin records.'),
-          ),
+          .snapshots(),
       builder: (context, snapshot) {
          if (snapshot.hasError) {
            return Center(
@@ -1953,11 +1937,7 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
               stream: FirebaseFirestore.instance
                   .collection('vip_codes')
                   .orderBy('createdAt', descending: true)
-                  .snapshots()
-                  .timeout(
-                    const Duration(seconds: 20),
-                    onTimeout: (sink) => sink.addError('Request timed out while loading VIP codes.'),
-                  ),
+                  .snapshots(),
               builder: (context, snapshot) {
                 if (snapshot.hasError) {
                   return Center(
@@ -1986,15 +1966,106 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
                   itemBuilder: (ctx, i) {
                     final doc = snapshot.data!.docs[i];
                     final data = doc.data() as Map<String, dynamic>;
-                    return ListTile(
-                      title: Text(data['code'] ?? '???', style: const TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.bold)),
-                      subtitle: Text('To: ${data['assignee'] ?? 'Unknown'}'),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(icon: const Icon(Icons.share), onPressed: () => _showShareDialog(data['code'], data['assignee'] ?? '', '')),
-                          IconButton(icon: const Icon(Icons.delete, color: Colors.grey), onPressed: () => _deleteCode(doc.id)),
-                        ],
+                    final code = (data['code'] ?? '???').toString();
+                    final assignee = (data['assignee'] ?? 'Unknown').toString();
+                    final contact = (data['contactInfo'] ?? '').toString();
+                    final type = (data['type'] ?? 'beta_tester').toString();
+                    final status = (data['status'] ?? 'active').toString();
+                    final vipTier = (data['vipQuotaTier'] ?? '').toString();
+                    final redeemedBy = (data['redeemedBy'] ?? '').toString();
+                    final createdAtTs = data['createdAt'] as Timestamp?;
+                    final redeemedAtTs = data['redeemedAt'] as Timestamp?;
+                    final createdAt = createdAtTs?.toDate();
+                    final redeemedAt = redeemedAtTs?.toDate();
+
+                    String fmtDate(DateTime? dt) {
+                      if (dt == null) return 'n/a';
+                      final y = dt.year.toString().padLeft(4, '0');
+                      final m = dt.month.toString().padLeft(2, '0');
+                      final d = dt.day.toString().padLeft(2, '0');
+                      final hh = dt.hour.toString().padLeft(2, '0');
+                      final mm = dt.minute.toString().padLeft(2, '0');
+                      return '$y-$m-$d $hh:$mm';
+                    }
+
+                    Widget infoRow(String label, String value) {
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            SizedBox(
+                              width: 110,
+                              child: Text(
+                                label,
+                                style: TextStyle(
+                                  color: Colors.grey.shade700,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            Expanded(child: SelectableText(value.isEmpty ? '-' : value)),
+                          ],
+                        ),
+                      );
+                    }
+
+                    final badgeColor = status == 'active'
+                        ? Colors.green
+                        : (status == 'revoked' ? Colors.red : Colors.orange);
+
+                    return Card(
+                      margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+                      child: Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    code,
+                                    style: const TextStyle(
+                                      fontFamily: 'monospace',
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 16,
+                                    ),
+                                  ),
+                                ),
+                                Chip(
+                                  label: Text(status.toUpperCase(), style: const TextStyle(color: Colors.white, fontSize: 11)),
+                                  backgroundColor: badgeColor,
+                                  visualDensity: VisualDensity.compact,
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            infoRow('Assignee', assignee),
+                            infoRow('Contact', contact),
+                            infoRow('Type', type),
+                            infoRow('VIP Tier', vipTier),
+                            infoRow('Created', fmtDate(createdAt)),
+                            infoRow('Redeemed By', redeemedBy),
+                            infoRow('Redeemed At', fmtDate(redeemedAt)),
+                            const SizedBox(height: 10),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.end,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.share),
+                                  tooltip: 'Share code',
+                                  onPressed: () => _showShareDialog(code, assignee, contact),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.delete, color: Colors.grey),
+                                  tooltip: 'Delete code',
+                                  onPressed: () => _deleteCode(doc.id),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
                     );
                   },

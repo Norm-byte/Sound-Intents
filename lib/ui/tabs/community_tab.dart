@@ -1162,6 +1162,23 @@ class _CommunityTabState extends State<CommunityTab> {
                                 'lastAdminAction': 'Suspended from Live Feed',
                                 'lastAdminActionDate': FieldValue.serverTimestamp(),
                               });
+
+                              await FirebaseFirestore.instance.collection('moderation_queue').add({
+                                'status': 'resolved',
+                                'reason': 'Admin suspension from Live Feed',
+                                'source': _selectedFeedId == 'global'
+                                    ? 'Live Feed (Global)'
+                                    : 'Live Feed (Group: $_selectedFeedName)',
+                                'userId': userId,
+                                'userName': post['userName'] ?? post['sender'] ?? 'Unknown User',
+                                'content': post['content'] ?? post['text'] ?? '',
+                                'timestamp': FieldValue.serverTimestamp(),
+                                ..._buildModerationAuditFields(
+                                  status: 'resolved',
+                                  action: 'user_suspended',
+                                  note: 'Suspended directly from Live Feed actions menu.',
+                                ),
+                              });
                               
                               if (mounted) {
                                 ScaffoldMessenger.of(context).showSnackBar(
