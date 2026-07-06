@@ -37,6 +37,7 @@ class _AppContentTabState extends State<AppContentTab> {
 
   // Config Data
   String? _backgroundImageUrl;
+  String? _backgroundAudioUrl;
   String? _logoUrl;
   double _logoSize = 80.0;
   bool _showBulletin = false;
@@ -79,6 +80,7 @@ class _AppContentTabState extends State<AppContentTab> {
         _messageController.text =
             data['message'] ?? 'Your journey begins here.';
         _backgroundImageUrl = data['backgroundImageUrl'];
+        _backgroundAudioUrl = data['backgroundAudioUrl'] as String?;
 
         _showBulletin = data['appContentShowBulletin'] ?? false;
         _bulletinController.text = data['appContentBulletinText'] ?? '';
@@ -188,8 +190,7 @@ class _AppContentTabState extends State<AppContentTab> {
         'title': _titleController.text.trim(),
         'message': _messageController.text.trim(),
         'backgroundImageUrl': _backgroundImageUrl,
-        'showBulletin': false,
-        'bulletinText': '',
+        'backgroundAudioUrl': _backgroundAudioUrl,
         'appContentShowBulletin': _showBulletin,
         'appContentBulletinText': _bulletinController.text.trim(),
         'showLiveStats': _showLiveStats,
@@ -294,7 +295,10 @@ class _AppContentTabState extends State<AppContentTab> {
     }
   }
 
-  Future<void> _pickFromMediaLibrary({required bool isBackground}) async {
+  Future<void> _pickFromMediaLibrary({
+    required bool isBackground,
+    String? typeFilter,
+  }) async {
     String? selectedSection;
 
     await showDialog(
@@ -311,9 +315,11 @@ class _AppContentTabState extends State<AppContentTab> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                        isBackground
-                            ? 'Select Background'
-                            : 'Select Featured Content',
+                      typeFilter == 'audio'
+                        ? 'Select Background Audio'
+                        : isBackground
+                          ? 'Select Background'
+                          : 'Select Featured Content',
                         style: Theme.of(context).textTheme.titleLarge),
                     IconButton(
                         icon: const Icon(Icons.close),
@@ -372,7 +378,12 @@ class _AppContentTabState extends State<AppContentTab> {
                       if (snapshot.hasError) {
                         return Center(child: Text('Error: ${snapshot.error}'));
                       }
-                      final allFiles = snapshot.data ?? [];
+                      final allFiles = (snapshot.data ?? []).where((item) {
+                        if (typeFilter == null || typeFilter.isEmpty) {
+                          return true;
+                        }
+                        return item.type.toLowerCase() == typeFilter.toLowerCase();
+                      }).toList();
 
                       if (allFiles.isEmpty) {
                         return const Center(
@@ -398,8 +409,16 @@ class _AppContentTabState extends State<AppContentTab> {
                               isYoutube ||
                               urlLower.contains('.mp4') ||
                               urlLower.contains('.mov');
+                            final isAudio = item.type == 'audio' ||
+                              urlLower.contains('.mp3') ||
+                              urlLower.contains('.wav') ||
+                              urlLower.contains('.aac') ||
+                              urlLower.contains('.m4a') ||
+                              urlLower.contains('.ogg') ||
+                              urlLower.contains('.flac');
                           final isImage = item.type == 'image' ||
                               (!isVideo &&
+                                !isAudio &&
                                   (urlLower.contains('.jpg') ||
                                       urlLower.contains('.jpeg') ||
                                       urlLower.contains('.png') ||
@@ -410,12 +429,33 @@ class _AppContentTabState extends State<AppContentTab> {
                             onTap: () {
                               // Use the parent context's setState to update the main widget
                               this.setState(() {
+                                if (typeFilter == 'audio') {
+                                  if (!isAudio) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('Only audio files can be selected here.'),
+                                      ),
+                                    );
+                                    return;
+                                  }
+                                  _backgroundAudioUrl = item.url;
+                                  return;
+                                }
+
                                 if (isBackground) {
                                   if (isPdf) {
                                     ScaffoldMessenger.of(context).showSnackBar(
                                         const SnackBar(
                                             content: Text(
                                                 'PDF cannot be used as background')));
+                                    return;
+                                  }
+                                  if (isAudio) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('Use Background Audio selector for audio tracks.'),
+                                      ),
+                                    );
                                     return;
                                   }
                                   _backgroundImageUrl = item.url;
@@ -465,6 +505,25 @@ class _AppContentTabState extends State<AppContentTab> {
                                                     : 'upload',
                                                 enablePreview: false,
                                               )
+                                            : isAudio
+                                                ? Container(
+                                                    color: Colors.blueGrey.shade50,
+                                                    child: const Column(
+                                                      mainAxisAlignment: MainAxisAlignment.center,
+                                                      children: [
+                                                        Icon(Icons.audiotrack, size: 40, color: Colors.blueGrey),
+                                                        SizedBox(height: 4),
+                                                        Text(
+                                                          'AUDIO',
+                                                          style: TextStyle(
+                                                            fontSize: 10,
+                                                            fontWeight: FontWeight.bold,
+                                                            color: Colors.blueGrey,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  )
                                             : Container(
                                                 color: Colors.grey.shade200,
                                                 child: Column(
@@ -1068,6 +1127,55 @@ class _AppContentTabState extends State<AppContentTab> {
                     ),
                   ),
 
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Background Audio'),
+                  subtitle: Text(
+                    _backgroundAudioUrl != null
+                        ? 'Audio track selected'
+                        : 'No background audio (silent)',
+                  ),
+                  trailing: Wrap(
+                    spacing: 8,
+                    children: [
+                      if (_backgroundAudioUrl != null)
+                        TextButton(
+                          onPressed: () => setState(() => _backgroundAudioUrl = null),
+                          child: const Text(
+                            'Remove',
+                            style: TextStyle(color: Colors.red),
+                          ),
+                        ),
+                      ElevatedButton.icon(
+                        onPressed: () => _pickFromMediaLibrary(
+                          isBackground: true,
+                          typeFilter: 'audio',
+                        ),
+                        icon: const Icon(Icons.audiotrack),
+                        label: const Text('Select Audio'),
+                      ),
+                    ],
+                  ),
+                ),
+                if (_backgroundAudioUrl != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Row(
+                      children: [
+                        Icon(Icons.audiotrack, color: Colors.green.shade700),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _backgroundAudioUrl!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: Colors.grey.shade700),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
                 const SizedBox(height: 16),
                 const SizedBox(height: 32),
 
@@ -1122,23 +1230,45 @@ class _AppContentTabState extends State<AppContentTab> {
                       ),
                     ),
                   ),
-                Row(
-                  children: [
-                    const Text('Logo size'),
-                    const SizedBox(width: 12),
-                    SizedBox(
-                      width: 220,
-                      child: Slider(
-                        value: _logoSize,
-                        min: 40,
-                        max: 160,
-                        divisions: 24,
-                        label: '${_logoSize.round()} px',
-                        onChanged: (v) => setState(() => _logoSize = v),
-                      ),
-                    ),
-                    Text('${_logoSize.round()} px'),
-                  ],
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    if (constraints.maxWidth < 520) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Logo size'),
+                          Slider(
+                            value: _logoSize,
+                            min: 40,
+                            max: 160,
+                            divisions: 24,
+                            label: '${_logoSize.round()} px',
+                            onChanged: (v) => setState(() => _logoSize = v),
+                          ),
+                          Text('${_logoSize.round()} px'),
+                        ],
+                      );
+                    }
+
+                    return Row(
+                      children: [
+                        const Text('Logo size'),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Slider(
+                            value: _logoSize,
+                            min: 40,
+                            max: 160,
+                            divisions: 24,
+                            label: '${_logoSize.round()} px',
+                            onChanged: (v) => setState(() => _logoSize = v),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text('${_logoSize.round()} px'),
+                      ],
+                    );
+                  },
                 ),
 
                 const SizedBox(height: 32),
@@ -1318,24 +1448,47 @@ class _AppContentTabState extends State<AppContentTab> {
                     ),
                   ),
                   const SizedBox(height: 6),
-                  Row(
-                    children: [
-                      const Text('Auto-rotate every'),
-                      const SizedBox(width: 12),
-                      SizedBox(
-                        width: 220,
-                        child: Slider(
-                          value: _reelAutoRotateSeconds.toDouble(),
-                          min: 4,
-                          max: 20,
-                          divisions: 16,
-                          label: '$_reelAutoRotateSeconds s',
-                          onChanged: (v) => setState(
-                              () => _reelAutoRotateSeconds = v.round()),
-                        ),
-                      ),
-                      Text('$_reelAutoRotateSeconds seconds'),
-                    ],
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      if (constraints.maxWidth < 520) {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('Auto-rotate every'),
+                            Slider(
+                              value: _reelAutoRotateSeconds.toDouble(),
+                              min: 4,
+                              max: 20,
+                              divisions: 16,
+                              label: '$_reelAutoRotateSeconds s',
+                              onChanged: (v) => setState(
+                                  () => _reelAutoRotateSeconds = v.round()),
+                            ),
+                            Text('$_reelAutoRotateSeconds seconds'),
+                          ],
+                        );
+                      }
+
+                      return Row(
+                        children: [
+                          const Text('Auto-rotate every'),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Slider(
+                              value: _reelAutoRotateSeconds.toDouble(),
+                              min: 4,
+                              max: 20,
+                              divisions: 16,
+                              label: '$_reelAutoRotateSeconds s',
+                              onChanged: (v) => setState(
+                                  () => _reelAutoRotateSeconds = v.round()),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text('$_reelAutoRotateSeconds seconds'),
+                        ],
+                      );
+                    },
                   ),
                   const SizedBox(height: 8),
                   Row(
@@ -1608,6 +1761,31 @@ class _AppContentTabState extends State<AppContentTab> {
                               Container(
                                   color: Colors.black.withOpacity(
                                       0.4)), // Overlay for video legibility
+
+                            if (_backgroundAudioUrl != null)
+                              Positioned(
+                                right: 14,
+                                top: 14,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withOpacity(0.45),
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(color: Colors.white24),
+                                  ),
+                                  child: const Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.audiotrack, color: Colors.white70, size: 14),
+                                      SizedBox(width: 6),
+                                      Text(
+                                        'Background Audio',
+                                        style: TextStyle(color: Colors.white70, fontSize: 11),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
 
                             // Content
                             SafeArea(

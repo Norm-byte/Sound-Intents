@@ -2173,7 +2173,7 @@ class _TrendingIntentCardState extends State<_TrendingIntentCard> {
       });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Community Pulse Updated'), backgroundColor: Colors.green),
+          const SnackBar(content: Text('Overall Most Liked Comment Updated'), backgroundColor: Colors.green),
         );
       }
     } catch (e) {
@@ -2237,7 +2237,7 @@ class _TrendingIntentCardState extends State<_TrendingIntentCard> {
                 children: [
                   Icon(Icons.favorite, size: 32, color: Colors.pink.shade400),
                   const SizedBox(height: 8),
-                  Text('Pulse', style: TextStyle(color: Colors.pink.shade700, fontWeight: FontWeight.bold)),
+                  Text('Overall', style: TextStyle(color: Colors.pink.shade700, fontWeight: FontWeight.bold)),
                 ],
               ),
             ),
@@ -2247,7 +2247,7 @@ class _TrendingIntentCardState extends State<_TrendingIntentCard> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Text('Shared Intent (My Impact)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  const Text('Overall Most Liked Comment', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                   const SizedBox(height: 12),
                   
                   // Calculated Intent Display
@@ -2270,7 +2270,7 @@ class _TrendingIntentCardState extends State<_TrendingIntentCard> {
                           children: [
                             Icon(Icons.analytics_outlined, size: 18, color: Colors.pink.shade300),
                             const SizedBox(width: 8),
-                            const Text("Community Signal: ", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black54, fontSize: 13)),
+                            const Text("Top Comment: ", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black54, fontSize: 13)),
                             Expanded(
                               child: Text(
                                 displayDate, 

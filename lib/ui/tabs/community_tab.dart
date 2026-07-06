@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 import '../widgets/video_widgets.dart';
+import '../../services/lock_service.dart';
 import '../../services/translation_service.dart';
 import '../../widgets/translatable_text.dart';
 
@@ -44,6 +45,22 @@ class _CommunityTabState extends State<CommunityTab> {
     return admin?.uid ?? 'unknown_admin';
   }
 
+  String _currentAdminLockName() {
+    final admin = FirebaseAuth.instance.currentUser;
+    final email = admin?.email?.trim() ?? '';
+    if (email.isNotEmpty) {
+      return email.split('@').first;
+    }
+    final name = admin?.displayName?.trim();
+    if (name != null && name.isNotEmpty) return name;
+    return 'Admin';
+  }
+
+  bool _isMyModerationLock(String? lockedBy) {
+    if (lockedBy == null || lockedBy.isEmpty) return false;
+    return lockedBy == _currentAdminLockName();
+  }
+
   Map<String, dynamic> _buildModerationAuditFields({
     required String status,
     required String action,
@@ -69,6 +86,89 @@ class _CommunityTabState extends State<CommunityTab> {
       'moderationUpdatedAt': FieldValue.serverTimestamp(),
       if (note != null && note.trim().isNotEmpty) 'resolutionNote': note.trim(),
     };
+  }
+
+  Future<void> _withModerationLock(
+    DocumentSnapshot reportDoc,
+    Future<void> Function() action,
+  ) async {
+    try {
+      final lockedBy = await LockService().acquireLock(
+        reportDoc.id,
+        'moderation',
+      );
+      if (lockedBy != null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'This moderation item is currently being handled by "$lockedBy".',
+            ),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+
+      await action();
+    } finally {
+      LockService().releaseLock(reportDoc.id, 'moderation').catchError((_) {});
+    }
+  }
+
+  Future<void> _sendModerationNotice({
+    required String userId,
+    required String message,
+    required String action,
+  }) async {
+    if (userId.trim().isEmpty) return;
+
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(userId)
+        .collection('messages')
+        .add({
+      'sender': 'admin',
+      'content': message,
+      'type': 'moderation_update',
+      'action': action,
+      'read': false,
+      'timestamp': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<void> _setReportedUserStatus({
+    required String userId,
+    required String action,
+  }) async {
+    if (userId.trim().isEmpty) return;
+
+    final userRef = FirebaseFirestore.instance.collection('users').doc(userId);
+    await FirebaseFirestore.instance.runTransaction((txn) async {
+      final userDoc = await txn.get(userRef);
+      final data = userDoc.data() as Map<String, dynamic>?;
+      final currentStatus =
+          (data?['status'] as String?)?.trim().toLowerCase() ?? 'active';
+
+      if (action == 'user_suspended') {
+        txn.set(userRef, {
+          'status': 'suspended',
+          'suspensionExpiry': null,
+          'lastAdminAction': 'Suspended via moderation queue',
+          'lastAdminActionDate': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+        return;
+      }
+
+      if (currentStatus == 'under_review') {
+        txn.set(userRef, {
+          'status': 'active',
+          'suspensionExpiry': null,
+          'lastAdminAction': 'Reinstated after moderation review',
+          'lastAdminActionDate': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+    });
   }
 
   Future<void> _deleteLiveFeedMessage(
@@ -206,6 +306,13 @@ class _CommunityTabState extends State<CommunityTab> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Pinned message updated for $_selectedFeedName')),
+        );
+      }
+    } on FirebaseException catch (e) {
+      final detail = e.code.isNotEmpty ? '${e.code}: ${e.message ?? ''}' : e.toString();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error updating message: $detail')),
         );
       }
     } catch (e) {
@@ -408,7 +515,14 @@ class _CommunityTabState extends State<CommunityTab> {
             final reason = report['reason'] as String? ?? 'No reason given';
             final isReelReport = _isReelReport(report);
 
-            return Card(
+            return StreamBuilder<String?>(
+              stream: LockService().watchLock(reportDoc.id, 'moderation'),
+              builder: (context, lockSnapshot) {
+                final lockedBy = lockSnapshot.data;
+                final lockedByOther =
+                    lockedBy != null && !_isMyModerationLock(lockedBy);
+
+                return Card(
               margin: const EdgeInsets.only(bottom: 12),
               color: Colors.red.shade50,
               child: ListTile(
@@ -495,13 +609,38 @@ class _CommunityTabState extends State<CommunityTab> {
                       },
                     ),
                     const SizedBox(height: 8),
+                    if (lockedBy != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.lock, size: 14, color: Colors.deepOrange),
+                            const SizedBox(width: 6),
+                            Text(
+                              lockedByOther
+                                  ? 'Locked by $lockedBy'
+                                  : 'You are handling this item',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Colors.deepOrange,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     Wrap(
                       spacing: 8,
                       children: [
                         OutlinedButton.icon(
                           icon: const Icon(Icons.person_search, size: 16),
                           label: const Text('Manage User'),
-                          onPressed: () => _manageReportedUser(reportedUserId),
+                          onPressed: lockedByOther
+                              ? null
+                              : () => _withModerationLock(
+                                    reportDoc,
+                                    () async => _manageReportedUser(reportedUserId),
+                                  ),
                           style: OutlinedButton.styleFrom(
                             foregroundColor: Colors.indigo,
                             side: const BorderSide(color: Colors.indigo),
@@ -510,13 +649,23 @@ class _CommunityTabState extends State<CommunityTab> {
                         OutlinedButton.icon(
                           icon: const Icon(Icons.check, size: 16, color: Colors.green),
                           label: const Text('Resolve', style: TextStyle(color: Colors.green)),
-                          onPressed: () => _resolveReport(reportDoc),
+                          onPressed: lockedByOther
+                              ? null
+                              : () => _withModerationLock(
+                                    reportDoc,
+                                    () => _resolveReport(reportDoc, report),
+                                  ),
                           style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.green)),
                         ),
                         OutlinedButton.icon(
                           icon: const Icon(Icons.close, size: 16, color: Colors.red),
                           label: const Text('Dismiss', style: TextStyle(color: Colors.red)),
-                          onPressed: () => _dismissReport(reportDoc),
+                          onPressed: lockedByOther
+                              ? null
+                              : () => _withModerationLock(
+                                    reportDoc,
+                                    () => _dismissReport(reportDoc, report),
+                                  ),
                           style: OutlinedButton.styleFrom(
                             side: const BorderSide(color: Colors.red),
                           ),
@@ -525,7 +674,9 @@ class _CommunityTabState extends State<CommunityTab> {
                           OutlinedButton.icon(
                             icon: const Icon(Icons.open_in_new, size: 16),
                             label: const Text('View Reel'),
-                            onPressed: () => _openReelFromReport(report),
+                            onPressed: lockedByOther
+                                ? null
+                                : () => _openReelFromReport(report),
                             style: OutlinedButton.styleFrom(
                               foregroundColor: Colors.indigo,
                               side: const BorderSide(color: Colors.indigo),
@@ -535,7 +686,12 @@ class _CommunityTabState extends State<CommunityTab> {
                           OutlinedButton.icon(
                             icon: const Icon(Icons.delete_forever, size: 16, color: Colors.red),
                             label: const Text('Remove Reel', style: TextStyle(color: Colors.red)),
-                            onPressed: () => _removeFlaggedReel(reportDoc, report),
+                            onPressed: lockedByOther
+                                ? null
+                                : () => _withModerationLock(
+                                      reportDoc,
+                                      () => _removeFlaggedReel(reportDoc, report),
+                                    ),
                             style: OutlinedButton.styleFrom(
                               side: const BorderSide(color: Colors.red),
                             ),
@@ -545,6 +701,8 @@ class _CommunityTabState extends State<CommunityTab> {
                   ],
                 ),
               ),
+                );
+              },
             );
           },
         );
@@ -779,7 +937,10 @@ class _CommunityTabState extends State<CommunityTab> {
     }
   }
 
-  Future<void> _resolveReport(DocumentSnapshot reportDoc) async {
+  Future<void> _resolveReport(
+    DocumentSnapshot reportDoc,
+    Map<String, dynamic> report,
+  ) async {
     final action = await showDialog<String>(
       context: context,
       builder: (ctx) => SimpleDialog(
@@ -831,9 +992,26 @@ class _CommunityTabState extends State<CommunityTab> {
     if (action == null || !mounted) return;
 
     try {
-      await reportDoc.reference.update(
-        _buildModerationAuditFields(status: 'resolved', action: action),
-      );
+      final reportedUserId = (report['reportedUserId'] as String?)?.trim() ?? '';
+
+      await _setReportedUserStatus(userId: reportedUserId, action: action);
+
+      await reportDoc.reference.update({
+        ..._buildModerationAuditFields(status: 'resolved', action: action),
+        'claimedBy': _currentAdminLockName(),
+      });
+
+      if (reportedUserId.isNotEmpty) {
+        final message = action == 'user_suspended'
+            ? 'Your account has been suspended after moderation review. Please contact support in My Harmony.'
+            : 'A moderation report involving your account has been reviewed and resolved.';
+        await _sendModerationNotice(
+          userId: reportedUserId,
+          message: message,
+          action: action,
+        );
+      }
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Report resolved'), backgroundColor: Colors.green),
@@ -852,11 +1030,29 @@ class _CommunityTabState extends State<CommunityTab> {
     }
   }
 
-  Future<void> _dismissReport(DocumentSnapshot reportDoc) async {
+  Future<void> _dismissReport(
+    DocumentSnapshot reportDoc,
+    Map<String, dynamic> report,
+  ) async {
     try {
-      await reportDoc.reference.update(
-        _buildModerationAuditFields(status: 'dismissed', action: 'dismissed'),
-      );
+      final reportedUserId = (report['reportedUserId'] as String?)?.trim() ?? '';
+
+      await _setReportedUserStatus(userId: reportedUserId, action: 'dismissed');
+
+      await reportDoc.reference.update({
+        ..._buildModerationAuditFields(status: 'dismissed', action: 'dismissed'),
+        'claimedBy': _currentAdminLockName(),
+      });
+
+      if (reportedUserId.isNotEmpty) {
+        await _sendModerationNotice(
+          userId: reportedUserId,
+          message:
+              'A moderation report involving your account has been dismissed and no further action was required.',
+          action: 'dismissed',
+        );
+      }
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Report dismissed')),
@@ -924,6 +1120,7 @@ class _CommunityTabState extends State<CommunityTab> {
                                 // Try to extract clean name from widget if possible, or just query again. 
                                 // Actually, for simpler code, let's just clear the controller so it reloads from stream
                                 _messageController.clear();
+                                _isMessageLoaded = false;
                               });
                             }
                           },
@@ -947,10 +1144,17 @@ class _CommunityTabState extends State<CommunityTab> {
                   if (snapshot.hasData && snapshot.data!.exists) {
                     final data = snapshot.data!.data() as Map<String, dynamic>;
                     if (_selectedFeedId == 'global') {
-                      currentMessage = data['admin_message'] as String?;
+                      final raw = data['admin_message'];
+                      currentMessage = raw == null ? null : raw.toString();
                     } else {
-                      currentMessage = data['adminMessage'] as String?;
+                      final raw = data['adminMessage'];
+                      currentMessage = raw == null ? null : raw.toString();
                     }
+                  }
+
+                  if (!_isMessageLoaded) {
+                    _messageController.text = currentMessage ?? '';
+                    _isMessageLoaded = true;
                   }
                   
                   // Only load the message when feed changes or first load

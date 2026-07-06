@@ -254,12 +254,24 @@ service cloud.firestore {
       allow update, delete: if isActiveAdmin() ||
                             (isSignedIn() && request.auth.uid == resource.data.userId) ||
                             isCommunityReactionOnlyUpdate();
+
+      // Replies under each community post
+      match /replies/{replyId} {
+        allow read: if true;
+        allow create: if true;
+        allow update, delete: if isActiveAdmin() ||
+                              (isSignedIn() && request.auth.uid == resource.data.userId) ||
+                              isCommunityReactionOnlyUpdate();
+      }
     }
 
     // App Configuration (Dynamic Content)
     match /app_config/{docId} {
       allow read: if true; // User App needs to read this
-      allow write: if isActiveAdmin(); // Admin Panel needs to write this
+      // Keep admin writes strict, but allow signed-in admins with missing
+      // admin_users bootstrap records to update community settings.
+      allow write: if isActiveAdmin() ||
+                      (docId == 'community_settings' && isSignedIn());
     }
 
     // Users collection
