@@ -293,8 +293,10 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
       final draftString = prefs.getString(
         'eventSchedulerDraftV3_Week$_selectedWeekOffset',
       );
+      bool hasLocalDraft = false;
       if (draftString != null) {
         final Map<String, dynamic> decoded = jsonDecode(draftString);
+        hasLocalDraft = decoded.isNotEmpty;
         setState(() {
           _scheduledEventsData = decoded.map(
             (key, value) => MapEntry(key, Map<String, dynamic>.from(value)),
@@ -305,6 +307,45 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
           _scheduledEventsData.clear();
         });
       }
+
+      bool isEffectivelyEmptyData(Map<String, dynamic> source) {
+        String txt(dynamic v) => (v ?? '').toString().trim();
+        final hasCoreContent =
+            txt(source['title']).isNotEmpty ||
+            txt(source['intent']).isNotEmpty ||
+            txt(source['description']).isNotEmpty ||
+            txt(source['visualUrl']).isNotEmpty ||
+            txt(source['soundUrl']).isNotEmpty ||
+            txt(source['noticeBoardBgImage']).isNotEmpty ||
+            txt(source['noticeBoardBgColor']).isNotEmpty;
+        return !hasCoreContent;
+      }
+
+      // Safety fallback: merge week drafts from Firestore draft_slot docs.
+      // Local non-empty edits stay authoritative; Firestore fills missing/empty slots.
+      final rebuiltDrafts = await _loadDraftFromFirestoreForSelectedWeek();
+      if (rebuiltDrafts.isNotEmpty) {
+        final merged = <String, Map<String, dynamic>>{
+          ..._scheduledEventsData,
+        };
+        rebuiltDrafts.forEach((slotId, firestoreData) {
+          final localData = merged[slotId];
+          if (localData == null || isEffectivelyEmptyData(localData)) {
+            merged[slotId] = firestoreData;
+          }
+        });
+
+        if (!hasLocalDraft || merged.length != _scheduledEventsData.length) {
+          setState(() {
+            _scheduledEventsData = merged;
+          });
+          await prefs.setString(
+            'eventSchedulerDraftV3_Week$_selectedWeekOffset',
+            jsonEncode(_scheduledEventsData),
+          );
+        }
+      }
+
       // Restore deleted slots marker
       final deletedString = prefs.getString(
         'eventSchedulerDeletedSlotsV1_Week$_selectedWeekOffset',
@@ -320,6 +361,61 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
     } finally {
       setState(() => _isLoading = false);
     }
+  }
+
+  Future<Map<String, Map<String, dynamic>>> _loadDraftFromFirestoreForSelectedWeek() async {
+    final rebuilt = <String, Map<String, dynamic>>{};
+    try {
+      final now = DateTime.now().toUtc();
+      final today = DateTime.utc(now.year, now.month, now.day);
+      final daysSinceMonday = today.weekday - 1;
+      final thisWeekMonday = today.subtract(Duration(days: daysSinceMonday));
+      final weekStart = thisWeekMonday.add(Duration(days: 7 * _selectedWeekOffset));
+      final weekEnd = weekStart.add(const Duration(days: 7));
+
+      final all = await _eventRepository.loadEvents();
+
+      for (final event in all) {
+        if (event.type == 'global') continue;
+        final isDraftLike = event.isDraft == true || event.id.startsWith('draft_slot_');
+        if (!isDraftLike) continue;
+        if (event.startTimeUTC == null) continue;
+
+        DateTime start;
+        try {
+          start = DateTime.parse(event.startTimeUTC!);
+        } catch (_) {
+          continue;
+        }
+
+        final inWeek =
+            start.isAfter(weekStart.subtract(const Duration(seconds: 1))) &&
+            start.isBefore(weekEnd);
+        if (!inWeek) {
+          continue;
+        }
+
+        final slotId = event.originTime != null && event.originTime!.contains(':')
+            ? event.originTime!
+            : '${start.hour.toString().padLeft(2, '0')}:${start.minute.toString().padLeft(2, '0')}';
+
+        final incoming = _convertEventToMap(event);
+        final existing = rebuilt[slotId];
+        if (existing == null) {
+          rebuilt[slotId] = incoming;
+          continue;
+        }
+
+        final existingUpdated = (existing['updatedAt'] ?? '').toString();
+        final incomingUpdated = (incoming['updatedAt'] ?? '').toString();
+        if (incomingUpdated.compareTo(existingUpdated) >= 0) {
+          rebuilt[slotId] = incoming;
+        }
+      }
+    } catch (e) {
+      debugPrint('Error rebuilding week drafts from Firestore: $e');
+    }
+    return rebuilt;
   }
 
   Future<void> _saveDraftToLocal() async {
@@ -345,6 +441,55 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
     _selectSlot(slotId);
   }
 
+  Event? _findLiveEventForSlot(String slotId) {
+    if (widget.liveEvents == null) return null;
+
+    try {
+      final parts = slotId.split(':');
+      final hour = int.parse(parts[0]);
+      final minute = int.parse(parts[1]);
+      final targetDate = _getTargetDate();
+      final dateSuffix =
+          '${targetDate.year}${targetDate.month.toString().padLeft(2, '0')}${targetDate.day.toString().padLeft(2, '0')}';
+      final publishedId = 'slot_${slotId.replaceAll(':', '')}_$dateSuffix';
+
+      final exactPublished = widget.liveEvents!.firstWhere(
+        (e) =>
+            e.id == publishedId &&
+            e.type != 'global' &&
+            e.isPublished == true &&
+            e.isDraft != true,
+        orElse: () => Event(id: '', title: '', type: 'national', isRecurring: true),
+      );
+      if (exactPublished.id.isNotEmpty) return exactPublished;
+
+      return widget.liveEvents!.firstWhere(
+        (e) {
+          if (e.type == 'global') return false;
+          if (e.isPublished != true || e.isDraft == true) return false;
+          if (e.startTimeUTC == null) return false;
+          final start = DateTime.parse(e.startTimeUTC!);
+
+          final timeMatch = start.hour == hour &&
+              start.minute >= minute &&
+              start.minute < minute + 15;
+          if (!timeMatch) return false;
+
+          final isTargetDate = start.year == targetDate.year &&
+              start.month == targetDate.month &&
+              start.day == targetDate.day;
+
+          final isRecurring = e.isRecurring == true;
+
+          return isTargetDate || isRecurring;
+        },
+        orElse: () => Event(id: '', title: '', type: 'national', isRecurring: true),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   void _selectSlot(String slotId) {
     // Save current slot before switching, but ONLY if:
     // a) there is already a local draft for it (user previously saved it), OR
@@ -358,52 +503,41 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
     setState(() {
       _selectedSlotId = slotId;
 
-      // 1. Try to get local draft data
-      Map<String, dynamic> data = _scheduledEventsData[slotId] ?? {};
+      // Prefer the published live event when it exists, so a republished slot
+      // cannot be masked by stale local draft placeholders.
+      Map<String, dynamic> data = {};
+      Event? liveEvent;
       _currentSlotFromLiveOnly = false; // reset; will be set true below if needed
 
-      // 2. If slot was explicitly cleared OR no local draft, try to find a live event
-      //    (but skip liveEvents lookup if slot is in _deletedSlots)
-      if (data.isEmpty && !_deletedSlots.contains(slotId) && widget.liveEvents != null) {
-        try {
-          final parts = slotId.split(':');
-          final hour = int.parse(parts[0]);
-          final minute = int.parse(parts[1]);
-          final targetDate = _getTargetDate(); // Use offset
+      bool isEffectivelyEmptyData(Map<String, dynamic> source) {
+        String txt(dynamic v) => (v ?? '').toString().trim();
+        final hasCoreContent =
+            txt(source['title']).isNotEmpty ||
+            txt(source['intent']).isNotEmpty ||
+            txt(source['description']).isNotEmpty ||
+            txt(source['visualUrl']).isNotEmpty ||
+            txt(source['soundUrl']).isNotEmpty ||
+            txt(source['noticeBoardBgImage']).isNotEmpty ||
+            txt(source['noticeBoardBgColor']).isNotEmpty;
+        return !hasCoreContent;
+      }
 
-          final liveEvent = widget.liveEvents!.firstWhere(
-            (e) {
-              // Filter out Global events from the Scheduler
-              if (e.type == 'global') return false;
+      // 1. Look for the authoritative published slot first.
+      try {
+        liveEvent = _findLiveEventForSlot(slotId);
+        if (liveEvent != null && liveEvent.id.isNotEmpty) {
+          data = _convertEventToMap(liveEvent);
+          _currentSlotFromLiveOnly = true; // loaded from liveEvents, not a local draft
+        }
+      } catch (e) {
+        debugPrint('Error matching live event: $e');
+      }
 
-              if (e.startTimeUTC == null) return false;
-              final start = DateTime.parse(e.startTimeUTC!);
-
-              // Check time match
-              final timeMatch = start.hour == hour &&
-                  start.minute >= minute &&
-                  start.minute < minute + 15;
-              if (!timeMatch) return false;
-
-              final isTargetDate = start.year == targetDate.year &&
-                  start.month == targetDate.month &&
-                  start.day == targetDate.day;
-
-              if (isTargetDate) return true;
-              if (e.isRecurring == true) return true;
-
-              return false;
-            },
-            orElse: () =>
-                Event(id: '', title: '', type: 'national', isRecurring: true),
-          );
-
-          if (liveEvent.id.isNotEmpty) {
-            data = _convertEventToMap(liveEvent);
-            _currentSlotFromLiveOnly = true; // loaded from liveEvents, not a local draft
-          }
-        } catch (e) {
-          debugPrint('Error matching live event: $e');
+      // 2. Fall back to local draft data only when there is no live event.
+      if (data.isEmpty) {
+        data = _scheduledEventsData[slotId] ?? {};
+        if (data.isNotEmpty && isEffectivelyEmptyData(data)) {
+          data = {};
         }
       }
 
@@ -554,6 +688,7 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
           final liveEvent = widget.liveEvents!.firstWhere((e) {
             // Filter out Global events just like _selectSlot
             if (e.type == 'global') return false;
+            if (e.isPublished != true || e.isDraft == true) return false;
 
             if (e.startTimeUTC == null) return false;
             final start = DateTime.parse(e.startTimeUTC!);
@@ -1636,8 +1771,7 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                   itemCount: slots.length,
                                   itemBuilder: (context, index) {
                                     final slotId = slots[index];
-                                    final hasLocalData = _scheduledEventsData
-                                        .containsKey(slotId);
+                                    final hasLocalData = _scheduledEventsData.containsKey(slotId);
                                     final isSelected =
                                         _selectedSlotId == slotId;
                                     final localData =
@@ -1645,58 +1779,21 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
 
                                     // Check for live event in this slot
                                     Event? liveEvent;
-                                    if (widget.liveEvents != null) {
-                                      try {
-                                        final parts = slotId.split(':');
-                                        final hour = int.parse(parts[0]);
-                                        final minute = int.parse(parts[1]);
-
-                                        final targetDate = _getTargetDate();
-
-                                        liveEvent =
-                                            widget.liveEvents!.firstWhere(
-                                          (e) {
-                                            if (e.startTimeUTC == null) {
-                                              return false;
-                                            }
-                                            final start = DateTime.parse(
-                                              e.startTimeUTC!,
-                                            );
-
-                                            final timeMatch = start.hour == hour &&
-                                                start.minute >= minute &&
-                                                start.minute < minute + 15;
-                                            if (!timeMatch) return false;
-
-                                            final isTargetDate =
-                                                start.year == targetDate.year &&
-                                                    start.month == targetDate.month &&
-                                                    start.day == targetDate.day;
-
-                                            final isRecurring = e.isRecurring == true;
-
-                                            return isTargetDate || isRecurring;
-                                          },
-                                        );
-                                      } catch (_) {}
-                                    }
+                                    liveEvent = _findLiveEventForSlot(slotId);
 
                                     // A slot is considered empty if:
                                     // - there's no local draft AND no live event, OR
                                     // - it was explicitly cleared by the user (_deletedSlots)
                                     final hasData =
-                                        (hasLocalData || liveEvent != null) &&
-                                        !_deletedSlots.contains(slotId);
+                                      (hasLocalData || liveEvent != null) &&
+                                      !_deletedSlots.contains(slotId);
 
                                     // Determine status color
                                     Color statusColor =
                                         Colors.grey.shade300; // Default: Empty
 
                                     if (hasData) {
-                                      if (hasLocalData) {
-                                        // Draft status - Amber for unpublished drafts
-                                        statusColor = Colors.amber;
-                                      } else {
+                                      if (liveEvent != null) {
                                         // Published event: green for the entire Mon-Sun week
                                         // it belongs to; amber only once that Sunday has passed.
                                         final now = DateTime.now().toUtc();
@@ -1707,6 +1804,9 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                         final targetWeekSunday = targetWeekMonday.add(const Duration(days: 6));
                                         final targetWeekEnd = DateTime.utc(targetWeekSunday.year, targetWeekSunday.month, targetWeekSunday.day, 23, 59, 59);
                                         statusColor = now.isBefore(targetWeekEnd) ? Colors.green : Colors.amber;
+                                      } else if (hasLocalData) {
+                                        // Draft status - Amber for unpublished drafts
+                                        statusColor = Colors.amber;
                                       }
                                     }
 
@@ -3453,11 +3553,12 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
       'id': event.id,
       'title': event.title,
       'intent': event.intent,
-      'description': '',
-      'visualUrl': event.visualUrl,
+      'description': event.noticeBoardText ?? '',
+      'visualUrl': (event.visualUrl ?? event.mediaUrl ?? '').trim(),
       'soundUrl': event.soundUrl,
       'durationSeconds': event.durationSeconds,
       'noticeBoardBgImage': event.noticeBoardBgImage,
+      'noticeBoardBgColor': event.noticeBoardBgColor,
       'autoNotify': event.autoNotify,
       'isRecurring': event.isRecurring,
       'isRandomized': event.isRandomized,
