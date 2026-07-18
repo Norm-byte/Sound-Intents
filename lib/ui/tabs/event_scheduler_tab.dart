@@ -48,6 +48,11 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
   // (not from a local draft). Prevents auto-saving liveEvent data back into
   // local draft simply because the user clicked somewhere else.
   bool _currentSlotFromLiveOnly = false;
+  DateTime? _externalSelectedDateUtc;
+  String? _externalSelectedEventId;
+  List<Event> _cachedLiveEvents = [];
+  Event? _selectedExternalLiveEvent;
+  Map<String, dynamic>? _forcedExternalSlotData;
 
   // Weekly Drafts
   // Keeps track of drafts for each week offset, so switching weeks doesn't lose work.
@@ -221,21 +226,90 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
     if (selection == null) return;
 
     int? requestedWeekOffset;
+    DateTime? requestedDateUtc;
+    String? requestedEventId;
     String slotId = selection;
 
     // Backward-compatible payload parsing:
-    // - New format: week:<offset>|slot:<HH:mm>
+    // - New format: week:<offset>|date:<ISO-UTC>|slot:<HH:mm>
+    // - Mid format: week:<offset>|slot:<HH:mm>
     // - Legacy format: <HH:mm>
-    if (selection.startsWith('week:') && selection.contains('|slot:')) {
-      final parts = selection.split('|slot:');
-      if (parts.length == 2) {
-        final weekPart = parts.first.replaceFirst('week:', '').trim();
-        final parsedOffset = int.tryParse(weekPart);
-        if (parsedOffset != null) {
-          requestedWeekOffset = parsedOffset;
+    if (selection.contains('|') ||
+        selection.startsWith('slot:') ||
+        selection.startsWith('week:') ||
+        selection.startsWith('date:') ||
+        selection.startsWith('event:')) {
+      final tokens = selection.split('|');
+      for (final token in tokens) {
+        final t = token.trim();
+        if (t.startsWith('week:')) {
+          final parsedOffset = int.tryParse(t.replaceFirst('week:', '').trim());
+          if (parsedOffset != null) {
+            requestedWeekOffset = parsedOffset;
+          }
+        } else if (t.startsWith('date:')) {
+          final parsedDate = DateTime.tryParse(t.replaceFirst('date:', '').trim());
+          if (parsedDate != null) {
+            requestedDateUtc = DateTime.utc(parsedDate.year, parsedDate.month, parsedDate.day);
+          }
+        } else if (t.startsWith('slot:')) {
+          slotId = t.replaceFirst('slot:', '').trim();
+        } else if (t.startsWith('event:')) {
+          requestedEventId = t.replaceFirst('event:', '').trim();
         }
-        slotId = parts.last.trim();
       }
+    }
+
+    if (slotId.startsWith('slot:')) {
+      slotId = slotId.replaceFirst('slot:', '').trim();
+    }
+
+    _externalSelectedDateUtc = requestedDateUtc;
+    _externalSelectedEventId =
+        requestedEventId != null && requestedEventId.isNotEmpty
+            ? requestedEventId
+            : null;
+    _selectedExternalLiveEvent = null;
+
+    try {
+      _cachedLiveEvents = await _eventRepository.loadEvents();
+    } catch (_) {
+      _cachedLiveEvents = widget.liveEvents ?? [];
+    }
+
+    if (_externalSelectedEventId != null) {
+      try {
+        _selectedExternalLiveEvent =
+            await _eventRepository.getEventById(_externalSelectedEventId!);
+        if (_selectedExternalLiveEvent != null &&
+            _selectedExternalLiveEvent!.id.isNotEmpty &&
+            _selectedExternalLiveEvent!.isPublished == true &&
+            _selectedExternalLiveEvent!.isDraft != true) {
+          _forcedExternalSlotData = _convertEventToMap(_selectedExternalLiveEvent!);
+        }
+      } catch (_) {
+        _selectedExternalLiveEvent = null;
+        _forcedExternalSlotData = null;
+      }
+    }
+
+    if ((_forcedExternalSlotData == null || _forcedExternalSlotData!.isEmpty) &&
+        requestedDateUtc != null &&
+        slotId.contains(':')) {
+      try {
+        final deterministicPublishedId =
+            'slot_${slotId.replaceAll(':', '')}_${requestedDateUtc.year}${requestedDateUtc.month.toString().padLeft(2, '0')}${requestedDateUtc.day.toString().padLeft(2, '0')}';
+        final deterministicDoc =
+            await _eventRepository.getEventById(deterministicPublishedId);
+        if (deterministicDoc != null &&
+            deterministicDoc.id.isNotEmpty &&
+            deterministicDoc.type != 'global' &&
+            deterministicDoc.isPublished == true &&
+            deterministicDoc.isDraft != true) {
+          _selectedExternalLiveEvent = deterministicDoc;
+          _forcedExternalSlotData = _convertEventToMap(deterministicDoc);
+        }
+      } catch (_) {}
     }
 
     if (requestedWeekOffset != null && requestedWeekOffset != _selectedWeekOffset) {
@@ -255,7 +329,7 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
       await _loadDraftFromLocal();
     }
 
-    _selectSlot(slotId);
+    await _selectSlot(slotId);
 
     // Clear the notifier so we don't re-select on rebuilds unnecessarily.
     widget.selectionNotifier!.value = null;
@@ -317,7 +391,10 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
             txt(source['visualUrl']).isNotEmpty ||
             txt(source['soundUrl']).isNotEmpty ||
             txt(source['noticeBoardBgImage']).isNotEmpty ||
-            txt(source['noticeBoardBgColor']).isNotEmpty;
+            txt(source['noticeBoardBgColor']).isNotEmpty ||
+            txt(source['noticeBoardText']).isNotEmpty ||
+            txt(source['noticeBoardShowBeforeMinutes']).isNotEmpty ||
+            txt(source['noticeBoardVisibilityAfterMinutes']).isNotEmpty;
         return !hasCoreContent;
       }
 
@@ -442,55 +519,163 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
   }
 
   Event? _findLiveEventForSlot(String slotId) {
-    if (widget.liveEvents == null) return null;
-
     try {
+      if (_selectedExternalLiveEvent != null &&
+          _selectedExternalLiveEvent!.id.isNotEmpty &&
+          _selectedExternalLiveEvent!.type != 'global' &&
+          _selectedExternalLiveEvent!.isPublished == true &&
+          _selectedExternalLiveEvent!.isDraft != true) {
+        return _selectedExternalLiveEvent;
+      }
+
       final parts = slotId.split(':');
       final hour = int.parse(parts[0]);
       final minute = int.parse(parts[1]);
-      final targetDate = _getTargetDate();
+      final targetDate = _externalSelectedDateUtc ?? _getTargetDate();
+      final targetWeekStart = targetDate.subtract(Duration(days: targetDate.weekday - 1));
+      final targetWeekEnd = targetWeekStart.add(const Duration(days: 7));
       final dateSuffix =
           '${targetDate.year}${targetDate.month.toString().padLeft(2, '0')}${targetDate.day.toString().padLeft(2, '0')}';
       final publishedId = 'slot_${slotId.replaceAll(':', '')}_$dateSuffix';
 
-      final exactPublished = widget.liveEvents!.firstWhere(
+      final liveEvents = _cachedLiveEvents.isNotEmpty
+          ? _cachedLiveEvents
+          : (widget.liveEvents ?? const <Event>[]);
+
+      if (liveEvents.isEmpty) return null;
+
+      bool hasCoreContent(Event event) {
+        String txt(dynamic value) => (value ?? '').toString().trim();
+        return txt(event.title).isNotEmpty ||
+            txt(event.intent).isNotEmpty ||
+            txt(event.visualUrl).isNotEmpty ||
+            txt(event.mediaUrl).isNotEmpty ||
+            txt(event.soundUrl).isNotEmpty ||
+            txt(event.noticeBoardText).isNotEmpty ||
+            txt(event.noticeBoardBgImage).isNotEmpty ||
+        txt(event.noticeBoardBgColor).isNotEmpty ||
+        (event.noticeBoardShowBeforeMinutes ?? 0) > 0 ||
+        (event.noticeBoardVisibilityAfterMinutes ?? 0) > 0;
+      }
+
+      final exactPublished = liveEvents.firstWhere(
         (e) =>
             e.id == publishedId &&
             e.type != 'global' &&
             e.isPublished == true &&
-            e.isDraft != true,
+            e.isDraft != true &&
+            hasCoreContent(e),
         orElse: () => Event(id: '', title: '', type: 'national', isRecurring: true),
       );
       if (exactPublished.id.isNotEmpty) return exactPublished;
 
-      return widget.liveEvents!.firstWhere(
-        (e) {
-          if (e.type == 'global') return false;
-          if (e.isPublished != true || e.isDraft == true) return false;
-          if (e.startTimeUTC == null) return false;
-          final start = DateTime.parse(e.startTimeUTC!);
+      final matches = <Event>[];
+      for (final e in liveEvents) {
+        if (e.type == 'global') continue;
+        if (e.isPublished != true || e.isDraft == true) continue;
+        if (e.startTimeUTC == null) continue;
 
-          final timeMatch = start.hour == hour &&
-              start.minute >= minute &&
-              start.minute < minute + 15;
-          if (!timeMatch) return false;
+        DateTime start;
+        try {
+          start = DateTime.parse(e.startTimeUTC!);
+        } catch (_) {
+          continue;
+        }
 
-          final isTargetDate = start.year == targetDate.year &&
-              start.month == targetDate.month &&
-              start.day == targetDate.day;
+        final timeMatch =
+            start.hour == hour && start.minute >= minute && start.minute < minute + 15;
+        if (!timeMatch) continue;
 
-          final isRecurring = e.isRecurring == true;
+        final isTargetDate = start.year == targetDate.year &&
+            start.month == targetDate.month &&
+            start.day == targetDate.day;
+        final inTargetWeek =
+            !start.isBefore(targetWeekStart) && start.isBefore(targetWeekEnd);
 
-          return isTargetDate || isRecurring;
-        },
-        orElse: () => Event(id: '', title: '', type: 'national', isRecurring: true),
-      );
+        final recurrence = (e.recurrenceType ?? '').trim().toLowerCase();
+        final isRecurringLike =
+            (e.isRecurring == true) || (recurrence.isNotEmpty && recurrence != 'none');
+
+        if (isTargetDate || inTargetWeek || isRecurringLike) {
+          if (!hasCoreContent(e)) continue;
+          matches.add(e);
+        }
+      }
+
+      if (matches.isEmpty) {
+        return Event(id: '', title: '', type: 'national', isRecurring: true);
+      }
+
+      DateTime parseUpdated(Event e) {
+        try {
+          if (e.updatedAt != null && e.updatedAt!.isNotEmpty) {
+            return DateTime.parse(e.updatedAt!);
+          }
+        } catch (_) {}
+        if (e.startTimeUTC != null) {
+          try {
+            return DateTime.parse(e.startTimeUTC!);
+          } catch (_) {}
+        }
+        return DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+      }
+
+      matches.sort((a, b) {
+        DateTime? aStart;
+        DateTime? bStart;
+        try {
+          aStart = a.startTimeUTC != null ? DateTime.parse(a.startTimeUTC!) : null;
+        } catch (_) {}
+        try {
+          bStart = b.startTimeUTC != null ? DateTime.parse(b.startTimeUTC!) : null;
+        } catch (_) {}
+
+        bool aExact = aStart != null &&
+            aStart.year == targetDate.year &&
+            aStart.month == targetDate.month &&
+            aStart.day == targetDate.day;
+        bool bExact = bStart != null &&
+            bStart.year == targetDate.year &&
+            bStart.month == targetDate.month &&
+            bStart.day == targetDate.day;
+        if (aExact != bExact) return aExact ? -1 : 1;
+
+        bool aInWeek = aStart != null &&
+            !aStart.isBefore(targetWeekStart) &&
+            aStart.isBefore(targetWeekEnd);
+        bool bInWeek = bStart != null &&
+            !bStart.isBefore(targetWeekStart) &&
+            bStart.isBefore(targetWeekEnd);
+        if (aInWeek != bInWeek) return aInWeek ? -1 : 1;
+
+        return parseUpdated(b).compareTo(parseUpdated(a));
+      });
+
+      return matches.first;
     } catch (_) {
       return null;
     }
   }
 
-  void _selectSlot(String slotId) {
+  Future<void> _selectSlot(String slotId) async {
+    // Deterministic source-of-truth read: for a selected slot/date, try the
+    // exact published Firestore doc first so editor hydration cannot drift.
+    try {
+      final targetDate = _externalSelectedDateUtc ?? _getTargetDate();
+      final deterministicPublishedId =
+          'slot_${slotId.replaceAll(':', '')}_${targetDate.year}${targetDate.month.toString().padLeft(2, '0')}${targetDate.day.toString().padLeft(2, '0')}';
+      final deterministicDoc =
+          await _eventRepository.getEventById(deterministicPublishedId);
+      if (deterministicDoc != null &&
+          deterministicDoc.id.isNotEmpty &&
+          deterministicDoc.type != 'global' &&
+          deterministicDoc.isPublished == true &&
+          deterministicDoc.isDraft != true) {
+        _selectedExternalLiveEvent = deterministicDoc;
+        _forcedExternalSlotData = _convertEventToMap(deterministicDoc);
+      }
+    } catch (_) {}
+
     // Save current slot before switching, but ONLY if:
     // a) there is already a local draft for it (user previously saved it), OR
     // b) the form was loaded from a local draft (not purely from liveEvents).
@@ -522,24 +707,55 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
         return !hasCoreContent;
       }
 
+      Map<String, dynamic> mergeSlotData(
+        Map<String, dynamic> primary,
+        Map<String, dynamic> secondary,
+      ) {
+        final merged = <String, dynamic>{...secondary, ...primary};
+        for (final entry in secondary.entries) {
+          final existing = merged[entry.key];
+          final primaryValue = primary[entry.key];
+          final primaryText = (primaryValue ?? '').toString().trim();
+          if (existing == null || primaryText.isEmpty) {
+            merged[entry.key] = entry.value;
+          }
+        }
+        return merged;
+      }
+
       // 1. Look for the authoritative published slot first.
       try {
-        liveEvent = _findLiveEventForSlot(slotId);
-        if (liveEvent != null && liveEvent.id.isNotEmpty) {
-          data = _convertEventToMap(liveEvent);
-          _currentSlotFromLiveOnly = true; // loaded from liveEvents, not a local draft
+        if (_forcedExternalSlotData != null && _forcedExternalSlotData!.isNotEmpty) {
+          data = Map<String, dynamic>.from(_forcedExternalSlotData!);
+          _currentSlotFromLiveOnly = true;
+        } else {
+          liveEvent = _findLiveEventForSlot(slotId);
+          if (liveEvent != null && liveEvent.id.isNotEmpty) {
+            data = _convertEventToMap(liveEvent);
+            _currentSlotFromLiveOnly = true; // loaded from liveEvents, not a local draft
+          }
+        }
+        if (data.isNotEmpty) {
+          _scheduledEventsData[slotId] = Map<String, dynamic>.from(data);
         }
       } catch (e) {
         debugPrint('Error matching live event: $e');
       }
 
       // 2. Fall back to local draft data only when there is no live event.
+      final localDraftData = _scheduledEventsData[slotId] ?? {};
       if (data.isEmpty) {
-        data = _scheduledEventsData[slotId] ?? {};
+        data = localDraftData;
         if (data.isNotEmpty && isEffectivelyEmptyData(data)) {
           data = {};
         }
       }
+
+      // Consume external selected date after this selection cycle.
+      _externalSelectedDateUtc = null;
+      _externalSelectedEventId = null;
+      _selectedExternalLiveEvent = null;
+      _forcedExternalSlotData = null;
 
       // Restore local preview if active upload exists
       if (_activeUploads.containsKey(slotId)) {
@@ -969,12 +1185,28 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
         final int effectiveShowBefore = parsedShowBefore <= 0 ? 60 : parsedShowBefore;
 
         final title = (data['title'] as String? ?? '').trim();
+        final description = (data['description'] as String? ?? '').trim();
         final visualUrl = (data['visualUrl'] as String? ?? '').trim();
         final soundUrl = (data['soundUrl'] as String? ?? '').trim();
+        final noticeBoardBgImage =
+          (data['noticeBoardBgImage'] as String? ?? '').trim();
+        final noticeBoardBgColor =
+          (data['noticeBoardBgColor'] as String? ?? '').trim();
+        final rawVisibilityAfter = data['noticeBoardVisibilityAfterMinutes'];
+        final int parsedVisibilityAfter = rawVisibilityAfter is int
+          ? rawVisibilityAfter
+          : int.tryParse('${rawVisibilityAfter ?? ''}') ?? 0;
 
         // Firestore rule: blank slot (no title, no media) must never persist as
         // an empty doc. Delete both draft and published variants, then skip saving.
-        if (title.isEmpty && visualUrl.isEmpty && soundUrl.isEmpty) {
+        if (title.isEmpty &&
+            description.isEmpty &&
+            visualUrl.isEmpty &&
+            soundUrl.isEmpty &&
+            noticeBoardBgImage.isEmpty &&
+            noticeBoardBgColor.isEmpty &&
+            effectiveShowBefore <= 0 &&
+            parsedVisibilityAfter <= 0) {
           final idsToDelete = <String>{
             draftId,
             'slot_${slotId.replaceAll(':', '')}_$dateSuffix',
@@ -1005,11 +1237,14 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
           isRandomized: data['isRandomized'] ?? false,
           useTrendingIntent: data['useTrendingIntent'] ?? false,
           autoNotify: data['autoNotify'] ?? false,
+            noticeBoardText: description.isNotEmpty ? description : null,
             noticeBoardShowBeforeMinutes: effectiveShowBefore,
           noticeBoardVisibilityAfterMinutes:
-              data['noticeBoardVisibilityAfterMinutes'] ?? 0,
-          noticeBoardBgImage: data['noticeBoardBgImage'],
-          noticeBoardBgColor: data['noticeBoardBgColor'],
+              parsedVisibilityAfter,
+            noticeBoardBgImage:
+              noticeBoardBgImage.isNotEmpty ? noticeBoardBgImage : null,
+            noticeBoardBgColor:
+              noticeBoardBgColor.isNotEmpty ? noticeBoardBgColor : null,
           // Drafts must not overwrite live published slot docs in Firestore.
           isPublished: false,
           isDraft: true,
@@ -1682,7 +1917,7 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 8),
                 // Toggle Buttons for Week Selection (Previous/Next)
                 Container(
                   padding: const EdgeInsets.symmetric(

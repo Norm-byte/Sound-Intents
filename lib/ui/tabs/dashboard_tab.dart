@@ -13,7 +13,7 @@ import '../widgets/active_operators_card.dart'; // Added for Active Operators
 class DashboardTab extends StatefulWidget {
   final List<Event> events;
   final VoidCallback onCreateEvent;
-  final Function(DateTime?, TimeOfDay?) onViewSchedule;
+  final Function(DateTime?, TimeOfDay?, [String? eventId]) onViewSchedule;
   final Function(Event) onEditEvent;
   final Function(Event) onDeleteEvent;
   final Function(List<Event>)? onImportEvents;
@@ -659,7 +659,51 @@ class _DashboardTabState extends State<DashboardTab> {
     // 3. Build dots for the CURRENTLY selected offset view
     // Map hour (0-23) to status: 0=Empty, 1=Published, 2=Draft, 3=Completed
     Map<int, int> currentViewHourStatus = {};
+    final Map<int, Event> currentViewHourPublishedTapEvent = {};
+    final Map<int, Event> currentViewHourDraftTapEvent = {};
     final isPastWeek = weekOffset < 0;
+
+    bool hasCoreContent(Event event) {
+      String txt(dynamic value) => (value ?? '').toString().trim();
+      return txt(event.title).isNotEmpty ||
+          txt(event.intent).isNotEmpty ||
+          txt(event.visualUrl).isNotEmpty ||
+          txt(event.mediaUrl).isNotEmpty ||
+          txt(event.soundUrl).isNotEmpty ||
+          txt(event.noticeBoardText).isNotEmpty ||
+          txt(event.noticeBoardBgImage).isNotEmpty ||
+          txt(event.noticeBoardBgColor).isNotEmpty;
+    }
+
+    bool shouldUseAsTapTarget(Event candidate, Event current) {
+      final candidatePublished = candidate.isPublished && !candidate.isDraft;
+      final currentPublished = current.isPublished && !current.isDraft;
+      if (candidatePublished != currentPublished) {
+        return candidatePublished;
+      }
+
+      final candidateHasContent = hasCoreContent(candidate);
+      final currentHasContent = hasCoreContent(current);
+      if (candidateHasContent != currentHasContent) {
+        return candidateHasContent;
+      }
+
+      DateTime parseUpdated(Event event) {
+        try {
+          if (event.updatedAt != null && event.updatedAt!.isNotEmpty) {
+            return DateTime.parse(event.updatedAt!);
+          }
+        } catch (_) {}
+        try {
+          if (event.startTimeUTC != null && event.startTimeUTC!.isNotEmpty) {
+            return DateTime.parse(event.startTimeUTC!);
+          }
+        } catch (_) {}
+        return DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+      }
+
+      return parseUpdated(candidate).isAfter(parseUpdated(current));
+    }
     
     // Filter events again for the *selected* view (currentOffset)
     final eventsInCurrentView = weekEvents.where((e) {
@@ -678,6 +722,10 @@ class _DashboardTabState extends State<DashboardTab> {
         // Prioritize Draft (2) > Completed/Amber (3) > Published (1)
         if (isDraftLike) {
           currentViewHourStatus[start.hour] = 2;
+          final currentTap = currentViewHourDraftTapEvent[start.hour];
+          if (currentTap == null || shouldUseAsTapTarget(e, currentTap)) {
+            currentViewHourDraftTapEvent[start.hour] = e;
+          }
         } else {
           final sundaySlotTime = DateTime.utc(
             now.year,
@@ -696,8 +744,20 @@ class _DashboardTabState extends State<DashboardTab> {
             // - Past weeks are completed/amber.
             // - In current week, only Sunday slots flip amber as they pass.
           if (current != 2) currentViewHourStatus[start.hour] = 3;
+          if (current != 2) {
+            final currentTap = currentViewHourPublishedTapEvent[start.hour];
+            if (currentTap == null || shouldUseAsTapTarget(e, currentTap)) {
+              currentViewHourPublishedTapEvent[start.hour] = e;
+            }
+          }
           } else {
-            if (current != 2 && current != 3) currentViewHourStatus[start.hour] = 1;
+            if (current != 2 && current != 3) {
+              currentViewHourStatus[start.hour] = 1;
+              final currentTap = currentViewHourPublishedTapEvent[start.hour];
+              if (currentTap == null || shouldUseAsTapTarget(e, currentTap)) {
+                currentViewHourPublishedTapEvent[start.hour] = e;
+              }
+            }
           }
         }
       } catch (_) {}
@@ -998,9 +1058,15 @@ class _DashboardTabState extends State<DashboardTab> {
                          return InkWell(
                            onTap: () {
                               // Navigate
-                              final targetDate = weekStart.add(Duration(hours: index, minutes: currentOffset));
+                            final tapEvent = status == 2
+                                ? currentViewHourDraftTapEvent[index]
+                                : currentViewHourPublishedTapEvent[index] ??
+                                    currentViewHourDraftTapEvent[index];
+                           final targetDate = tapEvent?.startTimeUTC != null
+                              ? DateTime.parse(tapEvent!.startTimeUTC!)
+                              : weekStart.add(Duration(hours: index, minutes: currentOffset));
                               final targetTime = TimeOfDay(hour: index, minute: currentOffset);
-                              widget.onViewSchedule(targetDate, targetTime);
+                              widget.onViewSchedule(targetDate, targetTime, tapEvent?.id);
                            },
                            child: Container(
                              decoration: BoxDecoration(
@@ -1991,7 +2057,7 @@ class _ActionButton extends StatelessWidget {
 
 class _SchedulerView extends StatefulWidget {
   final List<Event> events;
-  final Function(DateTime?, TimeOfDay?) onViewSchedule;
+  final Function(DateTime?, TimeOfDay?, [String? eventId]) onViewSchedule;
 
   const _SchedulerView({
     required this.events,
@@ -2056,27 +2122,32 @@ class _SchedulerViewState extends State<_SchedulerView> {
                       
                       Event? slotEvent;
                       try {
-                        slotEvent = widget.events.firstWhere((e) {
-                          // Filter out Global events from the 24-hour schedule
+                        bool matchesSlot(Event e) {
                           if (e.type == 'global') return false;
-
                           if (e.startTimeUTC == null) return false;
+
                           final start = DateTime.parse(e.startTimeUTC!);
-                          
-                          // Check time match
                           final timeMatch = start.hour == hour && start.minute >= minute && start.minute < minute + 15;
                           if (!timeMatch) return false;
 
-                          // Check date match OR recurrence
                           final dateMatch = start.year == today.year && start.month == today.month && start.day == today.day;
-                          // Fix: Check recurrenceType as well, as isRecurring might be false/null for legacy events
                           final isRecurring = (e.isRecurring == true) || (e.recurrenceType != null && e.recurrenceType != 'None');
+                          return isRecurring || dateMatch;
+                        }
 
-                          // If it's recurring, we only care about the time match (which is already checked above)
-                          // If it's NOT recurring, we need the date to match today
-                          if (isRecurring) return true;
-                          return dateMatch;
-                        });
+                        final publishedMatch = widget.events.firstWhere(
+                          (e) => matchesSlot(e) && e.isPublished == true && e.isDraft != true,
+                          orElse: () => Event(id: '', title: '', type: 'national', isRecurring: true),
+                        );
+                        if (publishedMatch.id.isNotEmpty) {
+                          slotEvent = publishedMatch;
+                        } else {
+                          final fallback = widget.events.firstWhere(
+                            matchesSlot,
+                            orElse: () => Event(id: '', title: '', type: 'national', isRecurring: true),
+                          );
+                          slotEvent = fallback.id.isNotEmpty ? fallback : null;
+                        }
                       } catch (_) {}
 
                       Color color = Colors.grey.shade200;
@@ -2109,8 +2180,10 @@ class _SchedulerViewState extends State<_SchedulerView> {
                         message: '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}${slotEvent != null ? ' - ${slotEvent.title}' : ''}',
                         child: InkWell(
                           onTap: () {
-                            final targetDate = today.add(Duration(hours: hour, minutes: minute));
-                            widget.onViewSchedule(targetDate, TimeOfDay(hour: hour, minute: minute));
+                            final targetDate = slotEvent?.startTimeUTC != null
+                                ? DateTime.parse(slotEvent!.startTimeUTC!)
+                                : today.add(Duration(hours: hour, minutes: minute));
+                            widget.onViewSchedule(targetDate, TimeOfDay(hour: hour, minute: minute), slotEvent?.id);
                           },
                           child: Container(
                             decoration: BoxDecoration(

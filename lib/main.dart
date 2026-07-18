@@ -306,7 +306,7 @@ class _AdminHomePageState extends State<AdminHomePage>
                   .showSnackBar(const SnackBar(content: Text('Access Denied')));
             }
           },
-          onViewSchedule: (date, time) {
+          onViewSchedule: (date, time, [eventId]) {
             // Animate to National Events (Index 2)
             if (_hasAccess('event_scheduler')) {
               _tabController.animateTo(2);
@@ -326,10 +326,17 @@ class _AdminHomePageState extends State<AdminHomePage>
 
                   final weekOffset =
                       selectedMonday.difference(thisWeekMonday).inDays ~/ 7;
+                    final selectedDateIso = selectedUtc.toIso8601String();
+                  final eventToken = eventId != null && eventId.isNotEmpty
+                      ? '|event:$eventId'
+                      : '';
                   _schedulerSelectionNotifier.value =
-                      'week:$weekOffset|slot:$slotId';
+                      'week:$weekOffset|date:$selectedDateIso|slot:$slotId$eventToken';
                 } else {
-                  _schedulerSelectionNotifier.value = slotId;
+                  _schedulerSelectionNotifier.value =
+                      eventId != null && eventId.isNotEmpty
+                          ? 'slot:$slotId|event:$eventId'
+                          : slotId;
                 }
               }
             } else {
@@ -391,7 +398,13 @@ class _AdminHomePageState extends State<AdminHomePage>
       buildTab('monetization', 'Deals', const MonetizationTab()),
 
       // 10. System
-      buildTab('system', 'System', const SystemTab()),
+      buildTab(
+        'system',
+        'System',
+        SystemTab(
+          canManageAppAccounts: _hasAccess('app_accounts'),
+        ),
+      ),
 
       // 11. Notifications
       buildTab('notifications', 'Notifications', const NotificationsScreen()),
@@ -509,14 +522,73 @@ class _AdminHomePageState extends State<AdminHomePage>
       debugPrint('Publish conflict sweep preload failed: $e');
     }
 
+    DateTime parseUpdated(Event event) {
+      try {
+        if (event.updatedAt != null && event.updatedAt!.isNotEmpty) {
+          return DateTime.parse(event.updatedAt!);
+        }
+      } catch (_) {}
+      if (event.startTimeUTC != null) {
+        try {
+          return DateTime.parse(event.startTimeUTC!);
+        } catch (_) {}
+      }
+      return DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+    }
+
+    bool hasCoreContent(Event event) {
+      String txt(dynamic value) => (value ?? '').toString().trim();
+      return txt(event.title).isNotEmpty ||
+          txt(event.intent).isNotEmpty ||
+          txt(event.visualUrl).isNotEmpty ||
+          txt(event.mediaUrl).isNotEmpty ||
+          txt(event.soundUrl).isNotEmpty ||
+          txt(event.noticeBoardText).isNotEmpty ||
+          txt(event.noticeBoardBgImage).isNotEmpty ||
+          txt(event.noticeBoardBgColor).isNotEmpty;
+    }
+
+    bool isBetterCandidate(Event next, Event current) {
+      final nextHasContent = hasCoreContent(next);
+      final currentHasContent = hasCoreContent(current);
+      if (nextHasContent != currentHasContent) {
+        return nextHasContent;
+      }
+
+      final nextIsDraft = next.id.startsWith('draft_slot_');
+      final currentIsDraft = current.id.startsWith('draft_slot_');
+      if (nextIsDraft != currentIsDraft) {
+        return nextIsDraft;
+      }
+
+      return parseUpdated(next).isAfter(parseUpdated(current));
+    }
+
+    // Deduplicate by final published slot ID so one slot is written once.
+    // Prioritize draft source over slot source to preserve authored editor fields.
+    final Map<String, Event> publishCandidates = {};
+    for (final e in eventsToPublish) {
+      final publishedId = e.id.startsWith('draft_slot_')
+          ? e.id.replaceFirst('draft_slot_', 'slot_')
+          : e.id;
+
+      final existing = publishCandidates[publishedId];
+      if (existing == null) {
+        publishCandidates[publishedId] = e;
+        continue;
+      }
+
+      publishCandidates[publishedId] =
+          isBetterCandidate(e, existing) ? e : existing;
+    }
+
     int count = 0;
-    for (var e in eventsToPublish) {
+    for (final entry in publishCandidates.entries) {
+      final e = entry.value;
+      final publishedId = entry.key;
       try {
         // Always set published=true, regardless of previous state
         // This forces an update to Firestore which the User App will see
-        final publishedId = e.id.startsWith('draft_slot_')
-            ? e.id.replaceFirst('draft_slot_', 'slot_')
-            : e.id;
 
         // Delete competing published records for the exact same slot start.
         // This prevents stale tails from older published variants at the same time.
@@ -556,11 +628,7 @@ class _AdminHomePageState extends State<AdminHomePage>
     // in this week/lane that had no corresponding draft entry. This ensures that
     // if the admin cleared a slot's content (without clicking Delete), the live
     // doc is still removed when Publish Week is pressed.
-    final promotedIds = eventsToPublish
-        .map((e) => e.id.startsWith('draft_slot_')
-            ? e.id.replaceFirst('draft_slot_', 'slot_')
-            : e.id)
-        .toSet();
+    final promotedIds = publishCandidates.keys.toSet();
 
     final orphanedSlots = _scheduledEvents.where((e) {
       if (e.type == 'global') return false;

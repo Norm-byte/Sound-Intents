@@ -57,6 +57,7 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
     'event_scheduler': false,     // National Events
     'media_library': false,
     'app_content': false,         // App Content
+    'app_accounts': false,        // App Accounts
     'chat_management': false,     // Chat Rooms
     'topics': false,
     'community': false,           // Community
@@ -74,6 +75,7 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
     'event_scheduler': 'National Events',
     'media_library':   'Media Library',
     'app_content':     'App Content',
+    'app_accounts':    'App Accounts',
     'chat_management': 'Chat Rooms',
     'topics':          'Topics',
     'community':       'Community',
@@ -670,7 +672,7 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
       children: [
         // Header
         Container(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
           decoration: BoxDecoration(
             color: Colors.white,
             border: Border(
@@ -687,12 +689,12 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
                     children: [
                       const Text(
                         'Admin User Management',
-                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                       ),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: 2),
                       Text(
                         'Manage administrator access and permissions',
-                        style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                        style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
                       ),
                     ],
                   ),
@@ -709,13 +711,14 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
                     ),
                 ],
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 8),
               TabBar(
                 controller: _tabController,
                 labelColor: Colors.indigo,
                 unselectedLabelColor: Colors.grey,
                 indicatorColor: Colors.indigo,
                 isScrollable: true,
+                labelPadding: const EdgeInsets.symmetric(horizontal: 10),
                 onTap: (_) => setState(() {}),
                 tabs: const [
                   Tab(icon: Icon(Icons.person_add), text: 'Onboard Admin'),

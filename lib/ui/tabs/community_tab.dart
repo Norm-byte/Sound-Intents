@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -18,7 +20,18 @@ class CommunityTab extends StatefulWidget {
 class _CommunityTabState extends State<CommunityTab> {
   final TextEditingController _messageController = TextEditingController(); // For Pinned Message
   final TextEditingController _adminChatController = TextEditingController(); // For Admin Chat
-  bool _isMessageLoaded = false;
+  final FocusNode _messageFocusNode = FocusNode();
+  final ScrollController _liveFeedScrollController = ScrollController();
+  Timer? _featuredPublishTimer;
+  Timer? _liveFeedAutoScrollTimer;
+  StreamSubscription<DocumentSnapshot>? _communitySettingsSubscription;
+  bool _featuredCarouselEnabled = false;
+  bool _featuredAutoPublish = false;
+  bool _featuredTickInFlight = false;
+  bool _liveFeedAutoScrollEnabled = false;
+  double _liveFeedAutoScrollSpeedPxPerSecond = 28;
+  int _liveFeedDensityPreset = 1; // 0: Normal, 1: Compact, 2: Ultra
+  String _lastKnownGlobalAdminManualMessage = '';
   
   // Feed Selection State
   String _selectedFeedId = 'global'; // 'global' or groupId
@@ -239,13 +252,57 @@ class _CommunityTabState extends State<CommunityTab> {
   void initState() {
     super.initState();
     TranslationService.instance.init();
+    _watchCommunitySettings();
   }
 
   @override
   void dispose() {
+    _featuredPublishTimer?.cancel();
+    _liveFeedAutoScrollTimer?.cancel();
+    _communitySettingsSubscription?.cancel();
+    _messageFocusNode.dispose();
+    _liveFeedScrollController.dispose();
     _messageController.dispose();
     _adminChatController.dispose();
     super.dispose();
+  }
+
+  void _syncLiveFeedAutoScroll() {
+    _liveFeedAutoScrollTimer?.cancel();
+    if (!_liveFeedAutoScrollEnabled) return;
+
+    const interval = Duration(milliseconds: 180);
+    _liveFeedAutoScrollTimer = Timer.periodic(interval, (_) {
+      if (!mounted || !_liveFeedAutoScrollEnabled || !_liveFeedScrollController.hasClients) {
+        return;
+      }
+
+      final pos = _liveFeedScrollController.position;
+      final maxExtent = pos.maxScrollExtent;
+      if (maxExtent <= 0) return;
+
+      final step = _liveFeedAutoScrollSpeedPxPerSecond * (interval.inMilliseconds / 1000);
+      final next = (pos.pixels + step) >= maxExtent ? 0.0 : (pos.pixels + step);
+
+      _liveFeedScrollController.jumpTo(next);
+    });
+  }
+
+  Future<void> _saveUserFlowScrollSettings({
+    required bool enabled,
+    required double speed,
+  }) async {
+    try {
+      await FirebaseFirestore.instance
+          .collection('app_config')
+          .doc('community_settings')
+          .set({
+        'auto_scroll_enabled': enabled,
+        'auto_scroll_speed': speed,
+      }, SetOptions(merge: true));
+    } catch (_) {
+      // Keep this fire-and-forget to avoid interrupting live moderation.
+    }
   }
 
   Future<void> _sendAdminChat(String text) async {
@@ -276,7 +333,6 @@ class _CommunityTabState extends State<CommunityTab> {
               });
         }
         _adminChatController.clear();
-          _messageController.clear();
         if (mounted) {
            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Posted as Admin')));
         }
@@ -294,7 +350,15 @@ class _CommunityTabState extends State<CommunityTab> {
         await FirebaseFirestore.instance
             .collection('app_config')
             .doc('community_settings')
-            .set({'admin_message': messageToSave}, SetOptions(merge: true));
+            .set({
+              'admin_message_manual': messageToSave,
+              'admin_message': messageToSave,
+              'admin_message_display_type': 'pinned',
+              'featuredLastSourceType': 'manual',
+              'featuredLastPostId': null,
+              'featuredLastKeyword': null,
+            }, SetOptions(merge: true));
+              _lastKnownGlobalAdminManualMessage = messageToSave;
       } else {
         // Save specific message for this group
         await FirebaseFirestore.instance
@@ -324,25 +388,514 @@ class _CommunityTabState extends State<CommunityTab> {
     }
   }
 
-  Future<void> _saveFeedScrollSettings({
-    required bool enabled,
-    required double speed,
-  }) async {
-    try {
-      await FirebaseFirestore.instance
-          .collection('app_config')
-          .doc('community_settings')
-          .set({
-        'auto_scroll_enabled': enabled,
-        'auto_scroll_speed': speed,
-      }, SetOptions(merge: true));
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error saving feed scroll settings: $e')),
-        );
+  void _watchCommunitySettings() {
+    _communitySettingsSubscription?.cancel();
+    _communitySettingsSubscription = FirebaseFirestore.instance
+        .collection('app_config')
+        .doc('community_settings')
+        .snapshots()
+        .listen((snapshot) {
+      final data = snapshot.data() ?? const <String, dynamic>{};
+      final enabled = (data['featuredCarouselEnabled'] as bool?) ?? false;
+      final autoPublish = (data['featuredAutoPublish'] as bool?) ?? false;
+
+      final changed =
+          enabled != _featuredCarouselEnabled || autoPublish != _featuredAutoPublish;
+      _featuredCarouselEnabled = enabled;
+      _featuredAutoPublish = autoPublish;
+
+      if (changed) {
+        _syncFeaturedAutoPublishTimer();
+      }
+    });
+  }
+
+  void _syncFeaturedAutoPublishTimer() {
+    final shouldRun = _featuredCarouselEnabled && _featuredAutoPublish;
+    if (!shouldRun) {
+      _featuredPublishTimer?.cancel();
+      _featuredPublishTimer = null;
+      return;
+    }
+
+    _featuredPublishTimer?.cancel();
+    _featuredPublishTimer = Timer.periodic(
+      const Duration(seconds: 8),
+      (_) => _runFeaturedAutopublishTick(),
+    );
+
+    // Trigger a pass quickly when toggled on so admins can validate behavior.
+    unawaited(_runFeaturedAutopublishTick());
+  }
+
+  List<Map<String, dynamic>> _parseFeaturedItems(dynamic raw) {
+    final list = (raw as List?) ?? const [];
+    return list
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e.cast<String, dynamic>()))
+        .where((item) => (item['text'] as String?)?.trim().isNotEmpty == true)
+        .toList();
+  }
+
+  List<String> _parseFeaturedKeywords(dynamic raw) {
+    return ((raw as List?) ?? const [])
+        .map((e) => e.toString().trim().toLowerCase())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList();
+  }
+
+  Future<void> _updateCommunitySettings(Map<String, dynamic> patch) async {
+    await FirebaseFirestore.instance
+        .collection('app_config')
+        .doc('community_settings')
+        .set(patch, SetOptions(merge: true));
+  }
+
+  String _buildFeaturedDisplayText(Map<String, dynamic> item) {
+    final rawText = (item['text'] as String? ?? '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (rawText.isEmpty) return '';
+
+    final sourceType = (item['sourceType'] as String? ?? 'manual').toLowerCase();
+    final isCommentSource = sourceType.contains('comment');
+
+    final maxLen = isCommentSource ? 180 : 260;
+    var display = rawText.length > maxLen ? '${rawText.substring(0, maxLen)}...' : rawText;
+
+    if (isCommentSource) {
+      DateTime? ts;
+      final tsRaw = item['sourceTimestamp'];
+      if (tsRaw is Timestamp) {
+        ts = tsRaw.toDate();
+      } else if (tsRaw is String) {
+        ts = DateTime.tryParse(tsRaw);
+      }
+      if (ts != null) {
+        // Keep metadata compact to avoid inflating the pinned panel height.
+        display = '$display  [Feed ${DateFormat('MMM d, h:mm a').format(ts)}]';
       }
     }
+
+    return display;
+  }
+
+  Future<void> _runFeaturedAutopublishTick() async {
+    if (_featuredTickInFlight) return;
+    _featuredTickInFlight = true;
+
+    try {
+      final settingsRef = FirebaseFirestore.instance
+          .collection('app_config')
+          .doc('community_settings');
+      final settingsSnap = await settingsRef.get();
+      final settings = settingsSnap.data() ?? const <String, dynamic>{};
+
+      final enabled = (settings['featuredCarouselEnabled'] as bool?) ?? false;
+      final autoPublish = (settings['featuredAutoPublish'] as bool?) ?? false;
+      if (!enabled || !autoPublish) return;
+
+      final intervalSeconds =
+          ((settings['featuredIntervalSeconds'] as num?)?.toInt() ?? 60)
+              .clamp(30, 172800);
+      final lastPublishedAt = settings['featuredLastPublishedAt'] as Timestamp?;
+      if (lastPublishedAt != null) {
+        final elapsed = DateTime.now().difference(lastPublishedAt.toDate()).inSeconds;
+        if (elapsed < intervalSeconds) return;
+      }
+
+      final randomize = (settings['featuredRandomize'] as bool?) ?? false;
+      final sourceMode =
+          (settings['featuredSourceMode'] as String? ?? 'mixed').toLowerCase();
+      final currentIndex = (settings['featuredCurrentIndex'] as num?)?.toInt() ?? 0;
+      final adminIndex = (settings['featuredAdminIndex'] as num?)?.toInt() ?? currentIndex;
+      final userIndex = (settings['featuredUserIndex'] as num?)?.toInt() ?? 0;
+      final mixedUserStreak =
+          (settings['featuredMixedUserStreak'] as num?)?.toInt() ?? 0;
+      final mixedAdminEveryUsers =
+          ((settings['featuredMixedAdminEveryUsers'] as num?)?.toInt() ?? 5)
+              .clamp(1, 100);
+      final keywords = _parseFeaturedKeywords(settings['featuredKeywords']);
+        final includeManual = sourceMode != 'keywords_only';
+        final includeKeywords = sourceMode != 'admin_only';
+        final manualMessage =
+            (settings['admin_message_manual'] as String? ?? '').trim();
+      final manualItems = includeManual
+          ? _parseFeaturedItems(settings['featuredItems'])
+              .where((item) => (item['active'] as bool?) ?? true)
+              .toList()
+          : <Map<String, dynamic>>[];
+
+      final adminCandidates = <Map<String, dynamic>>[
+        if (includeManual && manualMessage.isNotEmpty)
+          {
+            'id': 'manual_admin_message',
+            'text': manualMessage,
+            'sourceType': 'manual_admin_message',
+            'active': true,
+          },
+        ...manualItems,
+      ];
+
+      final userCandidates = <Map<String, dynamic>>[];
+
+      if (includeKeywords && keywords.isNotEmpty) {
+        final postSnap = await FirebaseFirestore.instance
+            .collection('community_posts')
+            .orderBy('timestamp', descending: true)
+            .limit(120)
+            .get();
+
+        for (final doc in postSnap.docs) {
+          final data = doc.data();
+          final content = (data['content'] as String? ?? '').trim();
+          if (content.isEmpty) continue;
+
+          final lower = content.toLowerCase();
+          final matchedKeyword = keywords.firstWhere(
+            lower.contains,
+            orElse: () => '',
+          );
+          if (matchedKeyword.isEmpty) continue;
+
+          final ts = data['timestamp'];
+          userCandidates.add({
+            'id': 'kw_${doc.id}',
+            'text': content,
+            'sourceType': 'keyword_comment',
+            'sourceKeyword': matchedKeyword,
+            'sourcePostId': doc.id,
+            if (ts != null) 'sourceTimestamp': ts,
+            'active': true,
+          });
+        }
+      }
+
+      List<Map<String, dynamic>> selectedPool;
+      var selectedPoolType = 'admin';
+      var nextAdminIndex = adminIndex;
+      var nextUserIndex = userIndex;
+      var nextMixedUserStreak = mixedUserStreak;
+
+      if (sourceMode == 'admin_only') {
+        selectedPool = adminCandidates;
+        selectedPoolType = 'admin';
+      } else if (sourceMode == 'keywords_only') {
+        selectedPool = userCandidates;
+        selectedPoolType = 'user';
+      } else {
+        if (adminCandidates.isEmpty && userCandidates.isEmpty) return;
+
+        final shouldUseAdmin = userCandidates.isEmpty ||
+            (adminCandidates.isNotEmpty && mixedUserStreak >= mixedAdminEveryUsers);
+
+        if (shouldUseAdmin && adminCandidates.isNotEmpty) {
+          selectedPool = adminCandidates;
+          selectedPoolType = 'admin';
+        } else if (userCandidates.isNotEmpty) {
+          selectedPool = userCandidates;
+          selectedPoolType = 'user';
+        } else {
+          selectedPool = adminCandidates;
+          selectedPoolType = 'admin';
+        }
+      }
+
+      if (selectedPool.isEmpty) return;
+
+      final selectedIndex = randomize
+          ? Random().nextInt(selectedPool.length)
+          : ((selectedPoolType == 'admin' ? adminIndex : userIndex) % selectedPool.length);
+
+      if (!randomize) {
+        if (selectedPoolType == 'admin') {
+          nextAdminIndex = (selectedIndex + 1) % selectedPool.length;
+        } else {
+          nextUserIndex = (selectedIndex + 1) % selectedPool.length;
+        }
+      }
+
+      if (sourceMode == 'mixed') {
+        nextMixedUserStreak = selectedPoolType == 'admin'
+            ? 0
+            : (mixedUserStreak + 1).clamp(0, 100000);
+      } else {
+        nextMixedUserStreak = 0;
+      }
+
+      final selected = selectedPool[selectedIndex];
+      final publishText = _buildFeaturedDisplayText(selected);
+      if (publishText.isEmpty) return;
+
+      final selectedSourceType =
+          (selected['sourceType'] as String? ?? 'manual').toLowerCase();
+      final displayType = selectedSourceType.contains('comment')
+          ? 'featured'
+          : 'pinned';
+
+      await settingsRef.set({
+        'admin_message': publishText,
+        'admin_message_display_type': displayType,
+        'featuredCurrentIndex': selectedPoolType == 'admin' ? nextAdminIndex : nextUserIndex,
+        'featuredAdminIndex': nextAdminIndex,
+        'featuredUserIndex': nextUserIndex,
+        'featuredMixedUserStreak': nextMixedUserStreak,
+        'featuredLastPublishedAt': FieldValue.serverTimestamp(),
+        'featuredLastSourceType': selected['sourceType'] ?? 'manual',
+        'featuredLastKeyword': selected['sourceKeyword'],
+        'featuredLastPostId': selected['sourcePostId'],
+        'featuredLastPublishedPreview': publishText,
+      }, SetOptions(merge: true));
+    } catch (_) {
+      // Keep timer robust; this loop should not interrupt admin use on transient failures.
+    } finally {
+      _featuredTickInFlight = false;
+    }
+  }
+
+  Future<void> _addFeaturedManualItem() async {
+    final controller = TextEditingController();
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Add Featured Input'),
+        content: TextField(
+          controller: controller,
+          maxLines: 5,
+          minLines: 2,
+          decoration: const InputDecoration(
+            hintText: 'Type announcement, shout out, or featured prompt...',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Add')),
+        ],
+      ),
+    );
+
+    final text = controller.text.trim();
+    if (saved != true || text.isEmpty) return;
+
+    final settingsRef = FirebaseFirestore.instance
+        .collection('app_config')
+        .doc('community_settings');
+    final snap = await settingsRef.get();
+    final data = snap.data() ?? const <String, dynamic>{};
+    final items = _parseFeaturedItems(data['featuredItems']);
+    items.add({
+      'id': DateTime.now().microsecondsSinceEpoch.toString(),
+      'text': text,
+      'sourceType': 'manual',
+      'active': true,
+      'createdAt': DateTime.now().toIso8601String(),
+    });
+
+    await _updateCommunitySettings({'featuredItems': items});
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Added to featured carousel inputs.')),
+    );
+  }
+
+  Future<void> _editFeaturedKeywords(List<String> currentKeywords) async {
+    final controller = TextEditingController(text: currentKeywords.join(', '));
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Keyword Match Inputs'),
+        content: TextField(
+          controller: controller,
+          maxLines: 3,
+          decoration: const InputDecoration(
+            hintText: 'abundance, love, health',
+            helperText: 'Carousel will include comments containing these words.',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save')),
+        ],
+      ),
+    );
+
+    if (saved != true) return;
+    final keywords = controller.text
+        .split(',')
+        .map((e) => e.trim().toLowerCase())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList();
+    await _updateCommunitySettings({'featuredKeywords': keywords});
+  }
+
+  Future<void> _manageFeaturedItems(List<Map<String, dynamic>> initialItems) async {
+    final mutable = initialItems.map((e) => Map<String, dynamic>.from(e)).toList();
+
+    final save = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            return AlertDialog(
+              title: const Text('Manage Carousel Inputs'),
+              content: SizedBox(
+                width: 700,
+                child: mutable.isEmpty
+                    ? const Text('No featured inputs yet.')
+                    : ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: mutable.length,
+                        itemBuilder: (context, index) {
+                          final item = mutable[index];
+                          final text = (item['text'] as String? ?? '').trim();
+                          final active = (item['active'] as bool?) ?? true;
+                          return Card(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            child: ListTile(
+                              dense: true,
+                              title: Text(
+                                text,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              subtitle: Text(
+                                ((item['sourceType'] as String?) ?? 'manual')
+                                    .replaceAll('_', ' '),
+                              ),
+                              leading: Switch(
+                                value: active,
+                                onChanged: (val) {
+                                  setDialogState(() {
+                                    item['active'] = val;
+                                  });
+                                },
+                              ),
+                              trailing: Wrap(
+                                spacing: 4,
+                                children: [
+                                  IconButton(
+                                    icon: const Icon(Icons.arrow_upward, size: 18),
+                                    onPressed: index == 0
+                                        ? null
+                                        : () {
+                                            setDialogState(() {
+                                              final temp = mutable[index - 1];
+                                              mutable[index - 1] = mutable[index];
+                                              mutable[index] = temp;
+                                            });
+                                          },
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.arrow_downward, size: 18),
+                                    onPressed: index == mutable.length - 1
+                                        ? null
+                                        : () {
+                                            setDialogState(() {
+                                              final temp = mutable[index + 1];
+                                              mutable[index + 1] = mutable[index];
+                                              mutable[index] = temp;
+                                            });
+                                          },
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.edit, size: 18),
+                                    onPressed: () async {
+                                      final editor = TextEditingController(text: text);
+                                      final edited = await showDialog<bool>(
+                                        context: context,
+                                        builder: (eCtx) => AlertDialog(
+                                          title: const Text('Edit Input'),
+                                          content: TextField(
+                                            controller: editor,
+                                            maxLines: 4,
+                                            decoration: const InputDecoration(
+                                              border: OutlineInputBorder(),
+                                            ),
+                                          ),
+                                          actions: [
+                                            TextButton(
+                                              onPressed: () => Navigator.pop(eCtx, false),
+                                              child: const Text('Cancel'),
+                                            ),
+                                            ElevatedButton(
+                                              onPressed: () => Navigator.pop(eCtx, true),
+                                              child: const Text('Save'),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                      if (edited == true) {
+                                        final next = editor.text.trim();
+                                        if (next.isNotEmpty) {
+                                          setDialogState(() {
+                                            item['text'] = next;
+                                          });
+                                        }
+                                      }
+                                    },
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.delete_outline, size: 18, color: Colors.red),
+                                    onPressed: () {
+                                      setDialogState(() {
+                                        mutable.removeAt(index);
+                                      });
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save Changes')),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (save == true) {
+      await _updateCommunitySettings({'featuredItems': mutable});
+    }
+  }
+
+  Future<void> _featureCommentFromLiveFeed(Map<String, dynamic> post) async {
+    final content = (post['content'] ?? post['text'] ?? '').toString().trim();
+    if (content.isEmpty) return;
+
+    final ts = post['timestamp'];
+    final settingsRef = FirebaseFirestore.instance
+        .collection('app_config')
+        .doc('community_settings');
+    final snap = await settingsRef.get();
+    final data = snap.data() ?? const <String, dynamic>{};
+    final items = _parseFeaturedItems(data['featuredItems']);
+    items.add({
+      'id': DateTime.now().microsecondsSinceEpoch.toString(),
+      'text': content,
+      'sourceType': 'comment_pick',
+      'active': true,
+      if (post['userId'] != null) 'sourceUserId': post['userId'],
+      if (post['userName'] != null) 'sourceUserName': post['userName'],
+      if (post['sender'] != null) 'sourceUserName': post['sender'],
+      if (ts != null) 'sourceTimestamp': ts,
+      'createdAt': DateTime.now().toIso8601String(),
+    });
+
+    await _updateCommunitySettings({'featuredItems': items});
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Comment added to featured carousel inputs.')),
+    );
   }
 
   @override
@@ -352,7 +905,7 @@ class _CommunityTabState extends State<CommunityTab> {
         // Compact section header with view toggle
         Container(
           color: Colors.white,
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+          padding: const EdgeInsets.fromLTRB(10, 7, 10, 6),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -360,8 +913,8 @@ class _CommunityTabState extends State<CommunityTab> {
                 children: [
                   Container(
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
+                      horizontal: 8,
+                      vertical: 4,
                     ),
                     decoration: BoxDecoration(
                       color: Colors.indigo.shade50,
@@ -370,7 +923,7 @@ class _CommunityTabState extends State<CommunityTab> {
                     child: const Text(
                       'Community & Communication',
                       style: TextStyle(
-                        fontSize: 13,
+                        fontSize: 12,
                         fontWeight: FontWeight.w700,
                         color: Colors.indigo,
                       ),
@@ -1117,10 +1670,6 @@ class _CommunityTabState extends State<CommunityTab> {
                                 _selectedFeedId = val;
                                 // Simple update for display logic if needed 
                                 _selectedFeedName = items.firstWhere((i) => i.value == val).child.toString();
-                                // Try to extract clean name from widget if possible, or just query again. 
-                                // Actually, for simpler code, let's just clear the controller so it reloads from stream
-                                _messageController.clear();
-                                _isMessageLoaded = false;
                               });
                             }
                           },
@@ -1131,6 +1680,133 @@ class _CommunityTabState extends State<CommunityTab> {
                 }
               ),
               const SizedBox(height: 10),
+
+              // Compact controls for admin reading flow + user-facing flow speed.
+              StreamBuilder<DocumentSnapshot>(
+                stream: FirebaseFirestore.instance
+                    .collection('app_config')
+                    .doc('community_settings')
+                    .snapshots(),
+                builder: (context, snapshot) {
+                  final data = snapshot.data?.data() as Map<String, dynamic>? ?? {};
+                  final userFlowEnabled = (data['auto_scroll_enabled'] as bool?) ?? false;
+                  final userFlowSpeed =
+                      ((data['auto_scroll_speed'] as num?)?.toDouble() ?? 28).clamp(8, 120).toDouble();
+
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.grey.shade300),
+                    ),
+                    child: Wrap(
+                      spacing: 10,
+                      runSpacing: 6,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.swap_vert, size: 14, color: Colors.indigo),
+                            const SizedBox(width: 6),
+                            const Text('Admin read', style: TextStyle(fontSize: 11)),
+                            const SizedBox(width: 6),
+                            Switch(
+                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              value: _liveFeedAutoScrollEnabled,
+                              onChanged: (val) {
+                                setState(() {
+                                  _liveFeedAutoScrollEnabled = val;
+                                });
+                                _syncLiveFeedAutoScroll();
+                              },
+                            ),
+                            if (_liveFeedAutoScrollEnabled) ...[
+                              const SizedBox(width: 4),
+                              DropdownButton<double>(
+                                value: _liveFeedAutoScrollSpeedPxPerSecond,
+                                isDense: true,
+                                items: const [
+                                  DropdownMenuItem(value: 18, child: Text('Slow', style: TextStyle(fontSize: 11))),
+                                  DropdownMenuItem(value: 28, child: Text('Medium', style: TextStyle(fontSize: 11))),
+                                  DropdownMenuItem(value: 40, child: Text('Fast', style: TextStyle(fontSize: 11))),
+                                ],
+                                onChanged: (val) {
+                                  if (val == null) return;
+                                  setState(() {
+                                    _liveFeedAutoScrollSpeedPxPerSecond = val;
+                                  });
+                                  _syncLiveFeedAutoScroll();
+                                },
+                              ),
+                            ],
+                          ],
+                        ),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.public, size: 14, color: Colors.teal),
+                            const SizedBox(width: 6),
+                            const Text('User flow', style: TextStyle(fontSize: 11)),
+                            const SizedBox(width: 6),
+                            Switch(
+                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              value: userFlowEnabled,
+                              onChanged: (val) => _saveUserFlowScrollSettings(
+                                enabled: val,
+                                speed: userFlowSpeed,
+                              ),
+                            ),
+                            if (userFlowEnabled) ...[
+                              const SizedBox(width: 4),
+                              DropdownButton<double>(
+                                value: userFlowSpeed,
+                                isDense: true,
+                                items: const [
+                                  DropdownMenuItem(value: 16, child: Text('Slow', style: TextStyle(fontSize: 11))),
+                                  DropdownMenuItem(value: 28, child: Text('Medium', style: TextStyle(fontSize: 11))),
+                                  DropdownMenuItem(value: 45, child: Text('Fast', style: TextStyle(fontSize: 11))),
+                                ],
+                                onChanged: (val) {
+                                  if (val == null) return;
+                                  _saveUserFlowScrollSettings(
+                                    enabled: userFlowEnabled,
+                                    speed: val,
+                                  );
+                                },
+                              ),
+                            ],
+                          ],
+                        ),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Text('Density', style: TextStyle(fontSize: 11)),
+                            const SizedBox(width: 6),
+                            DropdownButton<int>(
+                              value: _liveFeedDensityPreset,
+                              isDense: true,
+                              items: const [
+                                DropdownMenuItem(value: 0, child: Text('Normal', style: TextStyle(fontSize: 11))),
+                                DropdownMenuItem(value: 1, child: Text('Compact', style: TextStyle(fontSize: 11))),
+                                DropdownMenuItem(value: 2, child: Text('Ultra', style: TextStyle(fontSize: 11))),
+                              ],
+                              onChanged: (val) {
+                                if (val == null) return;
+                                setState(() {
+                                  _liveFeedDensityPreset = val;
+                                });
+                              },
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 6),
               
               // Admin Pinned Message (Available for Global AND Groups now)
               StreamBuilder<DocumentSnapshot>(
@@ -1144,17 +1820,52 @@ class _CommunityTabState extends State<CommunityTab> {
                   if (snapshot.hasData && snapshot.data!.exists) {
                     final data = snapshot.data!.data() as Map<String, dynamic>;
                     if (_selectedFeedId == 'global') {
-                      final raw = data['admin_message'];
-                      currentMessage = raw == null ? null : raw.toString();
+                      final rawManual = data['admin_message_manual'];
+                      if (rawManual != null) {
+                        currentMessage = rawManual.toString();
+                        _lastKnownGlobalAdminManualMessage = currentMessage;
+                      } else {
+                        final displayType =
+                            (data['admin_message_display_type'] as String? ?? 'pinned')
+                                .toLowerCase();
+                        final lastSource =
+                            (data['featuredLastSourceType'] as String? ?? 'manual')
+                                .toLowerCase();
+                        final rawBanner = data['admin_message'];
+                        final canRecover = rawBanner != null &&
+                            displayType == 'pinned' &&
+                            (lastSource.contains('manual'));
+                        if (canRecover) {
+                          currentMessage = rawBanner.toString();
+                          _lastKnownGlobalAdminManualMessage = currentMessage;
+                          unawaited(
+                            FirebaseFirestore.instance
+                                .collection('app_config')
+                                .doc('community_settings')
+                                .set(
+                              {'admin_message_manual': currentMessage},
+                              SetOptions(merge: true),
+                            ),
+                          );
+                        } else {
+                          currentMessage = _lastKnownGlobalAdminManualMessage;
+                        }
+                      }
                     } else {
                       final raw = data['adminMessage'];
                       currentMessage = raw == null ? null : raw.toString();
                     }
                   }
 
-                  if (!_isMessageLoaded) {
-                    _messageController.text = currentMessage ?? '';
-                    _isMessageLoaded = true;
+                  final incomingMessage = currentMessage ?? '';
+                  if (!_messageFocusNode.hasFocus &&
+                      _messageController.text != incomingMessage) {
+                    _messageController.value = TextEditingValue(
+                      text: incomingMessage,
+                      selection: TextSelection.collapsed(
+                        offset: incomingMessage.length,
+                      ),
+                    );
                   }
                   
                   // Only load the message when feed changes or first load
@@ -1164,23 +1875,27 @@ class _CommunityTabState extends State<CommunityTab> {
                   return Row(
                     children: [
                       Expanded(
-                        child: TextField(
-                          controller: _messageController,
-                          decoration: InputDecoration(
-                            hintText: 'Type pinned message or chat post...',
-                            labelText: 'Admin Message',
-                            border: const OutlineInputBorder(),
-                            filled: true,
-                            fillColor: Colors.white,
-                            suffixIcon: _messageController.text.isNotEmpty 
-                                ? IconButton(
-                                    icon: const Icon(Icons.clear, color: Colors.grey),
-                                    onPressed: () => _saveAdminMessage(''), // Clear message
-                                    tooltip: 'Remove Message',
-                                  )
-                                : null,
+                        child: ValueListenableBuilder<TextEditingValue>(
+                          valueListenable: _messageController,
+                          builder: (context, value, _) => TextField(
+                            controller: _messageController,
+                            focusNode: _messageFocusNode,
+                            decoration: InputDecoration(
+                              hintText: 'Type pinned message or chat post...',
+                              labelText: 'Admin Message',
+                              border: const OutlineInputBorder(),
+                              filled: true,
+                              fillColor: Colors.white,
+                              suffixIcon: value.text.trim().isNotEmpty
+                                  ? IconButton(
+                                      icon: const Icon(Icons.clear, color: Colors.grey),
+                                      onPressed: () => _saveAdminMessage(''), // Clear message
+                                      tooltip: 'Remove Message',
+                                    )
+                                  : null,
+                            ),
+                            onSubmitted: _saveAdminMessage,
                           ),
-                          onSubmitted: _saveAdminMessage,
                         ),
                       ),
                       const SizedBox(width: 6),
@@ -1214,68 +1929,271 @@ class _CommunityTabState extends State<CommunityTab> {
                 builder: (context, snapshot) {
                   final data =
                       snapshot.data?.data() as Map<String, dynamic>? ?? {};
-                  final autoScrollEnabled =
-                      (data['auto_scroll_enabled'] as bool?) ?? false;
-                    final autoScrollSpeed =
-                      ((data['auto_scroll_speed'] as num?)?.toDouble() ?? 28)
-                        .clamp(8, 120)
-                        .toDouble();
+                  final featuredEnabled =
+                      (data['featuredCarouselEnabled'] as bool?) ?? false;
+                  final featuredAutoPublish =
+                      (data['featuredAutoPublish'] as bool?) ?? false;
+                  final featuredRandomize =
+                      (data['featuredRandomize'] as bool?) ?? false;
+                  final featuredSourceMode =
+                      (data['featuredSourceMode'] as String? ?? 'mixed').toLowerCase();
+                    final featuredMixedAdminEveryUsers =
+                      ((data['featuredMixedAdminEveryUsers'] as num?)?.toInt() ?? 5)
+                        .clamp(1, 100);
+                  final featuredInterval =
+                      ((data['featuredIntervalSeconds'] as num?)?.toInt() ?? 60)
+                          .clamp(30, 172800);
+                  final featuredKeywords = _parseFeaturedKeywords(data['featuredKeywords']);
+                  final featuredItems = _parseFeaturedItems(data['featuredItems']);
+                  final activeFeaturedCount = featuredItems
+                      .where((item) => (item['active'] as bool?) ?? true)
+                      .length;
+                  final lastPreview =
+                      (data['featuredLastPublishedPreview'] as String? ?? '').trim();
+                    final compactLastPreview =
+                      lastPreview.replaceAll(RegExp(r'\s+'), ' ').trim();
 
-                  return Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Colors.grey.shade300),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
+                  const intervalChoices = <int>[
+                    30,
+                    60,
+                    120,
+                    300,
+                    600,
+                    1800,
+                    3600,
+                    21600,
+                    43200,
+                    86400,
+                    172800,
+                  ];
+
+                  String formatInterval(int seconds) {
+                    if (seconds < 60) return '${seconds}s';
+                    if (seconds < 3600) return '${seconds ~/ 60}m';
+                    if (seconds < 86400) return '${seconds ~/ 3600}h';
+                    return '${seconds ~/ 86400}d';
+                  }
+
+                  return Column(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.grey.shade300),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Icon(Icons.swap_vert, size: 18, color: Colors.indigo),
-                            const SizedBox(width: 8),
-                            const Expanded(
-                              child: Text(
-                                'Auto-Scroll Controls (User App)',
-                                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-                              ),
+                            Row(
+                              children: [
+                                const Icon(Icons.view_carousel, size: 16, color: Colors.indigo),
+                                const SizedBox(width: 6),
+                                const Expanded(
+                                  child: Text(
+                                    'Pinned Carousel (Admin Only)',
+                                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+                                  ),
+                                ),
+                                Switch(
+                                  value: featuredEnabled,
+                                  onChanged: (val) => _updateCommunitySettings({
+                                    'featuredCarouselEnabled': val,
+                                  }),
+                                ),
+                              ],
                             ),
-                            Switch(
-                              value: autoScrollEnabled,
-                              onChanged: (val) => _saveFeedScrollSettings(
-                                enabled: val,
-                                speed: autoScrollSpeed,
-                              ),
+                            const SizedBox(height: 6),
+                            Wrap(
+                              spacing: 12,
+                              runSpacing: 6,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Text('Source', style: TextStyle(fontSize: 12)),
+                                    const SizedBox(width: 8),
+                                    DropdownButton<String>(
+                                      value: featuredSourceMode,
+                                      items: const [
+                                        DropdownMenuItem(
+                                          value: 'mixed',
+                                          child: Text('Mixed'),
+                                        ),
+                                        DropdownMenuItem(
+                                          value: 'admin_only',
+                                          child: Text('Admin Only'),
+                                        ),
+                                        DropdownMenuItem(
+                                          value: 'keywords_only',
+                                          child: Text('Keywords Only'),
+                                        ),
+                                      ],
+                                      onChanged: (val) {
+                                        if (val == null) return;
+                                        _updateCommunitySettings({
+                                          'featuredSourceMode': val,
+                                        });
+                                      },
+                                    ),
+                                  ],
+                                ),
+                                if (featuredSourceMode == 'mixed')
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Text('Admin ratio', style: TextStyle(fontSize: 12)),
+                                      const SizedBox(width: 8),
+                                      DropdownButton<int>(
+                                        value: featuredMixedAdminEveryUsers,
+                                        items: const [
+                                          DropdownMenuItem(value: 1, child: Text('1 : 1 users')),
+                                          DropdownMenuItem(value: 3, child: Text('1 : 3 users')),
+                                          DropdownMenuItem(value: 5, child: Text('1 : 5 users')),
+                                          DropdownMenuItem(value: 10, child: Text('1 : 10 users')),
+                                          DropdownMenuItem(value: 20, child: Text('1 : 20 users')),
+                                          DropdownMenuItem(value: 30, child: Text('1 : 30 users')),
+                                        ],
+                                        onChanged: featuredEnabled
+                                            ? (val) {
+                                                if (val == null) return;
+                                                _updateCommunitySettings({
+                                                  'featuredMixedAdminEveryUsers': val,
+                                                  'featuredMixedUserStreak': 0,
+                                                });
+                                              }
+                                            : null,
+                                      ),
+                                    ],
+                                  ),
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Text('Auto publish', style: TextStyle(fontSize: 12)),
+                                    Switch(
+                                      value: featuredAutoPublish,
+                                      onChanged: featuredEnabled
+                                          ? (val) => _updateCommunitySettings({
+                                                'featuredAutoPublish': val,
+                                              })
+                                          : null,
+                                    ),
+                                  ],
+                                ),
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Text('Randomize', style: TextStyle(fontSize: 12)),
+                                    Switch(
+                                      value: featuredRandomize,
+                                      onChanged: featuredEnabled
+                                          ? (val) => _updateCommunitySettings({
+                                                'featuredRandomize': val,
+                                              })
+                                          : null,
+                                    ),
+                                  ],
+                                ),
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Text('Interval', style: TextStyle(fontSize: 12)),
+                                    const SizedBox(width: 8),
+                                    DropdownButton<int>(
+                                      value: featuredInterval,
+                                      items: intervalChoices
+                                          .map(
+                                            (seconds) => DropdownMenuItem<int>(
+                                              value: seconds,
+                                              child: Text(formatInterval(seconds)),
+                                            ),
+                                          )
+                                          .toList(),
+                                      onChanged: featuredEnabled
+                                          ? (val) {
+                                              if (val == null) return;
+                                              _updateCommunitySettings({
+                                                'featuredIntervalSeconds': val,
+                                              });
+                                            }
+                                          : null,
+                                    ),
+                                  ],
+                                ),
+                              ],
                             ),
+                            if (featuredEnabled) ...[
+                              const SizedBox(height: 4),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  OutlinedButton.icon(
+                                    onPressed: _addFeaturedManualItem,
+                                    icon: const Icon(Icons.add, size: 16),
+                                    label: const Text('Add input'),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: () => _manageFeaturedItems(featuredItems),
+                                    icon: const Icon(Icons.edit_note, size: 16),
+                                    label: Text('Manage (${featuredItems.length})'),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: () => _editFeaturedKeywords(featuredKeywords),
+                                    icon: const Icon(Icons.key, size: 16),
+                                    label: const Text('Keywords'),
+                                  ),
+                                  if (featuredAutoPublish)
+                                    OutlinedButton.icon(
+                                      onPressed: _runFeaturedAutopublishTick,
+                                      icon: const Icon(Icons.bolt, size: 16),
+                                      label: const Text('Publish now'),
+                                    ),
+                                  ...featuredKeywords.map(
+                                    (k) => Chip(
+                                      visualDensity: VisualDensity.compact,
+                                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                                      label: Text(k, style: const TextStyle(fontSize: 11)),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                'Active inputs: $activeFeaturedCount • Mode: ${featuredSourceMode.replaceAll('_', ' ')}',
+                                style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
+                              ),
+                              if (compactLastPreview.isNotEmpty) ...[
+                                const SizedBox(height: 6),
+                                ClipRect(
+                                  child: Text(
+                                    'Latest publish preview: $compactLastPreview',
+                                    maxLines: 2,
+                                    softWrap: true,
+                                    overflow: TextOverflow.ellipsis,
+                                    strutStyle: const StrutStyle(
+                                      forceStrutHeight: true,
+                                      height: 1.0,
+                                    ),
+                                    textHeightBehavior: const TextHeightBehavior(
+                                      applyHeightToFirstAscent: false,
+                                      applyHeightToLastDescent: false,
+                                    ),
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      height: 1.0,
+                                      color: Colors.grey.shade600,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
                           ],
                         ),
-                        Text(
-                          'Current speed: ${autoScrollSpeed.toStringAsFixed(0)} px/s',
-                          style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
-                        ),
-                        Slider(
-                          value: autoScrollSpeed,
-                          min: 8,
-                          max: 120,
-                          divisions: 28,
-                          label: autoScrollSpeed.toStringAsFixed(0),
-                          onChanged: autoScrollEnabled
-                              ? (val) => _saveFeedScrollSettings(
-                                  enabled: autoScrollEnabled,
-                                  speed: val,
-                                )
-                              : null,
-                        ),
-                        Text(
-                          'Slider is always visible here for quick tuning while monitoring live comments.',
-                          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                        ),
-                      ],
-                    ),
+                      ),
+                    ],
                   );
                 },
               ),
@@ -1315,10 +2233,33 @@ class _CommunityTabState extends State<CommunityTab> {
 
               final posts = snapshot.data!.docs;
 
-              return ListView.builder(
-                padding: const EdgeInsets.all(16),
-                itemCount: posts.length,
-                itemBuilder: (context, index) {
+              return LayoutBuilder(
+                builder: (context, constraints) {
+                  final isNormal = _liveFeedDensityPreset == 0;
+                  final isCompact = _liveFeedDensityPreset == 1;
+                  final isUltra = _liveFeedDensityPreset == 2;
+
+                  final crossAxisCount = isUltra
+                    ? (constraints.maxWidth >= 1500 ? 3 : (constraints.maxWidth >= 980 ? 2 : 1))
+                    : (isCompact
+                      ? (constraints.maxWidth >= 1080 ? 2 : 1)
+                      : (constraints.maxWidth >= 1280 ? 2 : 1));
+                  final mainExtent = isUltra ? 82.0 : (isCompact ? 100.0 : 118.0);
+                  final userFontSize = isUltra ? 11.0 : (isCompact ? 12.0 : 12.5);
+                  final timeFontSize = isUltra ? 9.0 : (isCompact ? 10.0 : 10.5);
+                  final contentFontSize = isUltra ? 10.0 : (isCompact ? 11.0 : 11.5);
+                  final contentMaxLines = 1;
+                  return GridView.builder(
+                    controller: _liveFeedScrollController,
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: crossAxisCount,
+                      crossAxisSpacing: 10,
+                      mainAxisSpacing: 8,
+                      mainAxisExtent: mainExtent,
+                    ),
+                    itemCount: posts.length,
+                    itemBuilder: (context, index) {
                   final postDoc = posts[index];
                   final post = postDoc.data() as Map<String, dynamic>;
                   final timestamp = (post['timestamp'] as Timestamp?)?.toDate();
@@ -1329,9 +2270,13 @@ class _CommunityTabState extends State<CommunityTab> {
                   final userPhoto = post['userPhoto']; // Only in global currently
 
                   return Card(
-                    margin: const EdgeInsets.only(bottom: 12),
+                    margin: EdgeInsets.zero,
                     child: ListTile(
+                      dense: true,
+                      visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       leading: CircleAvatar(
+                        radius: 16,
                         backgroundColor: Colors.indigo.shade100,
                         backgroundImage: userPhoto != null ? NetworkImage(userPhoto) : null,
                         child: userPhoto == null 
@@ -1340,22 +2285,37 @@ class _CommunityTabState extends State<CommunityTab> {
                       ),
                       title: Row(
                         children: [
-                          Text(userName, style: const TextStyle(fontWeight: FontWeight.bold)),
-                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              userName,
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: userFontSize),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
                           if (timestamp != null)
                             Text(
                               DateFormat('MMM d, h:mm a').format(timestamp),
-                              style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+                              style: TextStyle(fontSize: timeFontSize, color: Colors.grey.shade500),
                             ),
-                            
-                           // Badge to show origin if needed, but the dropdown context is enough
                         ],
                       ),
-                      subtitle: TranslatableText(content),
+                      subtitle: TranslatableText(
+                        content,
+                        style: TextStyle(
+                          fontSize: contentFontSize,
+                          height: 1.2,
+                          color: Colors.grey.shade800,
+                        ),
+                        maxLines: contentMaxLines,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                       trailing: PopupMenuButton(
                         onSelected: (value) async {
                           if (value == 'delete') {
                             await _deleteLiveFeedMessage(context, postDoc, post);
+                          } else if (value == 'feature') {
+                            await _featureCommentFromLiveFeed(post);
                           } else if (value == 'suspend') {
                             final userId = post['userId'];
                             if (userId != null) {
@@ -1402,6 +2362,9 @@ class _CommunityTabState extends State<CommunityTab> {
                           }
                         },
                         itemBuilder: (context) => [
+                          const PopupMenuItem(value: 'feature', child: Row(
+                            children: [Icon(Icons.push_pin, size: 20, color: Colors.indigo), SizedBox(width: 8), Text('Feature in Carousel')],
+                          )),
                           const PopupMenuItem(value: 'delete', child: Row(
                             children: [Icon(Icons.delete, size: 20, color: Colors.grey), SizedBox(width: 8), Text('Delete Message')],
                           )),
@@ -1411,6 +2374,8 @@ class _CommunityTabState extends State<CommunityTab> {
                         ],
                       ),
                     ),
+                  );
+                    },
                   );
                 },
               );
@@ -1503,7 +2468,7 @@ class _ViewToggleButton extends StatelessWidget {
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
         decoration: BoxDecoration(
           color: selected ? Colors.indigo : Colors.grey.shade100,
           borderRadius: BorderRadius.circular(999),
@@ -1514,12 +2479,12 @@ class _ViewToggleButton extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 14, color: selected ? Colors.white : Colors.grey.shade600),
+            Icon(icon, size: 13, color: selected ? Colors.white : Colors.grey.shade600),
             const SizedBox(width: 4),
             Text(
               label,
               style: TextStyle(
-                fontSize: 12,
+                fontSize: 11,
                 fontWeight: FontWeight.w600,
                 color: selected ? Colors.white : Colors.grey.shade700,
               ),

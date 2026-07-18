@@ -2,13 +2,19 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'admin_management_tab.dart';
+import 'app_account_management_tab.dart';
 import 'user_management_tab.dart';
 import 'welcome_screen_manager.dart';
 import '../../services/translation_service.dart';
 import '../../widgets/translatable_text.dart';
 
 class SystemTab extends StatefulWidget {
-  const SystemTab({super.key});
+  final bool canManageAppAccounts;
+
+  const SystemTab({
+    super.key,
+    required this.canManageAppAccounts,
+  });
 
   @override
   State<SystemTab> createState() => _SystemTabState();
@@ -21,7 +27,7 @@ class _SystemTabState extends State<SystemTab> with SingleTickerProviderStateMix
   void initState() {
     super.initState();
     // Initialize controller immediately to prevent build errors
-    _tabController = TabController(length: 7, vsync: this);
+    _tabController = TabController(length: 8, vsync: this);
   }
 
   @override
@@ -37,7 +43,7 @@ class _SystemTabState extends State<SystemTab> with SingleTickerProviderStateMix
     return Column(
         children: [
           Container(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
             decoration: BoxDecoration(
               color: Colors.white,
               border: Border(
@@ -50,24 +56,26 @@ class _SystemTabState extends State<SystemTab> with SingleTickerProviderStateMix
                 const Text(
                   'System Management',
                   style: TextStyle(
-                    fontSize: 24,
+                    fontSize: 20,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 4),
                 Text(
                   'Configure system settings, monitor performance, and manage users',
                   style: TextStyle(
-                    fontSize: 14,
+                    fontSize: 12,
                     color: Colors.grey.shade600,
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 8),
                 TabBar(
                   controller: _tabController,
                   isScrollable: true,
+                  labelPadding: const EdgeInsets.symmetric(horizontal: 10),
                   tabs: const [
                     Tab(icon: Icon(Icons.people), text: 'Users'),
+                    Tab(icon: Icon(Icons.person_add), text: 'App Accounts'),
                     Tab(icon: Icon(Icons.security), text: 'Safety & Filter'),
                     Tab(icon: Icon(Icons.gavel), text: 'Legal & Compliance'),
                     Tab(icon: Icon(Icons.analytics), text: 'Performance'),
@@ -84,6 +92,9 @@ class _SystemTabState extends State<SystemTab> with SingleTickerProviderStateMix
               controller: _tabController,
               children: [
                 const UserManagementTab(),
+                AppAccountManagementTab(
+                  canManageAppAccounts: widget.canManageAppAccounts,
+                ),
                 const ChatSafetyTab(),
                 const ComplianceTab(),
                 const _PerformanceTab(),
