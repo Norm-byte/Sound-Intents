@@ -63,7 +63,7 @@ class HarmonyAdminApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Harmony Admin',
+      title: 'Harmony Admin FIXED',
       theme: ThemeData(
         useMaterial3: true,
         primarySwatch: Colors.indigo,
@@ -164,12 +164,12 @@ class _AdminAccessWrapper extends StatelessWidget {
           AdminUser admin;
           try {
             admin = AdminUser.fromJson(data);
-            // Debug: log what we received
-            debugPrint('ADMIN_DEBUG: User ${user.email} parsed with role=${admin.role}, permissions=${admin.permissions}, isSuperAdmin=${admin.isSuperAdmin}');
           } catch (e) {
             debugPrint('Error parsing admin user: $e');
+            // If parsing fails, show restricted screen so they can use "Fix My Account" to repair the data
             return const AccessRestrictedScreen(
-              reason: 'Profile data is invalid. Please contact your admin supervisor.',
+              reason:
+                  'Profile data corrupted. Please click "Fix My Account" to repair.',
             );
           }
 
@@ -263,31 +263,17 @@ class _AdminHomePageState extends State<AdminHomePage>
     final permissions = widget.adminUser.permissions;
     final isSuperAdmin = widget.adminUser.isSuperAdmin;
 
-    if (isSuperAdmin) {
-      debugPrint('ADMIN_DEBUG: _hasAccess($key) = TRUE (super-admin)');
-      return true;
-    }
-    if (permissions == null || permissions.isEmpty) {
-      debugPrint('ADMIN_DEBUG: _hasAccess($key) = FALSE (no permissions)');
+    if (isSuperAdmin) return true;
+    if (permissions == null || permissions.isEmpty)
       return false; // Default to locked if no permissions explicitly granted
-    }
-    final hasIt = permissions.contains(key);
-    debugPrint('ADMIN_DEBUG: _hasAccess($key) = $hasIt (permissions=$permissions)');
-    return hasIt;
+    return permissions.contains(key);
   }
 
   List<Widget> _buildTabViews() {
-    final isSuperAdmin = widget.adminUser.isSuperAdmin;
-    // Helper to wrap locked tabs — passes permKey + isSuperAdmin so the
-    // session store can skip re-entry on subsequent visits to the same tab.
+    // Helper to wrap locked tabs
     Widget buildTab(String permKey, String title, Widget child) {
       if (_hasAccess(permKey)) return child;
-      return LockedTabWrapper(
-        title: title,
-        permKey: permKey,
-        isSuperAdmin: isSuperAdmin,
-        child: child,
-      );
+      return LockedTabWrapper(title: title, child: child);
     }
 
     return [
@@ -306,38 +292,14 @@ class _AdminHomePageState extends State<AdminHomePage>
                   .showSnackBar(const SnackBar(content: Text('Access Denied')));
             }
           },
-          onViewSchedule: (date, time, [eventId]) {
+          onViewSchedule: (date, time) {
             // Animate to National Events (Index 2)
             if (_hasAccess('event_scheduler')) {
               _tabController.animateTo(2);
               if (time != null) {
                 final slotId =
                     '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
-                if (date != null) {
-                  final now = DateTime.now().toUtc();
-                  final today = DateTime.utc(now.year, now.month, now.day);
-                  final thisWeekMonday =
-                      today.subtract(Duration(days: today.weekday - 1));
-
-                  final selectedUtc =
-                      DateTime.utc(date.year, date.month, date.day);
-                  final selectedMonday = selectedUtc
-                      .subtract(Duration(days: selectedUtc.weekday - 1));
-
-                  final weekOffset =
-                      selectedMonday.difference(thisWeekMonday).inDays ~/ 7;
-                    final selectedDateIso = selectedUtc.toIso8601String();
-                  final eventToken = eventId != null && eventId.isNotEmpty
-                      ? '|event:$eventId'
-                      : '';
-                  _schedulerSelectionNotifier.value =
-                      'week:$weekOffset|date:$selectedDateIso|slot:$slotId$eventToken';
-                } else {
-                  _schedulerSelectionNotifier.value =
-                      eventId != null && eventId.isNotEmpty
-                          ? 'slot:$slotId|event:$eventId'
-                          : slotId;
-                }
+                _schedulerSelectionNotifier.value = slotId;
               }
             } else {
               ScaffoldMessenger.of(context)
@@ -383,7 +345,7 @@ class _AdminHomePageState extends State<AdminHomePage>
       buildTab('media_library', 'Media Library', const MediaLibraryTab()),
 
       // 5. App Content (promoted to top-level for full-screen workflow)
-      buildTab('app_content', 'App Content', const AppContentTab()),
+      buildTab('system', 'App Content', const AppContentTab()),
 
       // 6. Chat Rooms
       buildTab('chat_management', 'Chat Rooms', const ChatManagementTab()),
@@ -392,19 +354,13 @@ class _AdminHomePageState extends State<AdminHomePage>
       buildTab('topics', 'Topics', const YoutubeLibraryTab()),
 
       // 8. Community & Communication
-      buildTab('community', 'Community', const CommunityTab()),
+      buildTab('chat_management', 'Community', const CommunityTab()),
 
       // 9. Monetization / Deals
       buildTab('monetization', 'Deals', const MonetizationTab()),
 
       // 10. System
-      buildTab(
-        'system',
-        'System',
-        SystemTab(
-          canManageAppAccounts: _hasAccess('app_accounts'),
-        ),
-      ),
+      buildTab('system', 'System', const SystemTab()),
 
       // 11. Notifications
       buildTab('notifications', 'Notifications', const NotificationsScreen()),
@@ -488,131 +444,18 @@ class _AdminHomePageState extends State<AdminHomePage>
       return !start.isBefore(now);
     }).length;
 
-    // Authoritative conflict map from repository state.
-    // Key: slot minute identity (yyyyMMdd_HHmm), Value: event IDs to delete.
-    String _slotMinuteKey(DateTime utcStart) {
-      final date =
-          '${utcStart.year}${utcStart.month.toString().padLeft(2, '0')}${utcStart.day.toString().padLeft(2, '0')}';
-      final hhmm =
-          '${utcStart.hour.toString().padLeft(2, '0')}${utcStart.minute.toString().padLeft(2, '0')}';
-      return '${date}_$hhmm';
-    }
-
-    final Map<String, Set<String>> conflictingPublishedIdsBySlot = {};
-    try {
-      final repositoryEvents = await _repository.loadEvents();
-      for (final e in repositoryEvents) {
-        if (e.type == 'global') continue;
-        if (e.startTimeUTC == null) continue;
-        if (e.isPublished != true) continue;
-
-        final start = DateTime.parse(e.startTimeUTC!);
-        final inRange =
-            start.isAfter(weekStart.subtract(const Duration(seconds: 1))) &&
-                start.isBefore(weekEnd);
-        if (!inRange) continue;
-        if (minuteFilter != null && start.minute != minuteFilter) continue;
-
-        final slotKey = _slotMinuteKey(start);
-        conflictingPublishedIdsBySlot
-            .putIfAbsent(slotKey, () => <String>{})
-            .add(e.id);
-      }
-    } catch (e) {
-      debugPrint('Publish conflict sweep preload failed: $e');
-    }
-
-    DateTime parseUpdated(Event event) {
-      try {
-        if (event.updatedAt != null && event.updatedAt!.isNotEmpty) {
-          return DateTime.parse(event.updatedAt!);
-        }
-      } catch (_) {}
-      if (event.startTimeUTC != null) {
-        try {
-          return DateTime.parse(event.startTimeUTC!);
-        } catch (_) {}
-      }
-      return DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
-    }
-
-    bool hasCoreContent(Event event) {
-      String txt(dynamic value) => (value ?? '').toString().trim();
-      return txt(event.title).isNotEmpty ||
-          txt(event.intent).isNotEmpty ||
-          txt(event.visualUrl).isNotEmpty ||
-          txt(event.mediaUrl).isNotEmpty ||
-          txt(event.soundUrl).isNotEmpty ||
-          txt(event.noticeBoardText).isNotEmpty ||
-          txt(event.noticeBoardBgImage).isNotEmpty ||
-          txt(event.noticeBoardBgColor).isNotEmpty;
-    }
-
-    bool isBetterCandidate(Event next, Event current) {
-      final nextHasContent = hasCoreContent(next);
-      final currentHasContent = hasCoreContent(current);
-      if (nextHasContent != currentHasContent) {
-        return nextHasContent;
-      }
-
-      final nextIsDraft = next.id.startsWith('draft_slot_');
-      final currentIsDraft = current.id.startsWith('draft_slot_');
-      if (nextIsDraft != currentIsDraft) {
-        return nextIsDraft;
-      }
-
-      return parseUpdated(next).isAfter(parseUpdated(current));
-    }
-
-    // Deduplicate by final published slot ID so one slot is written once.
-    // Prioritize draft source over slot source to preserve authored editor fields.
-    final Map<String, Event> publishCandidates = {};
-    for (final e in eventsToPublish) {
-      final publishedId = e.id.startsWith('draft_slot_')
-          ? e.id.replaceFirst('draft_slot_', 'slot_')
-          : e.id;
-
-      final existing = publishCandidates[publishedId];
-      if (existing == null) {
-        publishCandidates[publishedId] = e;
-        continue;
-      }
-
-      publishCandidates[publishedId] =
-          isBetterCandidate(e, existing) ? e : existing;
-    }
-
     int count = 0;
-    for (final entry in publishCandidates.entries) {
-      final e = entry.value;
-      final publishedId = entry.key;
+    for (var e in eventsToPublish) {
       try {
         // Always set published=true, regardless of previous state
         // This forces an update to Firestore which the User App will see
-
-        // Delete competing published records for the exact same slot start.
-        // This prevents stale tails from older published variants at the same time.
-        final startKey = e.startTimeUTC;
-        if (startKey != null) {
-          final parsedStart = DateTime.tryParse(startKey);
-          final slotKey = parsedStart != null ? _slotMinuteKey(parsedStart) : null;
-          final competingIds = slotKey != null && conflictingPublishedIdsBySlot.containsKey(slotKey)
-              ? conflictingPublishedIdsBySlot[slotKey]!
-              .where((id) => id != publishedId)
-              .toList()
-              : const <String>[];
-          for (final id in competingIds) {
-            try {
-              await _repository.deleteEvent(id);
-            } catch (_) {}
-          }
-        }
-
+        final publishedId = e.id.startsWith('draft_slot_')
+            ? e.id.replaceFirst('draft_slot_', 'slot_')
+            : e.id;
         final updated = e.copyWith(
           id: publishedId,
           isPublished: true,
           isDraft: false,
-          updatedAt: DateTime.now().toUtc().toIso8601String(),
         );
         await _repository.saveEvent(updated);
         if (e.id.startsWith('draft_slot_') && e.id != publishedId) {
@@ -628,7 +471,11 @@ class _AdminHomePageState extends State<AdminHomePage>
     // in this week/lane that had no corresponding draft entry. This ensures that
     // if the admin cleared a slot's content (without clicking Delete), the live
     // doc is still removed when Publish Week is pressed.
-    final promotedIds = publishCandidates.keys.toSet();
+    final promotedIds = eventsToPublish
+        .map((e) => e.id.startsWith('draft_slot_')
+            ? e.id.replaceFirst('draft_slot_', 'slot_')
+            : e.id)
+        .toSet();
 
     final orphanedSlots = _scheduledEvents.where((e) {
       if (e.type == 'global') return false;

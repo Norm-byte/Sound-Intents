@@ -13,7 +13,7 @@ import '../widgets/active_operators_card.dart'; // Added for Active Operators
 class DashboardTab extends StatefulWidget {
   final List<Event> events;
   final VoidCallback onCreateEvent;
-  final Function(DateTime?, TimeOfDay?, [String? eventId]) onViewSchedule;
+  final Function(DateTime?, TimeOfDay?) onViewSchedule;
   final Function(Event) onEditEvent;
   final Function(Event) onDeleteEvent;
   final Function(List<Event>)? onImportEvents;
@@ -86,27 +86,10 @@ class _DashboardTabState extends State<DashboardTab> {
   Future<void> _loadAutoSystemState() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      var enabled = prefs.getBool('auto_system_enabled') ?? false;
+      final enabled = prefs.getBool('auto_system_enabled') ?? false;
       final skipCurrentWeekOnce =
           prefs.getBool('auto_system_skip_current_week_autopublish_once') ??
               false;
-
-      // Firestore is the authoritative shared source so backend automation
-      // and dashboard UI stay in sync across devices/sessions.
-      try {
-        final remote = await FirebaseFirestore.instance
-            .collection('system_settings')
-            .doc('auto_system')
-            .get();
-        final remoteEnabled = remote.data()?['enabled'];
-        if (remoteEnabled is bool) {
-          enabled = remoteEnabled;
-          await prefs.setBool('auto_system_enabled', enabled);
-        }
-      } catch (e) {
-        debugPrint('Auto-system remote state unavailable, using local: $e');
-      }
-
       if (mounted) {
         setState(() {
           _isAutoSystemEnabled = enabled;
@@ -485,18 +468,6 @@ class _DashboardTabState extends State<DashboardTab> {
                     // Persist state
                     final prefs = await SharedPreferences.getInstance();
                     await prefs.setBool('auto_system_enabled', newValue);
-                    try {
-                      await FirebaseFirestore.instance
-                          .collection('system_settings')
-                          .doc('auto_system')
-                          .set({
-                        'enabled': newValue,
-                        'updatedAt': FieldValue.serverTimestamp(),
-                        'updatedBy': 'admin_dashboard',
-                      }, SetOptions(merge: true));
-                    } catch (e) {
-                      debugPrint('Failed to persist auto-system remote state: $e');
-                    }
 
                     if (_isAutoSystemEnabled) {
                       _checkAutoSystemRules(); // Run check immediately
@@ -504,7 +475,7 @@ class _DashboardTabState extends State<DashboardTab> {
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
-                          content: Text(_isAutoSystemEnabled ? 'Auto-System ACTIVATED: Staged rollover ON (pre-publish upcoming week, then cleanup old week).' : 'Auto-System DEACTIVATED: Manual control only.'),
+                          content: Text(_isAutoSystemEnabled ? 'Auto-System ACTIVATED: Managing current week + next week draft...' : 'Auto-System DEACTIVATED: Manual control only.'),
                           duration: const Duration(seconds: 2),
                           backgroundColor: _isAutoSystemEnabled ? Colors.green : Colors.orange,
                         ),
@@ -528,7 +499,7 @@ class _DashboardTabState extends State<DashboardTab> {
                         ),
                         const SizedBox(width: 4),
                         Text(
-                          _isAutoSystemEnabled ? 'Auto-System: ON (Staged)' : 'Auto-System: PAUSED', 
+                          _isAutoSystemEnabled ? 'Auto-System: ON' : 'Auto-System: PAUSED', 
                           style: TextStyle(
                             color: _isAutoSystemEnabled ? Colors.green : Colors.grey, 
                             fontWeight: FontWeight.bold, 
@@ -638,20 +609,34 @@ class _DashboardTabState extends State<DashboardTab> {
       }
     }).toList();
 
+    String slotStatusKey(DateTime start) =>
+        '${start.year}-${start.month}-${start.day}-${start.hour}-${start.minute}';
+
+    final Set<String> publishedSlotKeys = {};
+    for (var e in weekEvents) {
+      try {
+        final start = effectiveStarts[e.id] ?? DateTime.parse(e.startTimeUTC!);
+        if (e.isPublished) {
+          publishedSlotKeys.add(slotStatusKey(start));
+        }
+      } catch (_) {}
+    }
+
     // Analyze minute slots
     for (var e in weekEvents) {
       try {
          final start = effectiveStarts[e.id] ?? DateTime.parse(e.startTimeUTC!);
          final minute = start.minute;
+         final key = slotStatusKey(start);
          final isDraftLike = !e.isPublished || e.isDraft;
+         final hasPublishedTwin = publishedSlotKeys.contains(key);
          // Normalize minute to nearest bucket if needed, or exact match?
          // Assuming users create events exactly at 0, 15, 30, 45 or close to it.
          // Let's use strict mapping:
          if (hasContentAt.containsKey(minute)) {
              hasContentAt[minute] = true;
            if (e.isPublished) hasPublishedAt[minute] = true;
-             // Draft should glow even if an older published twin still exists.
-             if (isDraftLike) hasDraftsAt[minute] = true;
+             if (isDraftLike && !hasPublishedTwin) hasDraftsAt[minute] = true;
          }
       } catch (_) {}
     }
@@ -659,51 +644,7 @@ class _DashboardTabState extends State<DashboardTab> {
     // 3. Build dots for the CURRENTLY selected offset view
     // Map hour (0-23) to status: 0=Empty, 1=Published, 2=Draft, 3=Completed
     Map<int, int> currentViewHourStatus = {};
-    final Map<int, Event> currentViewHourPublishedTapEvent = {};
-    final Map<int, Event> currentViewHourDraftTapEvent = {};
     final isPastWeek = weekOffset < 0;
-
-    bool hasCoreContent(Event event) {
-      String txt(dynamic value) => (value ?? '').toString().trim();
-      return txt(event.title).isNotEmpty ||
-          txt(event.intent).isNotEmpty ||
-          txt(event.visualUrl).isNotEmpty ||
-          txt(event.mediaUrl).isNotEmpty ||
-          txt(event.soundUrl).isNotEmpty ||
-          txt(event.noticeBoardText).isNotEmpty ||
-          txt(event.noticeBoardBgImage).isNotEmpty ||
-          txt(event.noticeBoardBgColor).isNotEmpty;
-    }
-
-    bool shouldUseAsTapTarget(Event candidate, Event current) {
-      final candidatePublished = candidate.isPublished && !candidate.isDraft;
-      final currentPublished = current.isPublished && !current.isDraft;
-      if (candidatePublished != currentPublished) {
-        return candidatePublished;
-      }
-
-      final candidateHasContent = hasCoreContent(candidate);
-      final currentHasContent = hasCoreContent(current);
-      if (candidateHasContent != currentHasContent) {
-        return candidateHasContent;
-      }
-
-      DateTime parseUpdated(Event event) {
-        try {
-          if (event.updatedAt != null && event.updatedAt!.isNotEmpty) {
-            return DateTime.parse(event.updatedAt!);
-          }
-        } catch (_) {}
-        try {
-          if (event.startTimeUTC != null && event.startTimeUTC!.isNotEmpty) {
-            return DateTime.parse(event.startTimeUTC!);
-          }
-        } catch (_) {}
-        return DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
-      }
-
-      return parseUpdated(candidate).isAfter(parseUpdated(current));
-    }
     
     // Filter events again for the *selected* view (currentOffset)
     final eventsInCurrentView = weekEvents.where((e) {
@@ -716,16 +657,14 @@ class _DashboardTabState extends State<DashboardTab> {
     for (var e in eventsInCurrentView) {
       try {
         final start = effectiveStarts[e.id] ?? DateTime.parse(e.startTimeUTC!);
+        final key = slotStatusKey(start);
         final isDraftLike = !e.isPublished || e.isDraft;
+        final hasPublishedTwin = publishedSlotKeys.contains(key);
         final current = currentViewHourStatus[start.hour] ?? 0;
 
         // Prioritize Draft (2) > Completed/Amber (3) > Published (1)
-        if (isDraftLike) {
+        if (isDraftLike && !hasPublishedTwin) {
           currentViewHourStatus[start.hour] = 2;
-          final currentTap = currentViewHourDraftTapEvent[start.hour];
-          if (currentTap == null || shouldUseAsTapTarget(e, currentTap)) {
-            currentViewHourDraftTapEvent[start.hour] = e;
-          }
         } else {
           final sundaySlotTime = DateTime.utc(
             now.year,
@@ -744,20 +683,8 @@ class _DashboardTabState extends State<DashboardTab> {
             // - Past weeks are completed/amber.
             // - In current week, only Sunday slots flip amber as they pass.
           if (current != 2) currentViewHourStatus[start.hour] = 3;
-          if (current != 2) {
-            final currentTap = currentViewHourPublishedTapEvent[start.hour];
-            if (currentTap == null || shouldUseAsTapTarget(e, currentTap)) {
-              currentViewHourPublishedTapEvent[start.hour] = e;
-            }
-          }
           } else {
-            if (current != 2 && current != 3) {
-              currentViewHourStatus[start.hour] = 1;
-              final currentTap = currentViewHourPublishedTapEvent[start.hour];
-              if (currentTap == null || shouldUseAsTapTarget(e, currentTap)) {
-                currentViewHourPublishedTapEvent[start.hour] = e;
-              }
-            }
+            if (current != 2 && current != 3) currentViewHourStatus[start.hour] = 1;
           }
         }
       } catch (_) {}
@@ -771,13 +698,18 @@ class _DashboardTabState extends State<DashboardTab> {
     // Let's assume global week drafts for the main button color.
     final bool anyEventsInWeek = eventsInCurrentView.isNotEmpty;
     final bool anyPublishedInWeek = eventsInCurrentView.any((e) => e.isPublished);
-    final bool anyDraftsInWeek = eventsInCurrentView.any((e) {
+    final bool anyDraftOnlyInWeek = eventsInCurrentView.any((e) {
       try {
-        return !e.isPublished || e.isDraft;
+        final start = effectiveStarts[e.id] ?? DateTime.parse(e.startTimeUTC!);
+        final key = slotStatusKey(start);
+        final isDraftLike = !e.isPublished || e.isDraft;
+        final hasPublishedTwin = publishedSlotKeys.contains(key);
+        return isDraftLike && !hasPublishedTwin;
       } catch (_) {
         return false;
       }
     });
+    final bool anyDraftsInWeek = anyDraftOnlyInWeek && !anyPublishedInWeek;
 
     return Card(
       elevation: 2,
@@ -1058,15 +990,9 @@ class _DashboardTabState extends State<DashboardTab> {
                          return InkWell(
                            onTap: () {
                               // Navigate
-                            final tapEvent = status == 2
-                                ? currentViewHourDraftTapEvent[index]
-                                : currentViewHourPublishedTapEvent[index] ??
-                                    currentViewHourDraftTapEvent[index];
-                           final targetDate = tapEvent?.startTimeUTC != null
-                              ? DateTime.parse(tapEvent!.startTimeUTC!)
-                              : weekStart.add(Duration(hours: index, minutes: currentOffset));
+                              final targetDate = weekStart.add(Duration(hours: index, minutes: currentOffset));
                               final targetTime = TimeOfDay(hour: index, minute: currentOffset);
-                              widget.onViewSchedule(targetDate, targetTime, tapEvent?.id);
+                              widget.onViewSchedule(targetDate, targetTime);
                            },
                            child: Container(
                              decoration: BoxDecoration(
@@ -2057,7 +1983,7 @@ class _ActionButton extends StatelessWidget {
 
 class _SchedulerView extends StatefulWidget {
   final List<Event> events;
-  final Function(DateTime?, TimeOfDay?, [String? eventId]) onViewSchedule;
+  final Function(DateTime?, TimeOfDay?) onViewSchedule;
 
   const _SchedulerView({
     required this.events,
@@ -2122,32 +2048,27 @@ class _SchedulerViewState extends State<_SchedulerView> {
                       
                       Event? slotEvent;
                       try {
-                        bool matchesSlot(Event e) {
+                        slotEvent = widget.events.firstWhere((e) {
+                          // Filter out Global events from the 24-hour schedule
                           if (e.type == 'global') return false;
-                          if (e.startTimeUTC == null) return false;
 
+                          if (e.startTimeUTC == null) return false;
                           final start = DateTime.parse(e.startTimeUTC!);
+                          
+                          // Check time match
                           final timeMatch = start.hour == hour && start.minute >= minute && start.minute < minute + 15;
                           if (!timeMatch) return false;
 
+                          // Check date match OR recurrence
                           final dateMatch = start.year == today.year && start.month == today.month && start.day == today.day;
+                          // Fix: Check recurrenceType as well, as isRecurring might be false/null for legacy events
                           final isRecurring = (e.isRecurring == true) || (e.recurrenceType != null && e.recurrenceType != 'None');
-                          return isRecurring || dateMatch;
-                        }
 
-                        final publishedMatch = widget.events.firstWhere(
-                          (e) => matchesSlot(e) && e.isPublished == true && e.isDraft != true,
-                          orElse: () => Event(id: '', title: '', type: 'national', isRecurring: true),
-                        );
-                        if (publishedMatch.id.isNotEmpty) {
-                          slotEvent = publishedMatch;
-                        } else {
-                          final fallback = widget.events.firstWhere(
-                            matchesSlot,
-                            orElse: () => Event(id: '', title: '', type: 'national', isRecurring: true),
-                          );
-                          slotEvent = fallback.id.isNotEmpty ? fallback : null;
-                        }
+                          // If it's recurring, we only care about the time match (which is already checked above)
+                          // If it's NOT recurring, we need the date to match today
+                          if (isRecurring) return true;
+                          return dateMatch;
+                        });
                       } catch (_) {}
 
                       Color color = Colors.grey.shade200;
@@ -2180,10 +2101,8 @@ class _SchedulerViewState extends State<_SchedulerView> {
                         message: '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}${slotEvent != null ? ' - ${slotEvent.title}' : ''}',
                         child: InkWell(
                           onTap: () {
-                            final targetDate = slotEvent?.startTimeUTC != null
-                                ? DateTime.parse(slotEvent!.startTimeUTC!)
-                                : today.add(Duration(hours: hour, minutes: minute));
-                            widget.onViewSchedule(targetDate, TimeOfDay(hour: hour, minute: minute), slotEvent?.id);
+                            final targetDate = today.add(Duration(hours: hour, minutes: minute));
+                            widget.onViewSchedule(targetDate, TimeOfDay(hour: hour, minute: minute));
                           },
                           child: Container(
                             decoration: BoxDecoration(
@@ -2246,7 +2165,7 @@ class _TrendingIntentCardState extends State<_TrendingIntentCard> {
       });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Overall Most Liked Comment Updated'), backgroundColor: Colors.green),
+          const SnackBar(content: Text('Community Pulse Updated'), backgroundColor: Colors.green),
         );
       }
     } catch (e) {
@@ -2310,7 +2229,7 @@ class _TrendingIntentCardState extends State<_TrendingIntentCard> {
                 children: [
                   Icon(Icons.favorite, size: 32, color: Colors.pink.shade400),
                   const SizedBox(height: 8),
-                  Text('Overall', style: TextStyle(color: Colors.pink.shade700, fontWeight: FontWeight.bold)),
+                  Text('Pulse', style: TextStyle(color: Colors.pink.shade700, fontWeight: FontWeight.bold)),
                 ],
               ),
             ),
@@ -2320,7 +2239,7 @@ class _TrendingIntentCardState extends State<_TrendingIntentCard> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Text('Overall Most Liked Comment', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  const Text('Shared Intent (My Impact)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                   const SizedBox(height: 12),
                   
                   // Calculated Intent Display
@@ -2343,7 +2262,7 @@ class _TrendingIntentCardState extends State<_TrendingIntentCard> {
                           children: [
                             Icon(Icons.analytics_outlined, size: 18, color: Colors.pink.shade300),
                             const SizedBox(width: 8),
-                            const Text("Top Comment: ", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black54, fontSize: 13)),
+                            const Text("Community Signal: ", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black54, fontSize: 13)),
                             Expanded(
                               child: Text(
                                 displayDate, 

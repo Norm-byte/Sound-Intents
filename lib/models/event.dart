@@ -30,6 +30,7 @@ class Event {
   final int? noticeBoardVisibilityAfterMinutes;
   final int? noticeBoardShowBeforeMinutes;
   final String? updatedAt;
+  final String? liveStatsMode; // inherit | forceOn | forceOff
 
   Event({
     required this.id,
@@ -69,6 +70,7 @@ class Event {
     this.originTime,
     this.updatedAt,
     this.type,
+    this.liveStatsMode,
   });
 
   final bool? isRecurring;
@@ -116,6 +118,7 @@ class Event {
         'originTimeZone': originTimeZone,
         'originTime': originTime,
         'updatedAt': updatedAt,
+        'liveStatsMode': liveStatsMode,
       };
 
   static Event fromJson(Map<String, dynamic> j) => Event(
@@ -156,6 +159,7 @@ class Event {
         originTimeZone: j['originTimeZone'] as String?,
         originTime: j['originTime'] as String?,
         updatedAt: j['updatedAt'] as String?,
+        liveStatsMode: j['liveStatsMode'] as String?,
       );
 
   Event copyWith({
@@ -196,6 +200,7 @@ class Event {
     String? originTime,
     String? updatedAt,
     String? type,
+    String? liveStatsMode,
   }) {
     return Event(
       id: id ?? this.id,
@@ -235,6 +240,7 @@ class Event {
       originTimeZone: originTimeZone ?? this.originTimeZone,
       originTime: originTime ?? this.originTime,
       updatedAt: updatedAt ?? this.updatedAt,
+      liveStatsMode: liveStatsMode ?? this.liveStatsMode,
     );
   }
 }

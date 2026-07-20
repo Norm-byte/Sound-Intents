@@ -57,6 +57,7 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
     'event_scheduler': false,     // National Events
     'media_library': false,
     'app_content': false,         // App Content
+    'event_stats': false,         // Event Stats
     'app_accounts': false,        // App Accounts
     'chat_management': false,     // Chat Rooms
     'topics': false,
@@ -75,6 +76,7 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
     'event_scheduler': 'National Events',
     'media_library':   'Media Library',
     'app_content':     'App Content',
+    'event_stats':     'Event Stats',
     'app_accounts':    'App Accounts',
     'chat_management': 'Chat Rooms',
     'topics':          'Topics',
