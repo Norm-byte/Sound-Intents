@@ -173,12 +173,24 @@ service cloud.firestore {
       allow read: if true; // Changed to allow public access for the User App
       allow create, update: if true; // Temporarily allowed for development/testing
       allow delete: if isActiveAdmin();
+
+      match /playback_devices/{deviceId} {
+        allow read: if true;
+        allow create, update: if true;
+        allow delete: if isActiveAdmin();
+      }
     }
 
     // Global Events (for Event Creator) - Public read, Admin write
     match /global_events/{eventId} {
       allow read: if true; // Changed to allow public access for the User App
       allow write: if isActiveAdmin();
+
+      match /playback_devices/{deviceId} {
+        allow read: if true;
+        allow create, update: if true;
+        allow delete: if isActiveAdmin();
+      }
     }
     
     // Media collection - only active admins can read/write
@@ -329,6 +341,42 @@ service cloud.firestore {
     // Product Tiers Drafts (Admin Workspace)
     match /product_tiers_draft/{tierId} {
       allow read, write: if isActiveAdmin();
+    }
+
+    // Live Event Viewer Sessions (true real-time overlay stats)
+    match /event_live_viewers/{eventId} {
+      allow read: if true;
+      allow create, update: if isSignedIn();
+      allow delete: if isActiveAdmin();
+
+      match /sessions/{sessionUserId} {
+        allow read: if true;
+        allow create, update, delete: if isSignedIn();
+      }
+    }
+
+    // Shared slot-level live viewer sessions used for cross-device aggregation.
+    match /event_live_viewers_groups/{groupKey} {
+      allow read: if true;
+      allow create, update: if isSignedIn();
+      allow delete: if isActiveAdmin();
+
+      match /sessions/{sessionUserId} {
+        allow read: if true;
+        allow create, update, delete: if isSignedIn();
+      }
+    }
+
+    // Live room presence sessions for Community and Chat Rooms overlays
+    match /room_live_presence/{roomId} {
+      allow read: if true;
+      allow create, update: if isSignedIn();
+      allow delete: if isActiveAdmin();
+
+      match /sessions/{sessionUserId} {
+        allow read: if true;
+        allow create, update, delete: if isSignedIn();
+      }
     }
     
     // Default deny all other collections

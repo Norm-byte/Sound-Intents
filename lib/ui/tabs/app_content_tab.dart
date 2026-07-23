@@ -38,10 +38,10 @@ class _AppContentTabState extends State<AppContentTab> {
   // Config Data
   String? _backgroundImageUrl;
   String? _backgroundAudioUrl;
+  bool _showBackground = false;
   String? _logoUrl;
   double _logoSize = 80.0;
   bool _showBulletin = false;
-  bool _showLiveStats = false;
   bool _showFeatured = false;
   String _featuredType = 'youtube'; // 'youtube' or 'video' or 'image'
   bool _showReelCarousel = false;
@@ -81,11 +81,13 @@ class _AppContentTabState extends State<AppContentTab> {
             data['message'] ?? 'Your journey begins here.';
         _backgroundImageUrl = data['backgroundImageUrl'];
         _backgroundAudioUrl = data['backgroundAudioUrl'] as String?;
+        final savedShowBackground = data['showBackground'];
+        _showBackground = savedShowBackground is bool
+          ? savedShowBackground
+          : _backgroundImageUrl != null;
 
         _showBulletin = data['appContentShowBulletin'] ?? false;
         _bulletinController.text = data['appContentBulletinText'] ?? '';
-
-        _showLiveStats = data['showLiveStats'] ?? false;
 
         _showFeatured = data['showFeatured'] ?? false;
         _featuredType = data['featuredType'] ?? 'youtube';
@@ -108,7 +110,9 @@ class _AppContentTabState extends State<AppContentTab> {
           _reelItems = [];
         }
 
-        if (_backgroundImageUrl != null && _isVideo(_backgroundImageUrl!)) {
+        if (_showBackground &&
+            _backgroundImageUrl != null &&
+            _isVideo(_backgroundImageUrl!)) {
           _initBackgroundVideo(_backgroundImageUrl!);
         }
       } else {
@@ -191,9 +195,9 @@ class _AppContentTabState extends State<AppContentTab> {
         'message': _messageController.text.trim(),
         'backgroundImageUrl': _backgroundImageUrl,
         'backgroundAudioUrl': _backgroundAudioUrl,
+        'showBackground': _showBackground,
         'appContentShowBulletin': _showBulletin,
         'appContentBulletinText': _bulletinController.text.trim(),
-        'showLiveStats': _showLiveStats,
         'showFeatured': _showFeatured,
         'featuredType': _featuredType,
         'featuredUrl': _featuredUrlController.text.trim(),
@@ -225,6 +229,7 @@ class _AppContentTabState extends State<AppContentTab> {
       final serverData = serverDoc.data() ?? <String, dynamic>{};
       final publishedShowBulletin =
           serverData['appContentShowBulletin'] == true;
+        final publishedShowBackground = serverData['showBackground'] == true;
       final publishedBulletinText =
           (serverData['appContentBulletinText'] as String? ?? '').trim();
         final publishedShowFeatured = serverData['showFeatured'] == true;
@@ -245,6 +250,7 @@ class _AppContentTabState extends State<AppContentTab> {
         final expectedFeaturedType = _featuredType.trim();
       final expectedLogoUrl = _logoUrl ?? '';
       if (publishedShowBulletin != _showBulletin ||
+          publishedShowBackground != _showBackground ||
           publishedBulletinText != expectedBulletinText ||
           publishedShowFeatured != _showFeatured ||
           publishedShowReelCarousel != _showReelCarousel ||
@@ -459,7 +465,8 @@ class _AppContentTabState extends State<AppContentTab> {
                                     return;
                                   }
                                   _backgroundImageUrl = item.url;
-                                  if (isVideo && !isYoutube) {
+                                  _showBackground = true;
+                                  if (_showBackground && isVideo && !isYoutube) {
                                     _initBackgroundVideo(item.url);
                                   } else {
                                     _backgroundVideoController?.dispose();
@@ -1069,6 +1076,24 @@ class _AppContentTabState extends State<AppContentTab> {
 
                 const SizedBox(height: 24),
                 _buildSectionHeader('Visuals'),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Enable Home Background'),
+                  subtitle: const Text(
+                    'Show the selected background on Home and enable the speaker control',
+                  ),
+                  value: _showBackground,
+                  onChanged: (value) => setState(() {
+                    _showBackground = value;
+                    if (!_showBackground) {
+                      _backgroundVideoController?.dispose();
+                      _backgroundVideoController = null;
+                    } else if (_backgroundImageUrl != null &&
+                        _isVideo(_backgroundImageUrl!)) {
+                      _initBackgroundVideo(_backgroundImageUrl!);
+                    }
+                  }),
+                ),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text('Background Image'),
@@ -1296,19 +1321,7 @@ class _AppContentTabState extends State<AppContentTab> {
 
                 const SizedBox(height: 32),
 
-                // 4. Live Stats
-                _buildSectionHeader('Live Stats'),
-                SwitchListTile(
-                  title: const Text('Show Live Stats'),
-                  subtitle:
-                      const Text('Display active user count or other metrics'),
-                  value: _showLiveStats,
-                  onChanged: (v) => setState(() => _showLiveStats = v),
-                ),
-
-                const SizedBox(height: 32),
-
-                // 5. Featured Content
+                // 4. Featured Content
                 _buildSectionHeader('Featured Content'),
                 SwitchListTile(
                   title: const Text('Show Featured Content'),
@@ -1724,7 +1737,8 @@ class _AppContentTabState extends State<AppContentTab> {
                                     Colors.purple.shade900
                                   ],
                                 ),
-                                image: _backgroundImageUrl != null &&
+                                image: _showBackground &&
+                                        _backgroundImageUrl != null &&
                                         !_isVideo(_backgroundImageUrl!)
                                     ? DecorationImage(
                                         image:
@@ -1736,7 +1750,8 @@ class _AppContentTabState extends State<AppContentTab> {
                                       )
                                     : null,
                               ),
-                              child: _backgroundImageUrl != null &&
+                                    child: _showBackground &&
+                                      _backgroundImageUrl != null &&
                                       _isVideo(_backgroundImageUrl!) &&
                                       _backgroundVideoController != null &&
                                       _backgroundVideoController!
@@ -1756,33 +1771,36 @@ class _AppContentTabState extends State<AppContentTab> {
                                     )
                                   : null,
                             ),
-                            if (_backgroundImageUrl != null &&
+                            if (_showBackground &&
+                                _backgroundImageUrl != null &&
                                 _isVideo(_backgroundImageUrl!))
                               Container(
                                   color: Colors.black.withOpacity(
                                       0.4)), // Overlay for video legibility
 
-                            if (_backgroundAudioUrl != null)
+                            if (_showBackground && _backgroundImageUrl != null)
                               Positioned(
                                 right: 14,
                                 top: 14,
                                 child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                  width: 52,
+                                  height: 52,
                                   decoration: BoxDecoration(
-                                    color: Colors.black.withOpacity(0.45),
-                                    borderRadius: BorderRadius.circular(16),
+                                    color: Colors.black.withOpacity(0.34),
+                                    borderRadius: BorderRadius.circular(18),
                                     border: Border.all(color: Colors.white24),
-                                  ),
-                                  child: const Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(Icons.audiotrack, color: Colors.white70, size: 14),
-                                      SizedBox(width: 6),
-                                      Text(
-                                        'Background Audio',
-                                        style: TextStyle(color: Colors.white70, fontSize: 11),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.32),
+                                        blurRadius: 10,
+                                        offset: const Offset(0, 4),
                                       ),
                                     ],
+                                  ),
+                                  child: const Icon(
+                                    Icons.volume_up_rounded,
+                                    color: Colors.white70,
+                                    size: 22,
                                   ),
                                 ),
                               ),
@@ -1802,14 +1820,12 @@ class _AppContentTabState extends State<AppContentTab> {
                                         mainAxisAlignment:
                                             MainAxisAlignment.spaceBetween,
                                         children: [
-                                          const Icon(Icons.menu,
-                                              color: Colors.white),
+                                          const SizedBox(width: 24),
                                           const Text('Harmony',
                                               style: TextStyle(
                                                   color: Colors.white,
                                                   fontWeight: FontWeight.bold)),
-                                          const Icon(Icons.notifications,
-                                              color: Colors.white),
+                                          const SizedBox(width: 24),
                                         ],
                                       ),
                                       const SizedBox(height: 40),
@@ -1824,17 +1840,11 @@ class _AppContentTabState extends State<AppContentTab> {
                                             fit: BoxFit.contain,
                                             errorBuilder:
                                                 (context, error, stackTrace) =>
-                                                    Icon(
-                                              Icons.spa,
-                                              size: _logoSize,
-                                              color: Colors.white70,
-                                            ),
+                                                    const SizedBox.shrink(),
                                           ),
                                         )
                                       else
-                                        Icon(Icons.spa,
-                                            size: _logoSize,
-                                            color: Colors.white70),
+                                        const SizedBox.shrink(),
                                       const SizedBox(height: 16),
                                       Text(
                                         _titleController.text.isEmpty
@@ -2081,40 +2091,51 @@ class _AppContentTabState extends State<AppContentTab> {
                                         ),
 
                                       const SizedBox(height: 32),
-
-                                      // Live Stats
-                                      if (_showLiveStats)
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 16, vertical: 8),
-                                          decoration: BoxDecoration(
-                                            color:
-                                                Colors.green.withOpacity(0.2),
-                                            borderRadius:
-                                                BorderRadius.circular(20),
-                                            border: Border.all(
-                                                color: Colors.green
-                                                    .withOpacity(0.5)),
-                                          ),
-                                          child: const Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              Icon(Icons.circle,
-                                                  color: Colors.green,
-                                                  size: 12),
-                                              SizedBox(width: 8),
-                                              Text('124 Users Online',
-                                                  style: TextStyle(
-                                                      color: Colors.greenAccent,
-                                                      fontWeight:
-                                                          FontWeight.bold)),
-                                            ],
-                                          ),
-                                        ),
-
                                       const SizedBox(height: 20),
                                     ],
                                   ),
+                                ),
+                              ),
+                            ),
+
+                            // Bottom navigation mock (matches user app tab layout)
+                            Positioned(
+                              left: 0,
+                              right: 0,
+                              bottom: 0,
+                              child: Container(
+                                padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withOpacity(0.36),
+                                  border: Border(
+                                    top: BorderSide(color: Colors.white.withOpacity(0.16)),
+                                  ),
+                                ),
+                                child: const Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                                  children: [
+                                    _PreviewNavItem(
+                                      icon: Icons.home,
+                                      label: 'Home',
+                                      selected: true,
+                                    ),
+                                    _PreviewNavItem(
+                                      icon: Icons.event,
+                                      label: 'Events',
+                                    ),
+                                    _PreviewNavItem(
+                                      icon: Icons.chat,
+                                      label: 'Community',
+                                    ),
+                                    _PreviewNavItem(
+                                      icon: Icons.lightbulb_outline,
+                                      label: 'Topics',
+                                    ),
+                                    _PreviewNavItem(
+                                      icon: Icons.person_outline,
+                                      label: 'My Harmony',
+                                    ),
+                                  ],
                                 ),
                               ),
                             ),
@@ -2729,6 +2750,38 @@ class _AdminReelCarouselPreviewState
               ),
             ),
           ),
+      ],
+    );
+  }
+}
+
+class _PreviewNavItem extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool selected;
+
+  const _PreviewNavItem({
+    required this.icon,
+    required this.label,
+    this.selected = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = selected ? Colors.amber : Colors.white70;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 18, color: color),
+        const SizedBox(height: 2),
+        Text(
+          label,
+          style: TextStyle(
+            color: color,
+            fontSize: 10,
+            fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+          ),
+        ),
       ],
     );
   }

@@ -28,6 +28,7 @@ import 'ui/tabs/chat_management_tab.dart';
 import 'ui/tabs/community_tab.dart';
 import 'ui/tabs/monetization_tab.dart';
 import 'ui/tabs/app_content_tab.dart';
+import 'ui/tabs/event_stats_tab.dart';
 import 'ui/notifications_screen.dart';
 import 'ui/widgets/locked_tab_wrapper.dart';
 import 'widgets/app_footer.dart';
@@ -243,6 +244,7 @@ class _AdminHomePageState extends State<AdminHomePage>
       Tab(icon: Icon(Icons.schedule), text: 'National Events'), // Renamed
       Tab(icon: Icon(Icons.perm_media), text: 'Media Library'),
       Tab(icon: Icon(Icons.mobile_screen_share), text: 'App Content'),
+      Tab(icon: Icon(Icons.query_stats), text: 'Event Stats'),
       Tab(icon: Icon(Icons.chat), text: 'Chat Rooms'),
       Tab(icon: Icon(Icons.lightbulb), text: 'Topics'),
       Tab(icon: Icon(Icons.forum), text: 'Community'),
@@ -347,28 +349,35 @@ class _AdminHomePageState extends State<AdminHomePage>
       // 5. App Content (promoted to top-level for full-screen workflow)
       buildTab('system', 'App Content', const AppContentTab()),
 
-      // 6. Chat Rooms
+      // 6. Event Stats
+      buildTab('event_stats', 'Event Stats', const EventStatsTab()),
+
+      // 7. Chat Rooms
       buildTab('chat_management', 'Chat Rooms', const ChatManagementTab()),
 
-      // 7. Topics
+      // 8. Topics
       buildTab('topics', 'Topics', const YoutubeLibraryTab()),
 
-      // 8. Community & Communication
+      // 9. Community & Communication
       buildTab('chat_management', 'Community', const CommunityTab()),
 
-      // 9. Monetization / Deals
+      // 10. Monetization / Deals
       buildTab('monetization', 'Deals', const MonetizationTab()),
 
-      // 10. System
-      buildTab('system', 'System', const SystemTab()),
+      // 11. System
+      buildTab(
+        'system',
+        'System',
+        SystemTab(canManageAppAccounts: _hasAccess('app_accounts')),
+      ),
 
-      // 11. Notifications
+      // 12. Notifications
       buildTab('notifications', 'Notifications', const NotificationsScreen()),
 
-      // 12. Legal (Locked)
+      // 13. Legal (Locked)
       buildTab('legal', 'Legal', const LegalTab()),
 
-      // 13. Operators Manual (Accessible to All - DocumentationTab under the hood)
+      // 14. Operators Manual (Accessible to All - DocumentationTab under the hood)
       buildTab('documentation', 'Operators Manual', const DocumentationTab()),
     ];
   }

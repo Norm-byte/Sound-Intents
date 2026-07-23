@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'dart:async';
 import '../../models/community_group.dart';
 import '../../repositories/group_repository.dart';
 
@@ -13,6 +15,21 @@ class ChatManagementTab extends StatefulWidget {
 
 class _ChatManagementTabState extends State<ChatManagementTab> {
   final GroupRepository _repository = GroupRepository();
+  Timer? _ticker;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    super.dispose();
+  }
 
   void _showGroupDialog({CommunityGroup? group}) {
     final nameController = TextEditingController(text: group?.name ?? '');
@@ -23,6 +40,7 @@ class _ChatManagementTabState extends State<ChatManagementTab> {
     // Default to true for new groups so they are visible immediately
     bool isPublished = group?.isPublished ?? true;
     bool isPaused = group?.isPaused ?? false;
+    bool showLiveCounter = group?.showLiveCounter ?? false;
     
     // Helper to pick color (simplified - could be a color picker later)
     // For now we just use a dropdown of presets for simplicity
@@ -70,6 +88,13 @@ class _ChatManagementTabState extends State<ChatManagementTab> {
                     subtitle: const Text('Lock new posts (read-only)'),
                     value: isPaused,
                     onChanged: (val) => setStateDialog(() => isPaused = val),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                  SwitchListTile(
+                    title: const Text('Show Live Counter Overlay'),
+                    subtitle: const Text('Display active-now user count in this room header'),
+                    value: showLiveCounter,
+                    onChanged: (val) => setStateDialog(() => showLiveCounter = val),
                     contentPadding: EdgeInsets.zero,
                   ),
 
@@ -140,6 +165,7 @@ class _ChatManagementTabState extends State<ChatManagementTab> {
                     sortOrder: group?.sortOrder ?? 0,
                     isPublished: isPublished,
                     isPaused: isPaused,
+                    showLiveCounter: showLiveCounter,
                   );
 
                   if (group == null) {
@@ -276,6 +302,10 @@ class _ChatManagementTabState extends State<ChatManagementTab> {
                                   ],
                                 ),
                               ),
+                              if (group.showLiveCounter) ...[
+                                const SizedBox(width: 6),
+                                _roomLiveCountChip(group.id),
+                              ],
                               const SizedBox(width: 8),
                               if (group.isPublished)
                                 Container(
@@ -327,6 +357,20 @@ class _ChatManagementTabState extends State<ChatManagementTab> {
                                 ),
                               ),
                               // Pause Toggle
+                              Tooltip(
+                                message: group.showLiveCounter
+                                    ? 'Hide Live Counter'
+                                    : 'Show Live Counter',
+                                child: IconButton(
+                                  icon: Icon(
+                                    Icons.query_stats,
+                                    color: group.showLiveCounter
+                                        ? Colors.lightGreen
+                                        : Colors.grey,
+                                  ),
+                                  onPressed: () => _toggleLiveCounter(group),
+                                ),
+                              ),
                               Tooltip(
                                 message: group.isPaused ? 'Resume' : 'Pause (Maintenance)',
                                 child: IconButton(
@@ -403,5 +447,65 @@ class _ChatManagementTabState extends State<ChatManagementTab> {
               )
           );
       }
+  }
+
+  Future<void> _toggleLiveCounter(CommunityGroup group) async {
+    final next = !group.showLiveCounter;
+    await _repository.updateGroup(group.copyWith(showLiveCounter: next));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            next
+                ? 'Live counter enabled for ${group.name}'
+                : 'Live counter hidden for ${group.name}',
+          ),
+          duration: const Duration(seconds: 1),
+        ),
+      );
+    }
+  }
+
+  Widget _roomLiveCountChip(String roomId) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('room_live_presence')
+          .doc(roomId)
+          .collection('sessions')
+          .snapshots(),
+      builder: (context, snapshot) {
+        final docs = snapshot.data?.docs ?? const [];
+        final cutoff = DateTime.now().subtract(const Duration(seconds: 15));
+        final liveCount = docs.where((doc) {
+          final ts = doc.data()['lastSeenAt'];
+          if (ts is! Timestamp) return false;
+          return ts.toDate().isAfter(cutoff);
+        }).length;
+
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: Colors.green.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.green.withOpacity(0.35)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.groups_2, size: 12, color: Colors.green),
+              const SizedBox(width: 2),
+              Text(
+                '$liveCount live',
+                style: const TextStyle(
+                  color: Colors.green,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 }

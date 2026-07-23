@@ -11,6 +11,7 @@ class CommunityGroup {
   final int sortOrder;
   final bool isPublished; // Controls visibility in the User App
   final bool isPaused;    // Controls ability to post/interact (Maintenance Mode)
+  final bool showLiveCounter; // Controls live user counter badge visibility in room
 
   CommunityGroup({
     required this.id,
@@ -22,6 +23,7 @@ class CommunityGroup {
     this.sortOrder = 0,
     this.isPublished = false, // Default to hidden
     this.isPaused = false,    // Default to active
+    this.showLiveCounter = false,
   });
 
   // Convert to Map for Firestore
@@ -35,6 +37,7 @@ class CommunityGroup {
       'sortOrder': sortOrder,
       'isPublished': isPublished,
       'isPaused': isPaused,
+      'showLiveCounter': showLiveCounter,
     };
   }
 
@@ -51,6 +54,7 @@ class CommunityGroup {
       sortOrder: data['sortOrder'] ?? 0,
       isPublished: data['isPublished'] ?? false,
       isPaused: data['isPaused'] ?? false,
+      showLiveCounter: data['showLiveCounter'] == true,
     );
   }
 
@@ -65,6 +69,7 @@ class CommunityGroup {
     int? sortOrder,
     bool? isPublished,
     bool? isPaused,
+    bool? showLiveCounter,
   }) {
     return CommunityGroup(
       id: id ?? this.id,
@@ -76,6 +81,7 @@ class CommunityGroup {
       sortOrder: sortOrder ?? this.sortOrder,
       isPublished: isPublished ?? this.isPublished,
       isPaused: isPaused ?? this.isPaused,
+      showLiveCounter: showLiveCounter ?? this.showLiveCounter,
     );
   }
 

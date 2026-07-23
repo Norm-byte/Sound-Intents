@@ -2308,27 +2308,6 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
                                         activeThumbColor: Colors.orange,
                                       ),
 
-                                      // Auto-Trending
-                                      SwitchListTile(
-                                        value: _useTrendingIntent,
-                                        onChanged: (val) {
-                                          setState(
-                                            () => _useTrendingIntent = val,
-                                          );
-                                          _saveCurrentSlot();
-                                        },
-                                        title: const Text(
-                                          'Use Community Signal',
-                                        ),
-                                        subtitle: const Text(
-                                          'Auto-fill from recent user intent trends. Turn off to set your own shared intent.',
-                                        ),
-                                        secondary: const Icon(
-                                          Icons.trending_up,
-                                        ),
-                                        activeThumbColor: Colors.purple,
-                                      ),
-
                                       // Auto-Notify
                                       SwitchListTile(
                                         value: _autoNotify,
