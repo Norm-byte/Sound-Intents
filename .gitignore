@@ -5,6 +5,7 @@
 .vscode/
 **/GeneratedPluginRegistrant.*
 /.flutter-plugins-dependencies
+/.firebase/
 
 # macOS
 *.DS_Store
