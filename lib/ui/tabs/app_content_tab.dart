@@ -121,18 +121,6 @@ class _AppContentTabState extends State<AppContentTab> {
         _messageController.text = 'Your journey begins here.';
       }
 
-      // Backward compatibility: if home_screen has no logo, fall back to welcome_screen.
-      if (_logoUrl == null) {
-        final welcomeDoc = await FirebaseFirestore.instance
-            .collection('app_config')
-            .doc('welcome_screen')
-            .get();
-        if (welcomeDoc.exists) {
-          final welcomeData = welcomeDoc.data()!;
-          _logoUrl = welcomeData['logoUrl'] as String?;
-          _logoSize = (welcomeData['logoSize'] as num?)?.toDouble() ?? 80.0;
-        }
-      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
