@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -18,6 +19,9 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _countryController = TextEditingController();
+  final TextEditingController _payoutCurrencyController = TextEditingController(
+    text: 'GBP',
+  );
   final TextEditingController _defaultRateController = TextEditingController(
     text: '0.10',
   );
@@ -45,7 +49,26 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
   bool _savingSeller = false;
   bool _savingCode = false;
   bool _savingRate = false;
+  bool _refreshingFx = false;
+  bool _lockingFx = false;
   bool _isSellerActive = true;
+
+  static const Map<String, String> _countryToCurrency = {
+    'GB': 'GBP',
+    'US': 'USD',
+    'AU': 'AUD',
+    'CA': 'CAD',
+    'NZ': 'NZD',
+    'IE': 'EUR',
+    'NL': 'EUR',
+    'DE': 'EUR',
+    'FR': 'EUR',
+    'ES': 'EUR',
+    'IT': 'EUR',
+    'ZA': 'ZAR',
+    'NG': 'NGN',
+    'IN': 'INR',
+  };
 
   @override
   void initState() {
@@ -64,6 +87,7 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
     _emailController.dispose();
     _phoneController.dispose();
     _countryController.dispose();
+    _payoutCurrencyController.dispose();
     _defaultRateController.dispose();
     _notesController.dispose();
     _codeController.dispose();
@@ -108,6 +132,7 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
         'email': _emailController.text.trim(),
         'phone': _phoneController.text.trim(),
         'country': _countryController.text.trim().toUpperCase(),
+        'payoutCurrency': _normalizedPayoutCurrency(),
         'isActive': _isSellerActive,
         'defaultRate': _parseRate(_defaultRateController.text),
         'notes': _notesController.text.trim(),
@@ -279,6 +304,7 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
     _emailController.text = (data['email'] ?? '').toString();
     _phoneController.text = (data['phone'] ?? '').toString();
     _countryController.text = (data['country'] ?? '').toString();
+    _payoutCurrencyController.text = _sellerCurrencyFromData(data);
     final rate = (data['defaultRate'] as num?)?.toDouble() ?? 0.10;
     _defaultRateController.text = rate.toStringAsFixed(2);
     _notesController.text = (data['notes'] ?? '').toString();
@@ -293,6 +319,7 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
     _emailController.clear();
     _phoneController.clear();
     _countryController.clear();
+    _payoutCurrencyController.text = 'GBP';
     _defaultRateController.text = '0.10';
     _notesController.clear();
     _isSellerActive = true;
@@ -320,6 +347,85 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
     );
     if (picked != null) {
       setState(() => _dateRange = picked);
+    }
+  }
+
+  String _currentMonthKey() {
+    final now = DateTime.now().toUtc();
+    return '${now.year}-${now.month.toString().padLeft(2, '0')}';
+  }
+
+  String _normalizedPayoutCurrency() {
+    final normalized = _payoutCurrencyController.text.trim().toUpperCase();
+    if (normalized.length == 3) return normalized;
+    return 'GBP';
+  }
+
+  String _sellerCurrencyFromData(Map<String, dynamic> data) {
+    final explicit = (data['payoutCurrency'] ?? '').toString().trim().toUpperCase();
+    if (explicit.length == 3) return explicit;
+
+    final country = (data['country'] ?? '').toString().trim().toUpperCase();
+    return _countryToCurrency[country] ?? 'GBP';
+  }
+
+  Map<String, double> _extractRates(Map<String, dynamic>? docData) {
+    final rawRates = docData?['rates'];
+    if (rawRates is! Map) return const <String, double>{};
+    final rates = <String, double>{};
+    rawRates.forEach((key, value) {
+      final code = key.toString().trim().toUpperCase();
+      final parsed = value is num ? value.toDouble() : double.tryParse(value.toString());
+      if (code.isNotEmpty && parsed != null && parsed > 0) {
+        rates[code] = parsed;
+      }
+    });
+    rates['GBP'] = 1.0;
+    return rates;
+  }
+
+  double _gbpToCurrencyRate(
+    String currency,
+    Map<String, double> monthlyRates,
+    Map<String, double> liveRates,
+  ) {
+    final code = currency.trim().toUpperCase();
+    if (code.isEmpty || code == 'GBP') return 1.0;
+    if (monthlyRates.containsKey(code)) return monthlyRates[code]!;
+    if (liveRates.containsKey(code)) return liveRates[code]!;
+    return 1.0;
+  }
+
+  String _formatAmount(String currencyCode, num amount) {
+    return '${amount.toStringAsFixed(2)} $currencyCode';
+  }
+
+  Future<void> _refreshLiveFxRates() async {
+    setState(() => _refreshingFx = true);
+    try {
+      await FirebaseFunctions.instance
+          .httpsCallable('refreshLiveFxRates')
+          .call();
+      _snack('Live FX rates refreshed.');
+    } catch (e) {
+      _snack('Could not refresh FX rates: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _refreshingFx = false);
+    }
+  }
+
+  Future<void> _lockCurrentMonthFxSnapshot() async {
+    setState(() => _lockingFx = true);
+    try {
+      final month = _currentMonthKey();
+      await FirebaseFunctions.instance
+          .httpsCallable('lockCurrentMonthFxSnapshot')
+          .call({'month': month});
+      _snack('FX snapshot locked for $month.');
+    } catch (e) {
+      _snack('Could not lock FX snapshot: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _lockingFx = false);
     }
   }
 
@@ -442,11 +548,34 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
             return aName.compareTo(bName);
           });
 
-        return Padding(
+        final monthKey = _currentMonthKey();
+
+        return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+          stream: FirebaseFirestore.instance
+              .collection('fx_rates')
+              .doc('live_reference')
+              .snapshots(),
+          builder: (context, liveFxSnapshot) {
+            final liveFxData = liveFxSnapshot.data?.data();
+
+            return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+              stream: FirebaseFirestore.instance
+                  .collection('fx_rates_monthly')
+                  .doc(monthKey)
+                  .snapshots(),
+              builder: (context, monthFxSnapshot) {
+                final monthlyFxData = monthFxSnapshot.data?.data();
+
+                return Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
             children: [
-              _buildHeader(countries.toList()..sort()),
+              _buildHeader(
+                countries.toList()..sort(),
+                liveFxData,
+                monthlyFxData,
+                monthKey,
+              ),
               const SizedBox(height: 12),
               Expanded(
                 child: Row(
@@ -456,18 +585,37 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
                     const SizedBox(width: 12),
                     Expanded(flex: 4, child: _buildSellerEditor()),
                     const SizedBox(width: 12),
-                    Expanded(flex: 5, child: _buildMetricsPanel(filtered)),
+                    Expanded(
+                      flex: 5,
+                      child: _buildMetricsPanel(
+                        filtered,
+                        liveFxData,
+                        monthlyFxData,
+                      ),
+                    ),
                   ],
                 ),
               ),
             ],
           ),
+                );
+              },
+            );
+          },
         );
       },
     );
   }
 
-  Widget _buildHeader(List<String> countries) {
+  Widget _buildHeader(
+    List<String> countries,
+    Map<String, dynamic>? liveFxData,
+    Map<String, dynamic>? monthlyFxData,
+    String monthKey,
+  ) {
+    final liveUpdated = _asDate(liveFxData?['updatedAt']);
+    final snapshotLocked = _asDate(monthlyFxData?['lockedAt']);
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -496,7 +644,7 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
             SizedBox(
               width: 150,
               child: DropdownButtonFormField<String>(
-                value: countries.contains(_selectedCountryFilter)
+                initialValue: countries.contains(_selectedCountryFilter)
                     ? _selectedCountryFilter
                     : 'ALL',
                 items: countries
@@ -531,6 +679,34 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
             OutlinedButton(
               onPressed: () => _setAllSellersActive(false),
               child: const Text('Deactivate All'),
+            ),
+            OutlinedButton.icon(
+              onPressed: _refreshingFx ? null : _refreshLiveFxRates,
+              icon: const Icon(Icons.sync),
+              label: Text(_refreshingFx ? 'Refreshing FX...' : 'Refresh Live FX'),
+            ),
+            OutlinedButton.icon(
+              onPressed: _lockingFx ? null : _lockCurrentMonthFxSnapshot,
+              icon: const Icon(Icons.lock_clock),
+              label: Text(_lockingFx ? 'Locking...' : 'Lock $monthKey Snapshot'),
+            ),
+            Chip(
+              label: Text(
+                liveUpdated == null
+                    ? 'Live FX: not set'
+                    : 'Live FX: ${liveUpdated.toLocal()}',
+              ),
+            ),
+            Chip(
+              label: Text(
+                snapshotLocked == null
+                    ? '$monthKey snapshot: missing'
+                    : '$monthKey snapshot: locked',
+              ),
+            ),
+            const Text(
+              'Admin totals always show GBP and optional local-currency equivalent from FX snapshot/live reference.',
+              style: TextStyle(fontSize: 12, color: Colors.black54),
             ),
           ],
         ),
@@ -663,6 +839,17 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
                 border: OutlineInputBorder(),
                 labelText: 'Country Code',
                 hintText: 'GB',
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _payoutCurrencyController,
+              textCapitalization: TextCapitalization.characters,
+              inputFormatters: [LengthLimitingTextInputFormatter(3)],
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                labelText: 'Payout Currency (ISO)',
+                hintText: 'GBP',
               ),
             ),
             const SizedBox(height: 8),
@@ -858,7 +1045,14 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
     );
   }
 
-  Widget _buildMetricsPanel(List<QueryDocumentSnapshot<Map<String, dynamic>>> sellers) {
+  Widget _buildMetricsPanel(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> sellers,
+    Map<String, dynamic>? liveFxData,
+    Map<String, dynamic>? monthlyFxData,
+  ) {
+    final liveRates = _extractRates(liveFxData);
+    final monthlyRates = _extractRates(monthlyFxData);
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -871,7 +1065,7 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
             ),
             const SizedBox(height: 6),
             const Text(
-              'Live seller totals from users collection. Uses willRenew/status/subscriptionPlan/renewalDate for active and residual estimates.',
+              'Live seller totals from users collection. Sterling is always shown, with local-currency conversion using monthly FX snapshot first and live FX as fallback.',
             ),
             const SizedBox(height: 8),
             Expanded(
@@ -897,6 +1091,7 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
                         final data = sellerDoc.data();
                         final sellerId = sellerDoc.id;
                         final sellerName = (data['name'] ?? 'Unnamed').toString();
+                        final sellerCurrency = _sellerCurrencyFromData(data);
                         final rate = (data['defaultRate'] as num?)?.toDouble() ?? 0.10;
 
                         return FutureBuilder<Map<String, dynamic>>(
@@ -926,6 +1121,13 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
                                 (metrics['rate'] as num?) ?? rate;
                             final residualEstimate =
                                 (metrics['residualEstimate'] as num?) ?? 0;
+                            final fxRate = _gbpToCurrencyRate(
+                              sellerCurrency,
+                              monthlyRates,
+                              liveRates,
+                            );
+                            final localGross = grossEstimate * fxRate;
+                            final localResidual = residualEstimate * fxRate;
 
                             return Card(
                               margin: const EdgeInsets.only(bottom: 8),
@@ -968,6 +1170,23 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
                                         color: Colors.green,
                                       ),
                                     ),
+                                    if (sellerCurrency != 'GBP') ...[
+                                      Text(
+                                        'Gross Estimate (${sellerCurrency}): ${_formatAmount(sellerCurrency, localGross)}',
+                                        style: const TextStyle(fontWeight: FontWeight.w600),
+                                      ),
+                                      Text(
+                                        'Residual Estimate (${sellerCurrency}): ${_formatAmount(sellerCurrency, localResidual)}',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.green,
+                                        ),
+                                      ),
+                                      Text(
+                                        'FX used: 1 GBP = ${fxRate.toStringAsFixed(4)} $sellerCurrency',
+                                        style: const TextStyle(fontSize: 12, color: Colors.black54),
+                                      ),
+                                    ],
                                     const SizedBox(height: 8),
                                     Row(
                                       mainAxisAlignment: MainAxisAlignment.end,
@@ -988,6 +1207,10 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
                                                 'rateApplied': rateApplied,
                                                 'grossEstimate': grossEstimate,
                                                 'residualEstimate': residualEstimate,
+                                                'sellerCurrency': sellerCurrency,
+                                                'gbpToSellerCurrencyFx': fxRate,
+                                                'grossEstimateSellerCurrency': localGross,
+                                                'residualEstimateSellerCurrency': localResidual,
                                               }
                                             };
                                             Clipboard.setData(
