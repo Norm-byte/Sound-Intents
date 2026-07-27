@@ -400,6 +400,17 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
     return '${amount.toStringAsFixed(2)} $currencyCode';
   }
 
+  String _formatShortStamp(DateTime? value) {
+    if (value == null) return 'Not set';
+    final local = value.toLocal();
+    final y = local.year.toString().padLeft(4, '0');
+    final m = local.month.toString().padLeft(2, '0');
+    final d = local.day.toString().padLeft(2, '0');
+    final hh = local.hour.toString().padLeft(2, '0');
+    final mm = local.minute.toString().padLeft(2, '0');
+    return '$y-$m-$d $hh:$mm';
+  }
+
   Future<void> _refreshLiveFxRates() async {
     setState(() => _refreshingFx = true);
     try {
@@ -615,98 +626,140 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
   ) {
     final liveUpdated = _asDate(liveFxData?['updatedAt']);
     final snapshotLocked = _asDate(monthlyFxData?['lockedAt']);
+    final hasSnapshot = snapshotLocked != null;
+    final hasLive = liveUpdated != null;
 
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(12),
-        child: Wrap(
-          runSpacing: 10,
-          spacing: 10,
-          crossAxisAlignment: WrapCrossAlignment.center,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Seller Management',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-            ),
-            SizedBox(
-              width: 220,
-              child: TextField(
-                controller: _searchController,
-                decoration: const InputDecoration(
-                  isDense: true,
-                  labelText: 'Search sellers',
-                  border: OutlineInputBorder(),
-                  prefixIcon: Icon(Icons.search),
+            Wrap(
+              runSpacing: 10,
+              spacing: 10,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                const Text(
+                  'Seller Management',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
                 ),
-                onChanged: (_) => setState(() {}),
-              ),
-            ),
-            SizedBox(
-              width: 150,
-              child: DropdownButtonFormField<String>(
-                initialValue: countries.contains(_selectedCountryFilter)
-                    ? _selectedCountryFilter
-                    : 'ALL',
-                items: countries
-                    .map(
-                      (c) => DropdownMenuItem(value: c, child: Text(c)),
-                    )
-                    .toList(),
-                onChanged: (v) {
-                  if (v == null) return;
-                  setState(() => _selectedCountryFilter = v);
-                },
-                decoration: const InputDecoration(
-                  isDense: true,
-                  labelText: 'Country',
-                  border: OutlineInputBorder(),
+                SizedBox(
+                  width: 220,
+                  child: TextField(
+                    controller: _searchController,
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      labelText: 'Search sellers',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.search),
+                    ),
+                    onChanged: (_) => setState(() {}),
+                  ),
                 ),
+                SizedBox(
+                  width: 150,
+                  child: DropdownButtonFormField<String>(
+                    initialValue: countries.contains(_selectedCountryFilter)
+                        ? _selectedCountryFilter
+                        : 'ALL',
+                    items: countries
+                        .map(
+                          (c) => DropdownMenuItem(value: c, child: Text(c)),
+                        )
+                        .toList(),
+                    onChanged: (v) {
+                      if (v == null) return;
+                      setState(() => _selectedCountryFilter = v);
+                    },
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      labelText: 'Country',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _pickDateRange,
+                  icon: const Icon(Icons.date_range),
+                  label: Text(
+                    _dateRange == null
+                        ? 'All Dates'
+                        : '${_dateRange!.start.year}-${_dateRange!.start.month.toString().padLeft(2, '0')}-${_dateRange!.start.day.toString().padLeft(2, '0')} to ${_dateRange!.end.year}-${_dateRange!.end.month.toString().padLeft(2, '0')}-${_dateRange!.end.day.toString().padLeft(2, '0')}',
+                  ),
+                ),
+                OutlinedButton(
+                  onPressed: () => _setAllSellersActive(true),
+                  child: const Text('Activate All'),
+                ),
+                OutlinedButton(
+                  onPressed: () => _setAllSellersActive(false),
+                  child: const Text('Deactivate All'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _refreshingFx ? null : _refreshLiveFxRates,
+                  icon: const Icon(Icons.sync),
+                  label: Text(_refreshingFx ? 'Refreshing FX...' : 'Refresh Live FX'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _lockingFx ? null : _lockCurrentMonthFxSnapshot,
+                  icon: const Icon(Icons.lock_clock),
+                  label: Text(_lockingFx ? 'Locking...' : 'Lock $monthKey Snapshot'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF6F8FC),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFDCE3F0)),
               ),
-            ),
-            OutlinedButton.icon(
-              onPressed: _pickDateRange,
-              icon: const Icon(Icons.date_range),
-              label: Text(
-                _dateRange == null
-                    ? 'All Dates'
-                    : '${_dateRange!.start.year}-${_dateRange!.start.month.toString().padLeft(2, '0')}-${_dateRange!.start.day.toString().padLeft(2, '0')} to ${_dateRange!.end.year}-${_dateRange!.end.month.toString().padLeft(2, '0')}-${_dateRange!.end.day.toString().padLeft(2, '0')}',
+              child: Wrap(
+                runSpacing: 10,
+                spacing: 16,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        hasLive ? Icons.check_circle : Icons.error_outline,
+                        color: hasLive ? Colors.green : Colors.orange,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Live FX Updated: ${_formatShortStamp(liveUpdated)}',
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ],
+                  ),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        hasSnapshot ? Icons.lock : Icons.warning_amber,
+                        color: hasSnapshot ? Colors.green : Colors.orange,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        '$monthKey Snapshot: ${hasSnapshot ? 'Locked' : 'Missing'}',
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ],
+                  ),
+                  Text(
+                    hasSnapshot
+                        ? 'Payout conversions use locked monthly rates first. GBP remains your canonical admin reference.'
+                        : 'No monthly lock yet. Conversions currently use live FX fallback. GBP remains your canonical admin reference.',
+                    style: const TextStyle(fontSize: 12, color: Colors.black54),
+                  ),
+                ],
               ),
-            ),
-            OutlinedButton(
-              onPressed: () => _setAllSellersActive(true),
-              child: const Text('Activate All'),
-            ),
-            OutlinedButton(
-              onPressed: () => _setAllSellersActive(false),
-              child: const Text('Deactivate All'),
-            ),
-            OutlinedButton.icon(
-              onPressed: _refreshingFx ? null : _refreshLiveFxRates,
-              icon: const Icon(Icons.sync),
-              label: Text(_refreshingFx ? 'Refreshing FX...' : 'Refresh Live FX'),
-            ),
-            OutlinedButton.icon(
-              onPressed: _lockingFx ? null : _lockCurrentMonthFxSnapshot,
-              icon: const Icon(Icons.lock_clock),
-              label: Text(_lockingFx ? 'Locking...' : 'Lock $monthKey Snapshot'),
-            ),
-            Chip(
-              label: Text(
-                liveUpdated == null
-                    ? 'Live FX: not set'
-                    : 'Live FX: ${liveUpdated.toLocal()}',
-              ),
-            ),
-            Chip(
-              label: Text(
-                snapshotLocked == null
-                    ? '$monthKey snapshot: missing'
-                    : '$monthKey snapshot: locked',
-              ),
-            ),
-            const Text(
-              'Admin totals always show GBP and optional local-currency equivalent from FX snapshot/live reference.',
-              style: TextStyle(fontSize: 12, color: Colors.black54),
             ),
           ],
         ),
