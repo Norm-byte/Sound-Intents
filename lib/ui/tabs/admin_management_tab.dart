@@ -58,6 +58,7 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
     'media_library': false,
     'app_content': false,         // App Content
     'event_stats': false,         // Event Stats
+    'seller_management': false,   // Sellers
     'app_accounts': false,        // App Accounts
     'chat_management': false,     // Chat Rooms
     'topics': false,
@@ -77,6 +78,7 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
     'media_library':   'Media Library',
     'app_content':     'App Content',
     'event_stats':     'Event Stats',
+    'seller_management':'Sellers',
     'app_accounts':    'App Accounts',
     'chat_management': 'Chat Rooms',
     'topics':          'Topics',

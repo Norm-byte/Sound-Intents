@@ -1,0 +1,1030 @@
+import 'dart:convert';
+import 'dart:math';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+class SellerManagementTab extends StatefulWidget {
+  const SellerManagementTab({super.key});
+
+  @override
+  State<SellerManagementTab> createState() => _SellerManagementTabState();
+}
+
+class _SellerManagementTabState extends State<SellerManagementTab> {
+  final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _phoneController = TextEditingController();
+  final TextEditingController _countryController = TextEditingController();
+  final TextEditingController _defaultRateController = TextEditingController(
+    text: '0.10',
+  );
+  final TextEditingController _notesController = TextEditingController();
+
+  final TextEditingController _codeController = TextEditingController();
+  final TextEditingController _codeSellerIdController = TextEditingController();
+
+  final TextEditingController _globalRateController = TextEditingController(
+    text: '0.10',
+  );
+  final TextEditingController _countryRateController = TextEditingController(
+    text: '0.10',
+  );
+  final TextEditingController _countryRateCodeController =
+      TextEditingController();
+
+  final ScrollController _sellerListScroll = ScrollController();
+  final ScrollController _metricsScroll = ScrollController();
+
+  DateTimeRange? _dateRange;
+  String _selectedCountryFilter = 'ALL';
+  String? _selectedSellerId;
+
+  bool _savingSeller = false;
+  bool _savingCode = false;
+  bool _savingRate = false;
+  bool _isSellerActive = true;
+
+  @override
+  void initState() {
+    super.initState();
+    final now = DateTime.now();
+    _dateRange = DateTimeRange(
+      start: DateTime(now.year, now.month, 1),
+      end: now,
+    );
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _nameController.dispose();
+    _emailController.dispose();
+    _phoneController.dispose();
+    _countryController.dispose();
+    _defaultRateController.dispose();
+    _notesController.dispose();
+    _codeController.dispose();
+    _codeSellerIdController.dispose();
+    _globalRateController.dispose();
+    _countryRateController.dispose();
+    _countryRateCodeController.dispose();
+    _sellerListScroll.dispose();
+    _metricsScroll.dispose();
+    super.dispose();
+  }
+
+  String _normalizeCode(String raw) => raw.trim().toUpperCase();
+
+  String _generateCode() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    final rnd = Random();
+    final raw = String.fromCharCodes(
+      Iterable.generate(8, (_) => chars.codeUnitAt(rnd.nextInt(chars.length))),
+    );
+    return '${raw.substring(0, 4)}-${raw.substring(4, 8)}';
+  }
+
+  double _parseRate(String raw, {double fallback = 0.10}) {
+    final parsed = double.tryParse(raw.trim());
+    if (parsed == null || parsed.isNaN || parsed.isInfinite) return fallback;
+    if (parsed < 0) return 0;
+    if (parsed > 1) return 1;
+    return parsed;
+  }
+
+  Future<void> _saveSeller() async {
+    if (_nameController.text.trim().isEmpty) {
+      _snack('Seller name is required.', isError: true);
+      return;
+    }
+
+    setState(() => _savingSeller = true);
+    try {
+      final payload = {
+        'name': _nameController.text.trim(),
+        'email': _emailController.text.trim(),
+        'phone': _phoneController.text.trim(),
+        'country': _countryController.text.trim().toUpperCase(),
+        'isActive': _isSellerActive,
+        'defaultRate': _parseRate(_defaultRateController.text),
+        'notes': _notesController.text.trim(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      };
+
+      if (_selectedSellerId == null) {
+        await FirebaseFirestore.instance.collection('sellers').add({
+          ...payload,
+          'createdAt': FieldValue.serverTimestamp(),
+          'status': 'active',
+        });
+      } else {
+        await FirebaseFirestore.instance
+            .collection('sellers')
+            .doc(_selectedSellerId)
+            .set(payload, SetOptions(merge: true));
+      }
+
+      _clearSellerForm();
+      _snack('Seller saved.');
+    } catch (e) {
+      _snack('Could not save seller: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _savingSeller = false);
+    }
+  }
+
+  Future<void> _setSellerActive(String sellerId, bool active) async {
+    await FirebaseFirestore.instance.collection('sellers').doc(sellerId).set({
+      'isActive': active,
+      'status': active ? 'active' : 'inactive',
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> _setAllSellersActive(bool active) async {
+    final sellers = await FirebaseFirestore.instance.collection('sellers').get();
+    final batch = FirebaseFirestore.instance.batch();
+    for (final doc in sellers.docs) {
+      batch.set(doc.reference, {
+        'isActive': active,
+        'status': active ? 'active' : 'inactive',
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+    await batch.commit();
+    _snack(active ? 'All sellers activated.' : 'All sellers deactivated.');
+  }
+
+  Future<void> _deleteSeller(String sellerId) async {
+    await FirebaseFirestore.instance.collection('sellers').doc(sellerId).delete();
+
+    final codeDocs = await FirebaseFirestore.instance
+        .collection('seller_codes')
+        .where('sellerId', isEqualTo: sellerId)
+        .get();
+    final batch = FirebaseFirestore.instance.batch();
+    for (final codeDoc in codeDocs.docs) {
+      batch.delete(codeDoc.reference);
+    }
+    await batch.commit();
+  }
+
+  Future<void> _saveSellerCode() async {
+    final sellerId = _codeSellerIdController.text.trim();
+    if (sellerId.isEmpty) {
+      _snack('Select a seller first.', isError: true);
+      return;
+    }
+
+    setState(() => _savingCode = true);
+    try {
+      final raw = _codeController.text.trim();
+      final code = raw.isEmpty ? _generateCode() : _normalizeCode(raw);
+      final normalized = _normalizeCode(code);
+
+      final existing = await FirebaseFirestore.instance
+          .collection('seller_codes')
+          .where('normalizedCode', isEqualTo: normalized)
+          .limit(1)
+          .get();
+
+      if (existing.docs.isNotEmpty) {
+        _snack('Code already exists. Choose another code.', isError: true);
+        return;
+      }
+
+      await FirebaseFirestore.instance.collection('seller_codes').add({
+        'sellerId': sellerId,
+        'code': code,
+        'normalizedCode': normalized,
+        'isActive': true,
+        'status': 'active',
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      _codeController.clear();
+      await Clipboard.setData(ClipboardData(text: code));
+      _snack('Seller code created and copied: $code');
+    } catch (e) {
+      _snack('Could not save seller code: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _savingCode = false);
+    }
+  }
+
+  Future<void> _setSellerCodeActive(String codeId, bool active) async {
+    await FirebaseFirestore.instance.collection('seller_codes').doc(codeId).set({
+      'isActive': active,
+      'status': active ? 'active' : 'inactive',
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> _deleteSellerCode(String codeId) async {
+    await FirebaseFirestore.instance.collection('seller_codes').doc(codeId).delete();
+  }
+
+  Future<void> _saveGlobalRate() async {
+    setState(() => _savingRate = true);
+    try {
+      final rate = _parseRate(_globalRateController.text);
+      await FirebaseFirestore.instance
+          .collection('seller_commission_settings')
+          .doc('global')
+          .set({
+        'defaultRate': rate,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      _snack('Global rate saved.');
+    } catch (e) {
+      _snack('Could not save global rate: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _savingRate = false);
+    }
+  }
+
+  Future<void> _saveCountryRate() async {
+    final code = _countryRateCodeController.text.trim().toUpperCase();
+    if (code.length < 2) {
+      _snack('Country code is required.', isError: true);
+      return;
+    }
+
+    setState(() => _savingRate = true);
+    try {
+      final rate = _parseRate(_countryRateController.text);
+      await FirebaseFirestore.instance
+          .collection('seller_country_rates')
+          .doc(code)
+          .set({
+        'countryCode': code,
+        'rate': rate,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      _snack('Country rate saved for $code.');
+    } catch (e) {
+      _snack('Could not save country rate: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _savingRate = false);
+    }
+  }
+
+  void _loadSeller(Map<String, dynamic> data, String sellerId) {
+    _selectedSellerId = sellerId;
+    _nameController.text = (data['name'] ?? '').toString();
+    _emailController.text = (data['email'] ?? '').toString();
+    _phoneController.text = (data['phone'] ?? '').toString();
+    _countryController.text = (data['country'] ?? '').toString();
+    final rate = (data['defaultRate'] as num?)?.toDouble() ?? 0.10;
+    _defaultRateController.text = rate.toStringAsFixed(2);
+    _notesController.text = (data['notes'] ?? '').toString();
+    _isSellerActive = data['isActive'] != false;
+    _codeSellerIdController.text = sellerId;
+    setState(() {});
+  }
+
+  void _clearSellerForm() {
+    _selectedSellerId = null;
+    _nameController.clear();
+    _emailController.clear();
+    _phoneController.clear();
+    _countryController.clear();
+    _defaultRateController.text = '0.10';
+    _notesController.clear();
+    _isSellerActive = true;
+    _codeSellerIdController.clear();
+    setState(() {});
+  }
+
+  void _snack(String message, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? Colors.red : Colors.green,
+      ),
+    );
+  }
+
+  Future<void> _pickDateRange() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(now.year - 5),
+      lastDate: DateTime(now.year + 2),
+      initialDateRange: _dateRange,
+    );
+    if (picked != null) {
+      setState(() => _dateRange = picked);
+    }
+  }
+
+  Future<Map<String, dynamic>> _computeMetricsForSeller(
+    String sellerId,
+    List<Map<String, dynamic>> users,
+    double defaultRate,
+  ) async {
+    final start = _dateRange?.start;
+    final end = _dateRange?.end;
+
+    final sellerUsers = users.where((u) {
+      return (u['assignedSellerId'] ?? '').toString().trim() == sellerId;
+    }).toList();
+
+    int activeSubscribers = 0;
+    int willRenewCount = 0;
+    int paidMonthlyCount = 0;
+    double grossEstimate = 0;
+
+    for (final user in sellerUsers) {
+      final status = (user['status'] ?? '').toString().toLowerCase();
+      final isActive = status == 'active';
+      final willRenew = user['willRenew'] == true;
+      final plan = (user['subscriptionPlan'] ?? '').toString().toLowerCase();
+      final renewalDate = _asDate(user['renewalDate']);
+
+      if (isActive) activeSubscribers++;
+      if (willRenew) willRenewCount++;
+
+      final monthlyLike = plan.contains('starter') ||
+          plan.contains('harmony 100') ||
+          plan.contains('monthly');
+      if (monthlyLike && isActive) {
+        if (start == null || end == null) {
+          paidMonthlyCount++;
+          grossEstimate += _planEstimate(plan);
+        } else if (renewalDate != null) {
+          final inRange = !renewalDate.isBefore(start) &&
+              !renewalDate.isAfter(end.add(const Duration(days: 1)));
+          if (inRange) {
+            paidMonthlyCount++;
+            grossEstimate += _planEstimate(plan);
+          }
+        }
+      }
+    }
+
+    final rate = _effectiveRateForCountry(defaultRate);
+    final residualEstimate = grossEstimate * rate;
+
+    return {
+      'totalAttributedUsers': sellerUsers.length,
+      'activeSubscribers': activeSubscribers,
+      'willRenewCount': willRenewCount,
+      'paidMonthlyCount': paidMonthlyCount,
+      'grossEstimate': grossEstimate,
+      'rate': rate,
+      'residualEstimate': residualEstimate,
+    };
+  }
+
+  DateTime? _asDate(dynamic value) {
+    if (value == null) return null;
+    if (value is Timestamp) return value.toDate();
+    if (value is DateTime) return value;
+    if (value is String) return DateTime.tryParse(value);
+    return null;
+  }
+
+  double _planEstimate(String plan) {
+    if (plan.contains('harmony 100')) return 4.99;
+    if (plan.contains('starter')) return 2.99;
+    return 0;
+  }
+
+  double _effectiveRateForCountry(double fallback) {
+    return fallback;
+  }
+
+  String _fmtMoney(num value) => value.toStringAsFixed(2);
+
+  String _fmtRate(num value) => '${(value * 100).toStringAsFixed(2)}%';
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance.collection('sellers').snapshots(),
+      builder: (context, sellerSnapshot) {
+        final sellerDocs = sellerSnapshot.data?.docs ??
+            const <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+
+        final countries = <String>{'ALL'};
+        for (final doc in sellerDocs) {
+          final code = (doc.data()['country'] ?? '').toString().trim().toUpperCase();
+          if (code.isNotEmpty) countries.add(code);
+        }
+
+        final normalizedSearch = _searchController.text.trim().toLowerCase();
+
+        final filtered = sellerDocs.where((doc) {
+          final data = doc.data();
+          final country = (data['country'] ?? '').toString().trim().toUpperCase();
+          if (_selectedCountryFilter != 'ALL' && country != _selectedCountryFilter) {
+            return false;
+          }
+
+          if (normalizedSearch.isEmpty) return true;
+
+          final name = (data['name'] ?? '').toString().toLowerCase();
+          final email = (data['email'] ?? '').toString().toLowerCase();
+          final phone = (data['phone'] ?? '').toString().toLowerCase();
+          return name.contains(normalizedSearch) ||
+              email.contains(normalizedSearch) ||
+              phone.contains(normalizedSearch);
+        }).toList()
+          ..sort((a, b) {
+            final aName = (a.data()['name'] ?? '').toString().toLowerCase();
+            final bName = (b.data()['name'] ?? '').toString().toLowerCase();
+            return aName.compareTo(bName);
+          });
+
+        return Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              _buildHeader(countries.toList()..sort()),
+              const SizedBox(height: 12),
+              Expanded(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(flex: 3, child: _buildSellerList(filtered)),
+                    const SizedBox(width: 12),
+                    Expanded(flex: 4, child: _buildSellerEditor()),
+                    const SizedBox(width: 12),
+                    Expanded(flex: 5, child: _buildMetricsPanel(filtered)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildHeader(List<String> countries) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Wrap(
+          runSpacing: 10,
+          spacing: 10,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            const Text(
+              'Seller Management',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            ),
+            SizedBox(
+              width: 220,
+              child: TextField(
+                controller: _searchController,
+                decoration: const InputDecoration(
+                  isDense: true,
+                  labelText: 'Search sellers',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.search),
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+            ),
+            SizedBox(
+              width: 150,
+              child: DropdownButtonFormField<String>(
+                value: countries.contains(_selectedCountryFilter)
+                    ? _selectedCountryFilter
+                    : 'ALL',
+                items: countries
+                    .map(
+                      (c) => DropdownMenuItem(value: c, child: Text(c)),
+                    )
+                    .toList(),
+                onChanged: (v) {
+                  if (v == null) return;
+                  setState(() => _selectedCountryFilter = v);
+                },
+                decoration: const InputDecoration(
+                  isDense: true,
+                  labelText: 'Country',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ),
+            OutlinedButton.icon(
+              onPressed: _pickDateRange,
+              icon: const Icon(Icons.date_range),
+              label: Text(
+                _dateRange == null
+                    ? 'All Dates'
+                    : '${_dateRange!.start.year}-${_dateRange!.start.month.toString().padLeft(2, '0')}-${_dateRange!.start.day.toString().padLeft(2, '0')} to ${_dateRange!.end.year}-${_dateRange!.end.month.toString().padLeft(2, '0')}-${_dateRange!.end.day.toString().padLeft(2, '0')}',
+              ),
+            ),
+            OutlinedButton(
+              onPressed: () => _setAllSellersActive(true),
+              child: const Text('Activate All'),
+            ),
+            OutlinedButton(
+              onPressed: () => _setAllSellersActive(false),
+              child: const Text('Deactivate All'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSellerList(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
+    return Card(
+      child: Column(
+        children: [
+          const ListTile(
+            dense: true,
+            title: Text('Sellers'),
+            subtitle: Text('Tap a seller to edit, inspect codes and metrics.'),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: Scrollbar(
+              controller: _sellerListScroll,
+              thumbVisibility: true,
+              child: ListView.separated(
+                controller: _sellerListScroll,
+                itemCount: docs.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final doc = docs[index];
+                  final data = doc.data();
+                  final sellerId = doc.id;
+                  final active = data['isActive'] != false;
+                  final name = (data['name'] ?? '').toString();
+                  final email = (data['email'] ?? '').toString();
+                  final country = (data['country'] ?? '—').toString();
+
+                  return ListTile(
+                    selected: _selectedSellerId == sellerId,
+                    onTap: () => _loadSeller(data, sellerId),
+                    title: Text(name.isEmpty ? 'Unnamed seller' : name),
+                    subtitle: Text('$email • $country'),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Switch(
+                          value: active,
+                          onChanged: (v) => _setSellerActive(sellerId, v),
+                        ),
+                        IconButton(
+                          tooltip: 'Delete seller',
+                          icon: const Icon(Icons.delete_outline, color: Colors.red),
+                          onPressed: () async {
+                            final ok = await showDialog<bool>(
+                                  context: context,
+                                  builder: (ctx) => AlertDialog(
+                                    title: const Text('Delete seller?'),
+                                    content: const Text(
+                                      'This removes the seller and all mapped seller codes.',
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () => Navigator.pop(ctx, false),
+                                        child: const Text('Cancel'),
+                                      ),
+                                      ElevatedButton(
+                                        onPressed: () => Navigator.pop(ctx, true),
+                                        child: const Text('Delete'),
+                                      ),
+                                    ],
+                                  ),
+                                ) ??
+                                false;
+                            if (!ok) return;
+                            await _deleteSeller(sellerId);
+                            if (_selectedSellerId == sellerId) {
+                              _clearSellerForm();
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSellerEditor() {
+    return Card(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Seller Profile',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _nameController,
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                labelText: 'Seller Name',
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _emailController,
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                labelText: 'Email',
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _phoneController,
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                labelText: 'Contact Number',
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _countryController,
+              textCapitalization: TextCapitalization.characters,
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                labelText: 'Country Code',
+                hintText: 'GB',
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _defaultRateController,
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                labelText: 'Default Seller Rate (0.00 to 1.00)',
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _notesController,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                labelText: 'Notes',
+              ),
+            ),
+            const SizedBox(height: 8),
+            SwitchListTile(
+              value: _isSellerActive,
+              onChanged: (v) => setState(() => _isSellerActive = v),
+              title: const Text('Seller Active'),
+              contentPadding: EdgeInsets.zero,
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                ElevatedButton.icon(
+                  onPressed: _savingSeller ? null : _saveSeller,
+                  icon: const Icon(Icons.save),
+                  label: Text(_savingSeller ? 'Saving...' : 'Save Seller'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _clearSellerForm,
+                  icon: const Icon(Icons.clear),
+                  label: const Text('Clear'),
+                ),
+              ],
+            ),
+            const Divider(height: 24),
+            const Text(
+              'Seller Codes',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _codeSellerIdController,
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                labelText: 'Seller Doc ID',
+              ),
+              readOnly: true,
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _codeController,
+              textCapitalization: TextCapitalization.characters,
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                labelText: 'Code (leave blank to auto-generate)',
+              ),
+            ),
+            const SizedBox(height: 8),
+            ElevatedButton.icon(
+              onPressed: _savingCode ? null : _saveSellerCode,
+              icon: const Icon(Icons.vpn_key),
+              label:
+                  Text(_savingCode ? 'Saving...' : 'Create / Attach Seller Code'),
+            ),
+            const SizedBox(height: 8),
+            _buildSellerCodeList(),
+            const Divider(height: 24),
+            const Text(
+              'Rates',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _globalRateController,
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                labelText: 'Global Default Rate (0.00 to 1.00)',
+              ),
+            ),
+            const SizedBox(height: 8),
+            ElevatedButton(
+              onPressed: _savingRate ? null : _saveGlobalRate,
+              child: Text(_savingRate ? 'Saving...' : 'Save Global Rate'),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _countryRateCodeController,
+                    textCapitalization: TextCapitalization.characters,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: 'Country Code',
+                      hintText: 'US',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: _countryRateController,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: 'Country Rate',
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            ElevatedButton(
+              onPressed: _savingRate ? null : _saveCountryRate,
+              child: const Text('Save Country Rate'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSellerCodeList() {
+    final sellerId = _codeSellerIdController.text.trim();
+    if (sellerId.isEmpty) {
+      return const Text('Select a seller to view or manage codes.');
+    }
+
+    return SizedBox(
+      height: 180,
+      child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: FirebaseFirestore.instance
+            .collection('seller_codes')
+            .where('sellerId', isEqualTo: sellerId)
+            .orderBy('createdAt', descending: true)
+            .snapshots(),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          final docs = snapshot.data!.docs;
+          if (docs.isEmpty) {
+            return const Center(child: Text('No seller codes yet.'));
+          }
+
+          return ListView.separated(
+            itemCount: docs.length,
+            separatorBuilder: (_, __) => const Divider(height: 1),
+            itemBuilder: (context, index) {
+              final doc = docs[index];
+              final data = doc.data();
+              final code = (data['code'] ?? '').toString();
+              final active = data['isActive'] != false;
+
+              return ListTile(
+                dense: true,
+                title: Text(code),
+                subtitle: Text(active ? 'Active' : 'Inactive'),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Switch(
+                      value: active,
+                      onChanged: (v) => _setSellerCodeActive(doc.id, v),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.copy),
+                      onPressed: () async {
+                        await Clipboard.setData(ClipboardData(text: code));
+                        _snack('Copied: $code');
+                      },
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.delete_outline, color: Colors.red),
+                      onPressed: () => _deleteSellerCode(doc.id),
+                    ),
+                  ],
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildMetricsPanel(List<QueryDocumentSnapshot<Map<String, dynamic>>> sellers) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Residual Metrics',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Live seller totals from users collection. Uses willRenew/status/subscriptionPlan/renewalDate for active and residual estimates.',
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: FirebaseFirestore.instance.collection('users').snapshots(),
+                builder: (context, userSnapshot) {
+                  if (!userSnapshot.hasData) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+
+                  final users = userSnapshot.data!.docs
+                      .map((d) => <String, dynamic>{'id': d.id, ...d.data()})
+                      .toList();
+
+                  return Scrollbar(
+                    controller: _metricsScroll,
+                    thumbVisibility: true,
+                    child: ListView.builder(
+                      controller: _metricsScroll,
+                      itemCount: sellers.length,
+                      itemBuilder: (context, index) {
+                        final sellerDoc = sellers[index];
+                        final data = sellerDoc.data();
+                        final sellerId = sellerDoc.id;
+                        final sellerName = (data['name'] ?? 'Unnamed').toString();
+                        final rate = (data['defaultRate'] as num?)?.toDouble() ?? 0.10;
+
+                        return FutureBuilder<Map<String, dynamic>>(
+                          future: _computeMetricsForSeller(sellerId, users, rate),
+                          builder: (context, snap) {
+                            final metrics = snap.data;
+                            if (metrics == null) {
+                              return const Card(
+                                child: Padding(
+                                  padding: EdgeInsets.all(12),
+                                  child: LinearProgressIndicator(),
+                                ),
+                              );
+                            }
+
+                            final totalAttributed =
+                                (metrics['totalAttributedUsers'] as int?) ?? 0;
+                            final activeSubscribers =
+                                (metrics['activeSubscribers'] as int?) ?? 0;
+                            final willRenewCount =
+                                (metrics['willRenewCount'] as int?) ?? 0;
+                            final paidMonthlyCount =
+                                (metrics['paidMonthlyCount'] as int?) ?? 0;
+                            final grossEstimate =
+                                (metrics['grossEstimate'] as num?) ?? 0;
+                            final rateApplied =
+                                (metrics['rate'] as num?) ?? rate;
+                            final residualEstimate =
+                                (metrics['residualEstimate'] as num?) ?? 0;
+
+                            return Card(
+                              margin: const EdgeInsets.only(bottom: 8),
+                              child: Padding(
+                                padding: const EdgeInsets.all(10),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      sellerName,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 15,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Wrap(
+                                      spacing: 8,
+                                      runSpacing: 8,
+                                      children: [
+                                        _chip('Attributed', '$totalAttributed'),
+                                        _chip('Active', '$activeSubscribers'),
+                                        _chip('Will Renew', '$willRenewCount'),
+                                        _chip('Paid Monthly', '$paidMonthlyCount'),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      'Rate: ${_fmtRate(rateApplied)}',
+                                      style: const TextStyle(fontWeight: FontWeight.w600),
+                                    ),
+                                    Text(
+                                      'Gross Estimate: £${_fmtMoney(grossEstimate)}',
+                                      style: const TextStyle(fontWeight: FontWeight.w600),
+                                    ),
+                                    Text(
+                                      'Residual Estimate: £${_fmtMoney(residualEstimate)}',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.green,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Row(
+                                      mainAxisAlignment: MainAxisAlignment.end,
+                                      children: [
+                                        TextButton.icon(
+                                          onPressed: () {
+                                            final report = {
+                                              'sellerId': sellerId,
+                                              'sellerName': sellerName,
+                                              'dateRange': _dateRange == null
+                                                  ? 'all'
+                                                  : '${_dateRange!.start.toIso8601String()}..${_dateRange!.end.toIso8601String()}',
+                                              'metrics': {
+                                                'totalAttributedUsers': totalAttributed,
+                                                'activeSubscribers': activeSubscribers,
+                                                'willRenewCount': willRenewCount,
+                                                'paidMonthlyCount': paidMonthlyCount,
+                                                'rateApplied': rateApplied,
+                                                'grossEstimate': grossEstimate,
+                                                'residualEstimate': residualEstimate,
+                                              }
+                                            };
+                                            Clipboard.setData(
+                                              ClipboardData(
+                                                text: const JsonEncoder.withIndent('  ')
+                                                    .convert(report),
+                                              ),
+                                            );
+                                            _snack('Seller report JSON copied for export/print.');
+                                          },
+                                          icon: const Icon(Icons.copy),
+                                          label: const Text('Copy Report JSON'),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _chip(String label, String value) {
+    return Chip(
+      visualDensity: VisualDensity.compact,
+      label: Text('$label: $value'),
+    );
+  }
+}
