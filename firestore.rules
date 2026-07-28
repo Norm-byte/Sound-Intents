@@ -346,24 +346,24 @@ service cloud.firestore {
     // Live Event Viewer Sessions (true real-time overlay stats)
     match /event_live_viewers/{eventId} {
       allow read: if true;
-      allow create, update: if isSignedIn();
+      allow create, update: if true;
       allow delete: if isActiveAdmin();
 
       match /sessions/{sessionUserId} {
         allow read: if true;
-        allow create, update, delete: if isSignedIn();
+        allow create, update, delete: if true;
       }
     }
 
     // Shared slot-level live viewer sessions used for cross-device aggregation.
     match /event_live_viewers_groups/{groupKey} {
       allow read: if true;
-      allow create, update: if isSignedIn();
+      allow create, update: if true;
       allow delete: if isActiveAdmin();
 
       match /sessions/{sessionUserId} {
         allow read: if true;
-        allow create, update, delete: if isSignedIn();
+        allow create, update, delete: if true;
       }
     }
 
