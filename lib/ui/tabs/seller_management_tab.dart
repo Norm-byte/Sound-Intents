@@ -1218,6 +1218,11 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
                 ),
               ],
             ),
+            const SizedBox(height: 6),
+            const Text(
+              'Country Rate is a percentage override (for example 0.40 = 40%). FX conversion appears in totals, not in this field.',
+              style: TextStyle(fontSize: 12, color: Colors.black54),
+            ),
             const SizedBox(height: 8),
             ElevatedButton(
               onPressed: _savingRate ? null : _saveCountryRate,
