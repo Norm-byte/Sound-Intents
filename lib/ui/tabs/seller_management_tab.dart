@@ -13,6 +13,22 @@ class SellerManagementTab extends StatefulWidget {
   State<SellerManagementTab> createState() => _SellerManagementTabState();
 }
 
+class _RateConfig {
+  final double globalDefaultRate;
+  final Map<String, double> countryRates;
+  final String payoutMode;
+  final double fixedStarterGbp;
+  final double fixedHarmony100Gbp;
+
+  const _RateConfig({
+    required this.globalDefaultRate,
+    required this.countryRates,
+    required this.payoutMode,
+    required this.fixedStarterGbp,
+    required this.fixedHarmony100Gbp,
+  });
+}
+
 class _SellerManagementTabState extends State<SellerManagementTab> {
   final TextEditingController _searchController = TextEditingController();
   final TextEditingController _nameController = TextEditingController();
@@ -33,6 +49,10 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
   final TextEditingController _globalRateController = TextEditingController(
     text: '0.10',
   );
+  final TextEditingController _fixedStarterPayoutController =
+      TextEditingController(text: '0.50');
+  final TextEditingController _fixedHarmony100PayoutController =
+      TextEditingController(text: '0.80');
   final TextEditingController _countryRateController = TextEditingController(
     text: '0.10',
   );
@@ -49,9 +69,11 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
   bool _savingSeller = false;
   bool _savingCode = false;
   bool _savingRate = false;
+  bool _loadingRateSettings = false;
   bool _refreshingFx = false;
   bool _lockingFx = false;
   bool _isSellerActive = true;
+  String _payoutMode = 'percentage';
 
   static const Map<String, String> _countryToCurrency = {
     'GB': 'GBP',
@@ -78,6 +100,7 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
       start: DateTime(now.year, now.month, 1),
       end: now,
     );
+    _loadRateSettingsIntoForm();
   }
 
   @override
@@ -93,6 +116,8 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
     _codeController.dispose();
     _codeSellerIdController.dispose();
     _globalRateController.dispose();
+    _fixedStarterPayoutController.dispose();
+    _fixedHarmony100PayoutController.dispose();
     _countryRateController.dispose();
     _countryRateCodeController.dispose();
     _sellerListScroll.dispose();
@@ -117,6 +142,46 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
     if (parsed < 0) return 0;
     if (parsed > 1) return 1;
     return parsed;
+  }
+
+  double _parseMoney(String raw, {double fallback = 0}) {
+    final parsed = double.tryParse(raw.trim());
+    if (parsed == null || parsed.isNaN || parsed.isInfinite) return fallback;
+    if (parsed < 0) return 0;
+    return parsed;
+  }
+
+  Future<void> _loadRateSettingsIntoForm() async {
+    setState(() => _loadingRateSettings = true);
+    try {
+      final globalSnap = await FirebaseFirestore.instance
+          .collection('seller_commission_settings')
+          .doc('global')
+          .get();
+      final data = globalSnap.data() ?? {};
+      if (!mounted) return;
+
+      setState(() {
+        _globalRateController.text =
+            ((data['defaultRate'] as num?)?.toDouble() ?? 0.10)
+                .toStringAsFixed(2);
+        _payoutMode =
+            (data['payoutMode'] as String?)?.trim().toLowerCase() ==
+                    'fixed_gbp_per_plan'
+                ? 'fixed_gbp_per_plan'
+                : 'percentage';
+        _fixedStarterPayoutController.text =
+            ((data['fixedStarterGbp'] as num?)?.toDouble() ?? 0.50)
+                .toStringAsFixed(2);
+        _fixedHarmony100PayoutController.text =
+            ((data['fixedHarmony100Gbp'] as num?)?.toDouble() ?? 0.80)
+                .toStringAsFixed(2);
+      });
+    } catch (_) {
+      // Leave defaults in place if settings are missing.
+    } finally {
+      if (mounted) setState(() => _loadingRateSettings = false);
+    }
   }
 
   Future<void> _saveSeller() async {
@@ -257,14 +322,20 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
     setState(() => _savingRate = true);
     try {
       final rate = _parseRate(_globalRateController.text);
+      final fixedStarter = _parseMoney(_fixedStarterPayoutController.text);
+      final fixedHarmony100 =
+          _parseMoney(_fixedHarmony100PayoutController.text);
       await FirebaseFirestore.instance
           .collection('seller_commission_settings')
           .doc('global')
           .set({
         'defaultRate': rate,
+        'payoutMode': _payoutMode,
+        'fixedStarterGbp': fixedStarter,
+        'fixedHarmony100Gbp': fixedHarmony100,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
-      _snack('Global rate saved.');
+      _snack('Global payout settings saved.');
     } catch (e) {
       _snack('Could not save global rate: $e', isError: true);
     } finally {
@@ -443,10 +514,13 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
   Future<Map<String, dynamic>> _computeMetricsForSeller(
     String sellerId,
     List<Map<String, dynamic>> users,
-    double defaultRate,
+    _RateConfig rateConfig,
+    Map<String, dynamic> sellerData,
   ) async {
     final start = _dateRange?.start;
     final end = _dateRange?.end;
+    final sellerDefaultRate = (sellerData['defaultRate'] as num?)?.toDouble() ??
+        rateConfig.globalDefaultRate;
 
     final sellerUsers = users.where((u) {
       return (u['assignedSellerId'] ?? '').toString().trim() == sellerId;
@@ -456,6 +530,7 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
     int willRenewCount = 0;
     int paidMonthlyCount = 0;
     double grossEstimate = 0;
+    double residualEstimate = 0;
 
     for (final user in sellerUsers) {
       final status = (user['status'] ?? '').toString().toLowerCase();
@@ -471,22 +546,40 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
           plan.contains('harmony 100') ||
           plan.contains('monthly');
       if (monthlyLike && isActive) {
+        final monthlyValue = _planEstimate(plan);
+        if (monthlyValue <= 0) {
+          continue;
+        }
+
+        final countryCode = _resolveUserCountryCode(user);
+        final countryRate = rateConfig.countryRates[countryCode];
+        final appliedRate = countryRate ?? sellerDefaultRate;
+        final useFixedMode = rateConfig.payoutMode == 'fixed_gbp_per_plan';
+        final fixedPayout = _fixedPayoutForPlan(plan, rateConfig);
+
         if (start == null || end == null) {
           paidMonthlyCount++;
-          grossEstimate += _planEstimate(plan);
+          grossEstimate += monthlyValue;
+          residualEstimate += useFixedMode
+              ? fixedPayout
+              : (monthlyValue * appliedRate);
         } else if (renewalDate != null) {
           final inRange = !renewalDate.isBefore(start) &&
               !renewalDate.isAfter(end.add(const Duration(days: 1)));
           if (inRange) {
             paidMonthlyCount++;
-            grossEstimate += _planEstimate(plan);
+            grossEstimate += monthlyValue;
+            residualEstimate += useFixedMode
+                ? fixedPayout
+                : (monthlyValue * appliedRate);
           }
         }
       }
     }
 
-    final rate = _effectiveRateForCountry(defaultRate);
-    final residualEstimate = grossEstimate * rate;
+    final rate = grossEstimate > 0
+        ? (residualEstimate / grossEstimate)
+        : sellerDefaultRate;
 
     return {
       'totalAttributedUsers': sellerUsers.length,
@@ -496,7 +589,59 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
       'grossEstimate': grossEstimate,
       'rate': rate,
       'residualEstimate': residualEstimate,
+      'payoutMode': rateConfig.payoutMode,
     };
+  }
+
+  Future<_RateConfig> _loadRateConfig() async {
+    final globalSnap = await FirebaseFirestore.instance
+        .collection('seller_commission_settings')
+        .doc('global')
+        .get();
+    final globalData = globalSnap.data() ?? {};
+    final globalDefaultRate = (globalData['defaultRate'] as num?)?.toDouble() ?? 0.10;
+    final payoutMode = (globalData['payoutMode'] as String?)
+        ?.trim()
+        .toLowerCase() ==
+      'fixed_gbp_per_plan'
+      ? 'fixed_gbp_per_plan'
+      : 'percentage';
+    final fixedStarterGbp =
+      (globalData['fixedStarterGbp'] as num?)?.toDouble() ?? 0.50;
+    final fixedHarmony100Gbp =
+      (globalData['fixedHarmony100Gbp'] as num?)?.toDouble() ?? 0.80;
+
+    final countrySnap = await FirebaseFirestore.instance
+        .collection('seller_country_rates')
+        .get();
+    final countryRates = <String, double>{};
+    for (final doc in countrySnap.docs) {
+      final data = doc.data();
+      final countryCode = ((data['countryCode'] ?? doc.id).toString()).trim().toUpperCase();
+      final rate = (data['rate'] as num?)?.toDouble();
+      if (countryCode.isNotEmpty && rate != null && rate >= 0 && rate <= 1) {
+        countryRates[countryCode] = rate;
+      }
+    }
+
+    return _RateConfig(
+      globalDefaultRate: globalDefaultRate,
+      countryRates: countryRates,
+      payoutMode: payoutMode,
+      fixedStarterGbp: fixedStarterGbp,
+      fixedHarmony100Gbp: fixedHarmony100Gbp,
+    );
+  }
+
+  double _fixedPayoutForPlan(String plan, _RateConfig config) {
+    if (plan.contains('harmony 100')) return config.fixedHarmony100Gbp;
+    if (plan.contains('starter')) return config.fixedStarterGbp;
+    return 0;
+  }
+
+  String _resolveUserCountryCode(Map<String, dynamic> userData) {
+    final cc = (userData['countryCode'] ?? userData['country'] ?? '').toString().trim().toUpperCase();
+    return cc.length >= 2 ? cc : 'GB';
   }
 
   DateTime? _asDate(dynamic value) {
@@ -511,10 +656,6 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
     if (plan.contains('harmony 100')) return 4.99;
     if (plan.contains('starter')) return 2.99;
     return 0;
-  }
-
-  double _effectiveRateForCountry(double fallback) {
-    return fallback;
   }
 
   String _fmtMoney(num value) => value.toStringAsFixed(2);
@@ -984,6 +1125,28 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              initialValue: _payoutMode,
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                labelText: 'Payout Mode',
+              ),
+              items: const [
+                DropdownMenuItem(
+                  value: 'percentage',
+                  child: Text('Percentage (default/country rates)'),
+                ),
+                DropdownMenuItem(
+                  value: 'fixed_gbp_per_plan',
+                  child: Text('Fixed GBP per plan (Starter/Harmony 100)'),
+                ),
+              ],
+              onChanged: (value) {
+                if (value == null) return;
+                setState(() => _payoutMode = value);
+              },
+            ),
+            const SizedBox(height: 8),
             TextField(
               controller: _globalRateController,
               decoration: const InputDecoration(
@@ -992,9 +1155,42 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
               ),
             ),
             const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _fixedStarterPayoutController,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: 'Fixed Starter GBP',
+                      hintText: '0.50',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: _fixedHarmony100PayoutController,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: 'Fixed Harmony 100 GBP',
+                      hintText: '0.80',
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              _payoutMode == 'fixed_gbp_per_plan'
+                  ? 'Fixed mode active: country percentage rates are ignored for payouts. GBP fixed amounts are used per paid plan.'
+                  : 'Percentage mode active: global/country rates are used. Fixed GBP fields are saved but not applied.',
+              style: const TextStyle(fontSize: 12, color: Colors.black54),
+            ),
+            const SizedBox(height: 8),
             ElevatedButton(
-              onPressed: _savingRate ? null : _saveGlobalRate,
-              child: Text(_savingRate ? 'Saving...' : 'Save Global Rate'),
+              onPressed: _savingRate || _loadingRateSettings ? null : _saveGlobalRate,
+              child: Text(_savingRate ? 'Saving...' : 'Save Global Payout Settings'),
             ),
             const SizedBox(height: 12),
             Row(
@@ -1122,171 +1318,193 @@ class _SellerManagementTabState extends State<SellerManagementTab> {
             ),
             const SizedBox(height: 8),
             Expanded(
-              child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                stream: FirebaseFirestore.instance.collection('users').snapshots(),
-                builder: (context, userSnapshot) {
-                  if (!userSnapshot.hasData) {
+              child: FutureBuilder<_RateConfig>(
+                future: _loadRateConfig(),
+                builder: (context, rateSnap) {
+                  if (!rateSnap.hasData) {
                     return const Center(child: CircularProgressIndicator());
                   }
 
-                  final users = userSnapshot.data!.docs
-                      .map((d) => <String, dynamic>{'id': d.id, ...d.data()})
-                      .toList();
+                  final rateConfig = rateSnap.data!;
 
-                  return Scrollbar(
-                    controller: _metricsScroll,
-                    thumbVisibility: true,
-                    child: ListView.builder(
-                      controller: _metricsScroll,
-                      itemCount: sellers.length,
-                      itemBuilder: (context, index) {
-                        final sellerDoc = sellers[index];
-                        final data = sellerDoc.data();
-                        final sellerId = sellerDoc.id;
-                        final sellerName = (data['name'] ?? 'Unnamed').toString();
-                        final sellerCurrency = _sellerCurrencyFromData(data);
-                        final rate = (data['defaultRate'] as num?)?.toDouble() ?? 0.10;
+                  return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                    stream: FirebaseFirestore.instance.collection('users').snapshots(),
+                    builder: (context, userSnapshot) {
+                      if (!userSnapshot.hasData) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
 
-                        return FutureBuilder<Map<String, dynamic>>(
-                          future: _computeMetricsForSeller(sellerId, users, rate),
-                          builder: (context, snap) {
-                            final metrics = snap.data;
-                            if (metrics == null) {
-                              return const Card(
-                                child: Padding(
-                                  padding: EdgeInsets.all(12),
-                                  child: LinearProgressIndicator(),
-                                ),
-                              );
-                            }
+                      final users = userSnapshot.data!.docs
+                          .map((d) => <String, dynamic>{'id': d.id, ...d.data()})
+                          .toList();
 
-                            final totalAttributed =
-                                (metrics['totalAttributedUsers'] as int?) ?? 0;
-                            final activeSubscribers =
-                                (metrics['activeSubscribers'] as int?) ?? 0;
-                            final willRenewCount =
-                                (metrics['willRenewCount'] as int?) ?? 0;
-                            final paidMonthlyCount =
-                                (metrics['paidMonthlyCount'] as int?) ?? 0;
-                            final grossEstimate =
-                                (metrics['grossEstimate'] as num?) ?? 0;
-                            final rateApplied =
-                                (metrics['rate'] as num?) ?? rate;
-                            final residualEstimate =
-                                (metrics['residualEstimate'] as num?) ?? 0;
-                            final fxRate = _gbpToCurrencyRate(
-                              sellerCurrency,
-                              monthlyRates,
-                              liveRates,
-                            );
-                            final localGross = grossEstimate * fxRate;
-                            final localResidual = residualEstimate * fxRate;
+                      return Scrollbar(
+                        controller: _metricsScroll,
+                        thumbVisibility: true,
+                        child: ListView.builder(
+                          controller: _metricsScroll,
+                          itemCount: sellers.length,
+                          itemBuilder: (context, index) {
+                            final sellerDoc = sellers[index];
+                            final data = sellerDoc.data();
+                            final sellerId = sellerDoc.id;
+                            final sellerName = (data['name'] ?? 'Unnamed').toString();
+                            final sellerCurrency = _sellerCurrencyFromData(data);
+                            final rate = (data['defaultRate'] as num?)?.toDouble() ??
+                                rateConfig.globalDefaultRate;
 
-                            return Card(
-                              margin: const EdgeInsets.only(bottom: 8),
-                              child: Padding(
-                                padding: const EdgeInsets.all(10),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      sellerName,
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 15,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 6),
-                                    Wrap(
-                                      spacing: 8,
-                                      runSpacing: 8,
-                                      children: [
-                                        _chip('Attributed', '$totalAttributed'),
-                                        _chip('Active', '$activeSubscribers'),
-                                        _chip('Will Renew', '$willRenewCount'),
-                                        _chip('Paid Monthly', '$paidMonthlyCount'),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Text(
-                                      'Rate: ${_fmtRate(rateApplied)}',
-                                      style: const TextStyle(fontWeight: FontWeight.w600),
-                                    ),
-                                    Text(
-                                      'Gross Estimate: £${_fmtMoney(grossEstimate)}',
-                                      style: const TextStyle(fontWeight: FontWeight.w600),
-                                    ),
-                                    Text(
-                                      'Residual Estimate: £${_fmtMoney(residualEstimate)}',
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.green,
-                                      ),
-                                    ),
-                                    if (sellerCurrency != 'GBP') ...[
-                                      Text(
-                                        'Gross Estimate (${sellerCurrency}): ${_formatAmount(sellerCurrency, localGross)}',
-                                        style: const TextStyle(fontWeight: FontWeight.w600),
-                                      ),
-                                      Text(
-                                        'Residual Estimate (${sellerCurrency}): ${_formatAmount(sellerCurrency, localResidual)}',
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.green,
-                                        ),
-                                      ),
-                                      Text(
-                                        'FX used: 1 GBP = ${fxRate.toStringAsFixed(4)} $sellerCurrency',
-                                        style: const TextStyle(fontSize: 12, color: Colors.black54),
-                                      ),
-                                    ],
-                                    const SizedBox(height: 8),
-                                    Row(
-                                      mainAxisAlignment: MainAxisAlignment.end,
-                                      children: [
-                                        TextButton.icon(
-                                          onPressed: () {
-                                            final report = {
-                                              'sellerId': sellerId,
-                                              'sellerName': sellerName,
-                                              'dateRange': _dateRange == null
-                                                  ? 'all'
-                                                  : '${_dateRange!.start.toIso8601String()}..${_dateRange!.end.toIso8601String()}',
-                                              'metrics': {
-                                                'totalAttributedUsers': totalAttributed,
-                                                'activeSubscribers': activeSubscribers,
-                                                'willRenewCount': willRenewCount,
-                                                'paidMonthlyCount': paidMonthlyCount,
-                                                'rateApplied': rateApplied,
-                                                'grossEstimate': grossEstimate,
-                                                'residualEstimate': residualEstimate,
-                                                'sellerCurrency': sellerCurrency,
-                                                'gbpToSellerCurrencyFx': fxRate,
-                                                'grossEstimateSellerCurrency': localGross,
-                                                'residualEstimateSellerCurrency': localResidual,
-                                              }
-                                            };
-                                            Clipboard.setData(
-                                              ClipboardData(
-                                                text: const JsonEncoder.withIndent('  ')
-                                                    .convert(report),
-                                              ),
-                                            );
-                                            _snack('Seller report JSON copied for export/print.');
-                                          },
-                                          icon: const Icon(Icons.copy),
-                                          label: const Text('Copy Report JSON'),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
+                            return FutureBuilder<Map<String, dynamic>>(
+                              future: _computeMetricsForSeller(
+                                sellerId,
+                                users,
+                                rateConfig,
+                                data,
                               ),
+                              builder: (context, snap) {
+                                final metrics = snap.data;
+                                if (metrics == null) {
+                                  return const Card(
+                                    child: Padding(
+                                      padding: EdgeInsets.all(12),
+                                      child: LinearProgressIndicator(),
+                                    ),
+                                  );
+                                }
+
+                                final totalAttributed =
+                                    (metrics['totalAttributedUsers'] as int?) ?? 0;
+                                final activeSubscribers =
+                                    (metrics['activeSubscribers'] as int?) ?? 0;
+                                final willRenewCount =
+                                    (metrics['willRenewCount'] as int?) ?? 0;
+                                final paidMonthlyCount =
+                                    (metrics['paidMonthlyCount'] as int?) ?? 0;
+                                final grossEstimate =
+                                    (metrics['grossEstimate'] as num?) ?? 0;
+                                final rateApplied =
+                                    (metrics['rate'] as num?) ?? rate;
+                                final residualEstimate =
+                                    (metrics['residualEstimate'] as num?) ?? 0;
+                                final payoutMode =
+                                  (metrics['payoutMode'] as String?) ??
+                                    'percentage';
+                                final fxRate = _gbpToCurrencyRate(
+                                  sellerCurrency,
+                                  monthlyRates,
+                                  liveRates,
+                                );
+                                final localGross = grossEstimate * fxRate;
+                                final localResidual = residualEstimate * fxRate;
+
+                                return Card(
+                                  margin: const EdgeInsets.only(bottom: 8),
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(10),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          sellerName,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 15,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 6),
+                                        Wrap(
+                                          spacing: 8,
+                                          runSpacing: 8,
+                                          children: [
+                                            _chip('Attributed', '$totalAttributed'),
+                                            _chip('Active', '$activeSubscribers'),
+                                            _chip('Will Renew', '$willRenewCount'),
+                                            _chip('Paid Monthly', '$paidMonthlyCount'),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 8),
+                                        Text(
+                                          payoutMode == 'fixed_gbp_per_plan'
+                                              ? 'Effective Rate (from fixed GBP): ${_fmtRate(rateApplied)}'
+                                              : 'Rate: ${_fmtRate(rateApplied)}',
+                                          style: const TextStyle(fontWeight: FontWeight.w600),
+                                        ),
+                                        Text(
+                                          'Gross Estimate: £${_fmtMoney(grossEstimate)}',
+                                          style: const TextStyle(fontWeight: FontWeight.w600),
+                                        ),
+                                        Text(
+                                          'Residual Estimate: £${_fmtMoney(residualEstimate)}',
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.green,
+                                          ),
+                                        ),
+                                        if (sellerCurrency != 'GBP') ...[
+                                          Text(
+                                            'Gross Estimate (${sellerCurrency}): ${_formatAmount(sellerCurrency, localGross)}',
+                                            style: const TextStyle(fontWeight: FontWeight.w600),
+                                          ),
+                                          Text(
+                                            'Residual Estimate (${sellerCurrency}): ${_formatAmount(sellerCurrency, localResidual)}',
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.green,
+                                            ),
+                                          ),
+                                          Text(
+                                            'FX used: 1 GBP = ${fxRate.toStringAsFixed(4)} $sellerCurrency',
+                                            style: const TextStyle(fontSize: 12, color: Colors.black54),
+                                          ),
+                                        ],
+                                        const SizedBox(height: 8),
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.end,
+                                          children: [
+                                            TextButton.icon(
+                                              onPressed: () {
+                                                final report = {
+                                                  'sellerId': sellerId,
+                                                  'sellerName': sellerName,
+                                                  'dateRange': _dateRange == null
+                                                      ? 'all'
+                                                      : '${_dateRange!.start.toIso8601String()}..${_dateRange!.end.toIso8601String()}',
+                                                  'metrics': {
+                                                    'totalAttributedUsers': totalAttributed,
+                                                    'activeSubscribers': activeSubscribers,
+                                                    'willRenewCount': willRenewCount,
+                                                    'paidMonthlyCount': paidMonthlyCount,
+                                                    'rateApplied': rateApplied,
+                                                    'grossEstimate': grossEstimate,
+                                                    'residualEstimate': residualEstimate,
+                                                    'sellerCurrency': sellerCurrency,
+                                                    'gbpToSellerCurrencyFx': fxRate,
+                                                    'grossEstimateSellerCurrency': localGross,
+                                                    'residualEstimateSellerCurrency': localResidual,
+                                                  }
+                                                };
+                                                Clipboard.setData(
+                                                  ClipboardData(
+                                                    text: const JsonEncoder.withIndent('  ')
+                                                        .convert(report),
+                                                  ),
+                                                );
+                                                _snack('Seller report JSON copied for export/print.');
+                                              },
+                                              icon: const Icon(Icons.copy),
+                                              label: const Text('Copy Report JSON'),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
                             );
                           },
-                        );
-                      },
-                    ),
+                        ),
+                      );
+                    },
                   );
                 },
               ),
