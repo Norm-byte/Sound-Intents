@@ -71,7 +71,7 @@ class _EventStatsTabState extends State<EventStatsTab> {
         'statsOverlayPosition': 'bottom',
         'statsParticipantMetric': 'all_viewers',
         'statsShowTimezoneFlags': _overlayShowTimezoneFlags,
-        // Always include dormant override viewers when overlay is enabled.
+        // Include dormant-active participants in displayed count as requested.
         'statsIncludeDormantOverrides': true,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
