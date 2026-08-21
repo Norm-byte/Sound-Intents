@@ -291,6 +291,16 @@ service cloud.firestore {
       // TEMPORARY: Allow public access because User App does not use Firebase Auth yet.
       // TODO: Implement Firebase Auth in User App and restrict this to owner only.
       allow read, write: if true;
+
+      // My Harmony Vault images used by Common Room and Vault screen.
+      match /vault_images/{imageId} {
+        allow read, write: if true;
+      }
+
+      // Monthly media usage counters used for image upload limits.
+      match /usage_media/{monthId} {
+        allow read, write: if true;
+      }
       
       match /messages/{messageId} {
         allow read, write: if true;

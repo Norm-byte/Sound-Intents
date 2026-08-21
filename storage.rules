@@ -30,6 +30,20 @@ service firebase.storage {
       allow write: if isAdmin();
     }
 
+    // Common Room image uploads
+    // Used by: User app post image attachments
+    // TODO: tighten to owner-auth once User App auth-only rollout is complete.
+    match /chat_room_media/{allPaths=**} {
+      allow read, write: if true;
+    }
+
+    // My Harmony Vault user uploads
+    // Used by: camera auto-save and vault image management
+    // TODO: tighten to owner-auth once User App auth-only rollout is complete.
+    match /user_vault_media/{allPaths=**} {
+      allow read, write: if true;
+    }
+
     // Diagnostics (Admin connectivity tests)
     match /diagnostics/{allPaths=**} {
       allow read, write: if isAdmin();

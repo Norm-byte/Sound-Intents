@@ -21,6 +21,9 @@ class _MonetizationTabState extends State<MonetizationTab> {
   final _rcIdController = TextEditingController();
   final _dailySendsController = TextEditingController();
   final _forumsController = TextEditingController();
+  final _monthlyImageUploadLimitController = TextEditingController();
+  final _myHarmonyVaultMaxImagesController = TextEditingController();
+  final _feedImageExpiryDaysController = TextEditingController();
   
   // Unlimited Toggles
   bool _unlimitedSends = false;
@@ -45,6 +48,9 @@ class _MonetizationTabState extends State<MonetizationTab> {
     _rcIdController.dispose();
     _dailySendsController.dispose();
     _forumsController.dispose();
+    _monthlyImageUploadLimitController.dispose();
+    _myHarmonyVaultMaxImagesController.dispose();
+    _feedImageExpiryDaysController.dispose();
     _draftSetNameController.dispose();
     super.dispose();
   }
@@ -63,6 +69,12 @@ class _MonetizationTabState extends State<MonetizationTab> {
 
     _dailySendsController.text = _unlimitedSends ? '' : dailySends.toString();
     _forumsController.text = _unlimitedForums ? '' : forums.toString();
+    _monthlyImageUploadLimitController.text =
+      offer.limits.monthlyImageUploadLimit.toString();
+    _myHarmonyVaultMaxImagesController.text =
+      offer.limits.myHarmonyVaultMaxImages.toString();
+    _feedImageExpiryDaysController.text =
+      offer.limits.feedImageExpiryDays.toString();
     
     setState(() {
       _selectedOffer = offer;
@@ -71,11 +83,52 @@ class _MonetizationTabState extends State<MonetizationTab> {
 
   Future<void> _saveSelectedTier() async {
     if (_selectedOffer == null) return;
+
+    int currentOrExisting(String text, int existingValue, {required int fallback}) {
+      final parsed = int.tryParse(text.trim());
+      if (parsed != null) return parsed;
+      return existingValue != 0 ? existingValue : fallback;
+    }
     
     final limits = AppUsageLimits(
-      maxDailySends: _unlimitedSends ? -1 : (int.tryParse(_dailySendsController.text) ?? 10),
-      maxMonthlySends: _unlimitedSends ? -1 : ((int.tryParse(_dailySendsController.text) ?? 10) * 30), // Fallback calculation
-      maxActiveForums: _unlimitedForums ? -1 : (int.tryParse(_forumsController.text) ?? 1),
+      maxDailySends: _unlimitedSends
+          ? -1
+          : currentOrExisting(
+              _dailySendsController.text,
+              _selectedOffer!.limits.maxDailySends,
+              fallback: 10,
+            ),
+      maxMonthlySends: _unlimitedSends
+          ? -1
+          : currentOrExisting(
+              _dailySendsController.text,
+              _selectedOffer!.limits.maxMonthlySends,
+              fallback: 300,
+            ) * 30,
+      maxActiveForums: _unlimitedForums
+          ? -1
+          : currentOrExisting(
+              _forumsController.text,
+              _selectedOffer!.limits.maxActiveForums,
+              fallback: 1,
+            ),
+      maxMediaStorageMb: _selectedOffer!.limits.maxMediaStorageMb,
+      allowVideoUploads: _selectedOffer!.limits.allowVideoUploads,
+      monthlyImageUploadLimit: currentOrExisting(
+        _monthlyImageUploadLimitController.text,
+        _selectedOffer!.limits.monthlyImageUploadLimit,
+        fallback: 0,
+      ),
+      myHarmonyVaultMaxImages: currentOrExisting(
+        _myHarmonyVaultMaxImagesController.text,
+        _selectedOffer!.limits.myHarmonyVaultMaxImages,
+        fallback: 0,
+      ),
+      feedImageExpiryDays: currentOrExisting(
+        _feedImageExpiryDaysController.text,
+        _selectedOffer!.limits.feedImageExpiryDays,
+        fallback: 5,
+      ),
     );
 
     // Preserve presentation logic if needed, or use default
@@ -270,7 +323,13 @@ class _MonetizationTabState extends State<MonetizationTab> {
       description: '',
       isActive: true,
       revenueCatOfferingId: '',
-      limits: AppUsageLimits(maxDailySends: 10, maxActiveForums: 1),
+      limits: AppUsageLimits(
+        maxDailySends: 10,
+        maxActiveForums: 1,
+        monthlyImageUploadLimit: 0,
+        myHarmonyVaultMaxImages: 0,
+        feedImageExpiryDays: 5,
+      ),
     );
 
     await _repo.saveDraftOffer(offer);
@@ -678,7 +737,15 @@ class _MonetizationTabState extends State<MonetizationTab> {
             ),
           ],
         ),
-        const SizedBox(height: 24),
+        const SizedBox(height: 28),
+
+        Text('Chat Rooms', style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 8),
+        const Text(
+          'Set how many chat rooms users on this tier can access. Use ∞ for unlimited.',
+          style: TextStyle(color: Colors.grey),
+        ),
+        const SizedBox(height: 16),
         
         // FORUMS (CHAT ROOMS)
         Row(
@@ -711,6 +778,44 @@ class _MonetizationTabState extends State<MonetizationTab> {
               ),
             ),
           ],
+        ),
+
+        const SizedBox(height: 32),
+        Text('Media Limits', style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 8),
+        const Text(
+          'These limits are for upcoming shared chat-room image uploads and the My Harmony personal vault. This phase only stores the settings; user app behavior is unchanged until later phases.',
+          style: TextStyle(color: Colors.grey),
+        ),
+        const SizedBox(height: 16),
+        TextField(
+          controller: _monthlyImageUploadLimitController,
+          decoration: const InputDecoration(
+            labelText: 'Monthly Image Upload Limit',
+            hintText: 'e.g. 10 for Basic, 25 for Premium',
+            border: OutlineInputBorder(),
+          ),
+          keyboardType: TextInputType.number,
+        ),
+        const SizedBox(height: 16),
+        TextField(
+          controller: _myHarmonyVaultMaxImagesController,
+          decoration: const InputDecoration(
+            labelText: 'My Harmony Vault Max Images',
+            hintText: 'e.g. 20 for Basic, 50 for Premium',
+            border: OutlineInputBorder(),
+          ),
+          keyboardType: TextInputType.number,
+        ),
+        const SizedBox(height: 16),
+        TextField(
+          controller: _feedImageExpiryDaysController,
+          decoration: const InputDecoration(
+            labelText: 'Feed Image Expiry Days',
+            hintText: 'Default 5',
+            border: OutlineInputBorder(),
+          ),
+          keyboardType: TextInputType.number,
         ),
         
         const SizedBox(height: 48),

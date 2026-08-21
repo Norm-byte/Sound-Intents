@@ -52,6 +52,9 @@ class AppUsageLimits {
   final int maxActiveForums;
   final int maxMediaStorageMb;
   final bool allowVideoUploads;
+  final int monthlyImageUploadLimit;
+  final int myHarmonyVaultMaxImages;
+  final int feedImageExpiryDays;
 
   AppUsageLimits({
     this.maxMonthlySends = 1500, // Approx 50/day * 30
@@ -59,6 +62,9 @@ class AppUsageLimits {
     this.maxActiveForums = 1,
     this.maxMediaStorageMb = 100,
     this.allowVideoUploads = false,
+    this.monthlyImageUploadLimit = 0,
+    this.myHarmonyVaultMaxImages = 0,
+    this.feedImageExpiryDays = 5,
   });
 
   factory AppUsageLimits.fromMap(Map<String, dynamic> map) {
@@ -68,6 +74,9 @@ class AppUsageLimits {
       maxActiveForums: map['maxActiveForums'] ?? 1,
       maxMediaStorageMb: map['maxMediaStorageMb'] ?? 100,
       allowVideoUploads: map['allowVideoUploads'] ?? false,
+      monthlyImageUploadLimit: map['monthlyImageUploadLimit'] ?? 0,
+      myHarmonyVaultMaxImages: map['myHarmonyVaultMaxImages'] ?? 0,
+      feedImageExpiryDays: map['feedImageExpiryDays'] ?? 5,
     );
   }
 
@@ -78,6 +87,9 @@ class AppUsageLimits {
       'maxActiveForums': maxActiveForums,
       'maxMediaStorageMb': maxMediaStorageMb,
       'allowVideoUploads': allowVideoUploads,
+      'monthlyImageUploadLimit': monthlyImageUploadLimit,
+      'myHarmonyVaultMaxImages': myHarmonyVaultMaxImages,
+      'feedImageExpiryDays': feedImageExpiryDays,
     };
   }
 }
