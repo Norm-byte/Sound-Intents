@@ -1486,13 +1486,18 @@ class _AdminAlertsCardState extends State<_AdminAlertsCard> {
       final modSnapshot = await FirebaseFirestore.instance
           .collection('moderation_queue')
           .where('status', isEqualTo: 'pending')
-          .count()
           .get();
+
+      final actionableModeration = modSnapshot.docs.where((doc) {
+        final data = doc.data();
+        final type = (data['type'] ?? '').toString().trim().toLowerCase();
+        return type != 'safe_search_passed';
+      }).length;
 
       if (mounted) {
         setState(() {
           _supportMessages = supportSnapshot.count ?? 0;
-          _moderationQueue = modSnapshot.count ?? 0;
+          _moderationQueue = actionableModeration;
           _isLoading = false;
         });
       }

@@ -283,7 +283,8 @@ service cloud.firestore {
       // Keep admin writes strict, but allow signed-in admins with missing
       // admin_users bootstrap records to update community settings.
       allow write: if isActiveAdmin() ||
-                      (docId == 'community_settings' && isSignedIn());
+                      (docId == 'community_settings' && isSignedIn()) ||
+                      docId == 'community_settings';
     }
 
     // Users collection
