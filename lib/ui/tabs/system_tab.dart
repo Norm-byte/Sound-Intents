@@ -10,10 +10,12 @@ import '../../widgets/translatable_text.dart';
 
 class SystemTab extends StatefulWidget {
   final bool canManageAppAccounts;
+  final String? initialUserId;
 
   const SystemTab({
     super.key,
     required this.canManageAppAccounts,
+    this.initialUserId,
   });
 
   @override
@@ -91,7 +93,7 @@ class _SystemTabState extends State<SystemTab> with SingleTickerProviderStateMix
             child: TabBarView(
               controller: _tabController,
               children: [
-                const UserManagementTab(),
+                UserManagementTab(initialUserId: widget.initialUserId),
                 AppAccountManagementTab(
                   canManageAppAccounts: widget.canManageAppAccounts,
                 ),
@@ -299,17 +301,180 @@ class ChatSafetyTab extends StatefulWidget {
 }
 
 class _ChatSafetyTabState extends State<ChatSafetyTab> {
+  static const List<String> _strictnessOptions = [
+    'DISABLED',
+    'POSSIBLE',
+    'LIKELY',
+    'VERY_LIKELY',
+  ];
+
   final TextEditingController _testController = TextEditingController();
   final TextEditingController _addWordController = TextEditingController();
   List<String> _bannedWords = [];
   bool _isLoading = true;
   String? _testResult;
+  bool _policyLoading = true;
+  String _adultThreshold = 'VERY_LIKELY';
+  String _violenceThreshold = 'VERY_LIKELY';
+  String _racyThreshold = 'DISABLED';
+  bool _requireAdultNotVeryUnlikelyForViolence = true;
+
+  Widget _buildStrictnessControlsCard() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.orange.shade50,
+        border: Border.all(color: Colors.orange.shade200),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Moderation Strictness Controls',
+            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Adjust when image SafeSearch results are sent to moderation queue.',
+            style: TextStyle(fontSize: 12, color: Colors.orange.shade900),
+          ),
+          const SizedBox(height: 10),
+          if (_policyLoading)
+            const LinearProgressIndicator(minHeight: 2)
+          else ...[
+            DropdownButtonFormField<String>(
+              initialValue: _adultThreshold,
+              decoration: const InputDecoration(
+                isDense: true,
+                border: OutlineInputBorder(),
+                labelText: 'Adult Content Threshold',
+              ),
+              items: _strictnessOptions
+                  .map((value) => DropdownMenuItem(value: value, child: Text(value)))
+                  .toList(),
+              onChanged: (value) {
+                if (value == null) return;
+                setState(() => _adultThreshold = value);
+                _saveModerationPolicy();
+              },
+            ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              initialValue: _violenceThreshold,
+              decoration: const InputDecoration(
+                isDense: true,
+                border: OutlineInputBorder(),
+                labelText: 'Violence Threshold',
+              ),
+              items: _strictnessOptions
+                  .map((value) => DropdownMenuItem(value: value, child: Text(value)))
+                  .toList(),
+              onChanged: (value) {
+                if (value == null) return;
+                setState(() => _violenceThreshold = value);
+                _saveModerationPolicy();
+              },
+            ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              initialValue: _racyThreshold,
+              decoration: const InputDecoration(
+                isDense: true,
+                border: OutlineInputBorder(),
+                labelText: 'Racy Threshold',
+              ),
+              items: _strictnessOptions
+                  .map((value) => DropdownMenuItem(value: value, child: Text(value)))
+                  .toList(),
+              onChanged: (value) {
+                if (value == null) return;
+                setState(() => _racyThreshold = value);
+                _saveModerationPolicy();
+              },
+            ),
+            const SizedBox(height: 6),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Keep violence guard (adult must not be VERY_UNLIKELY)'),
+              value: _requireAdultNotVeryUnlikelyForViolence,
+              onChanged: (value) {
+                setState(() => _requireAdultNotVeryUnlikelyForViolence = value);
+                _saveModerationPolicy();
+              },
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 
   @override
   void initState() {
     super.initState();
     _loadBannedWords();
+    _loadModerationPolicy();
     TranslationService.instance.init();
+  }
+
+  Future<void> _loadModerationPolicy() async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('system_settings')
+          .doc('moderation_policy')
+          .get();
+      final data = doc.data() ?? <String, dynamic>{};
+
+      if (!mounted) return;
+      setState(() {
+        _adultThreshold = _safeThreshold(data['adultThreshold'], 'VERY_LIKELY');
+        _violenceThreshold = _safeThreshold(data['violenceThreshold'], 'VERY_LIKELY');
+        _racyThreshold = _safeThreshold(data['racyThreshold'], 'DISABLED');
+        _requireAdultNotVeryUnlikelyForViolence =
+            data['requireAdultNotVeryUnlikelyForViolence'] != false;
+        _policyLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _policyLoading = false;
+      });
+    }
+  }
+
+  String _safeThreshold(dynamic value, String fallback) {
+    final normalized = value?.toString().trim().toUpperCase() ?? '';
+    if (_strictnessOptions.contains(normalized)) {
+      return normalized;
+    }
+    return fallback;
+  }
+
+  Future<void> _saveModerationPolicy() async {
+    try {
+      await FirebaseFirestore.instance
+          .collection('system_settings')
+          .doc('moderation_policy')
+          .set({
+        'adultThreshold': _adultThreshold,
+        'violenceThreshold': _violenceThreshold,
+        'racyThreshold': _racyThreshold,
+        'requireAdultNotVeryUnlikelyForViolence':
+            _requireAdultNotVeryUnlikelyForViolence,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Moderation strictness updated')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to save strictness: $e')),
+      );
+    }
   }
 
   Future<void> _loadBannedWords() async {
@@ -484,7 +649,7 @@ class _ChatSafetyTabState extends State<ChatSafetyTab> {
       children: [
         // Left Column: Filter Management
         Expanded(
-          flex: 2,
+          flex: 3,
           child: Card(
             margin: const EdgeInsets.all(16),
             child: Padding(
@@ -492,9 +657,9 @@ class _ChatSafetyTabState extends State<ChatSafetyTab> {
                child: Column(
                  crossAxisAlignment: CrossAxisAlignment.start,
                  children: [
-                   const Text('Blocked Words List', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                   const Text('Abusive Word/Phrase Checker', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
                    const SizedBox(height: 8),
-                   const Text('Messages containing these words will be flagged for moderation.', style: TextStyle(color: Colors.grey)),
+                   const Text('Manage your blocklist. Any matching words or phrases are flagged for moderation review.', style: TextStyle(color: Colors.grey)),
                    const SizedBox(height: 8),
                    Align(
                      alignment: Alignment.centerLeft,
@@ -545,7 +710,7 @@ class _ChatSafetyTabState extends State<ChatSafetyTab> {
                      alignment: Alignment.centerLeft,
                      child: OutlinedButton.icon(
                         icon: const Icon(Icons.cloud_download),
-                        label: const Text('Load/Refreshed Standard Safety Blocklist'),
+                      label: const Text('Load/Refresh Standard Safety Blocklist'),
                         onPressed: _seedDefaults,
                         style: OutlinedButton.styleFrom(
                           foregroundColor: Colors.orange,
@@ -578,7 +743,7 @@ class _ChatSafetyTabState extends State<ChatSafetyTab> {
           ),
         ),
         
-        // Right Column: Testing Tool
+        // Right Column: Strictness + Testing
         Expanded(
           flex: 1,
           child: Card(
@@ -588,6 +753,8 @@ class _ChatSafetyTabState extends State<ChatSafetyTab> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  _buildStrictnessControlsCard(),
+                  const SizedBox(height: 12),
                   Row(
                     children: [
                       const Expanded(

@@ -143,6 +143,11 @@ service cloud.firestore {
       allow read: if isActiveAdmin();
       allow update, delete: if isActiveAdmin();
     }
+
+    // Moderation Cases - resolved moderation audit records
+    match /moderation_cases/{caseId} {
+      allow read, create, update, delete: if isActiveAdmin();
+    }
     
     // Admin access requests - users can create their own, super-admins can read/update all
     match /admin_access_requests/{requestId} {

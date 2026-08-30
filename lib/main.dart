@@ -220,6 +220,7 @@ class AdminHomePage extends StatefulWidget {
 class _AdminHomePageState extends State<AdminHomePage>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
+  String? _initialModerationUserId;
   List<Event> events = [];
   late EventRepository _repository;
   Stream<List<Event>>? _eventsStream;
@@ -364,7 +365,24 @@ class _AdminHomePageState extends State<AdminHomePage>
       buildTab('topics', 'Topics', const YoutubeLibraryTab()),
 
       // 10. Community & Communication
-      buildTab('chat_management', 'Community', const CommunityTab()),
+      buildTab(
+        'chat_management',
+        'Community',
+        CommunityTab(
+          onUserSelected: (userId) {
+            setState(() {
+              _initialModerationUserId = userId;
+            });
+            if (_hasAccess('system')) {
+              _tabController.animateTo(11);
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Access Denied')),
+              );
+            }
+          },
+        ),
+      ),
 
       // 11. Monetization / Deals
       buildTab('monetization', 'Deals', const MonetizationTab()),
@@ -373,7 +391,10 @@ class _AdminHomePageState extends State<AdminHomePage>
       buildTab(
         'system',
         'System',
-        SystemTab(canManageAppAccounts: _hasAccess('app_accounts')),
+        SystemTab(
+          canManageAppAccounts: _hasAccess('app_accounts'),
+          initialUserId: _initialModerationUserId,
+        ),
       ),
 
       // 13. Notifications

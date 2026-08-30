@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 
 class CommunityTab extends StatefulWidget {
@@ -15,6 +16,10 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
   final TextEditingController _messageController = TextEditingController(); // For Pinned Message
   final TextEditingController _adminChatController = TextEditingController(); // For Admin Chat
   final TextEditingController _featuredKeywordsController = TextEditingController();
+  final TextEditingController _caseSearchController = TextEditingController();
+  String _resolvedDecisionFilter = 'all';
+  String? _resolvedHistoryUserId;
+  String? _resolvedHistoryUserName;
   bool _isMessageLoaded = false;
   bool _featuredControlsHydrated = false;
   String _lastFeaturedKeywordsText = '';
@@ -29,7 +34,10 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
+    _caseSearchController.addListener(() {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
@@ -38,6 +46,7 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
     _messageController.dispose();
     _adminChatController.dispose();
     _featuredKeywordsController.dispose();
+    _caseSearchController.dispose();
     super.dispose();
   }
 
@@ -487,12 +496,946 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
     }
   }
 
+  String? _userIdForModerationItem(Map<String, dynamic> item) {
+    final candidates = [
+      item['reporterId'],
+      item['userId'],
+      item['targetUserId'],
+      item['authorUid'],
+      item['uid'],
+      item['ownerUid'],
+      item['reportedUserId'],
+    ];
+    for (final candidate in candidates) {
+      final value = candidate?.toString().trim() ?? '';
+      if (value == 'admin_media') continue;
+      if (value.isNotEmpty) return value;
+    }
+    return null;
+  }
+
+  String _safeText(dynamic value, {String fallback = ''}) {
+    final text = value?.toString().trim() ?? '';
+    return text.isEmpty ? fallback : text;
+  }
+
+  bool _isSystemSafeSearchItem(Map<String, dynamic> item) {
+    final source = _safeText(item['source']).toLowerCase();
+    final type = _safeText(item['type']).toLowerCase();
+    return source == 'safe_search_storage_finalize' || type.startsWith('safe_search');
+  }
+
+  String _displayUserLabel(Map<String, dynamic> item) {
+    final userName = _safeText(item['userName'] ?? item['username']);
+    if (userName.isNotEmpty) return userName;
+
+    final reporterName = _safeText(item['reporterName']);
+    if (reporterName.isNotEmpty) return reporterName;
+
+    if (_isSystemSafeSearchItem(item)) {
+      return 'Automated Media Scanner';
+    }
+
+    return 'Unknown user';
+  }
+
+  bool _isReelReport(Map<String, dynamic> item) {
+    final contentType = _safeText(item['contentType']).toLowerCase();
+    if (contentType == 'reel') return true;
+
+    final context = _safeText(item['context']).toLowerCase();
+    if (context == 'reel') return true;
+
+    final metadata = item['metadata'];
+    if (metadata is Map) {
+      final metaType = _safeText(metadata['contentType']).toLowerCase();
+      if (metaType == 'reel') return true;
+      if (_safeText(metadata['reelUrl']).isNotEmpty) return true;
+    }
+
+    return false;
+  }
+
+  Future<bool> _disableReportedReel(Map<String, dynamic> item) async {
+    final metadata = item['metadata'];
+    final reelUrl = metadata is Map ? _safeText(metadata['reelUrl']) : '';
+    final reelTitle = metadata is Map ? _safeText(metadata['reelTitle']) : '';
+    final reelType = metadata is Map ? _safeText(metadata['reelType']) : '';
+
+    final configRef = FirebaseFirestore.instance
+        .collection('app_config')
+        .doc('home_screen');
+    final snap = await configRef.get();
+    if (!snap.exists) return false;
+
+    final data = snap.data() ?? <String, dynamic>{};
+    final rawItems = (data['reelItems'] as List?) ?? const [];
+    if (rawItems.isEmpty) return false;
+
+    var updated = false;
+    final nextItems = rawItems.map((entry) {
+      if (entry is! Map) return entry;
+      final map = Map<String, dynamic>.from(entry);
+      final itemUrl = _safeText(map['url']);
+      final itemTitle = _safeText(map['title']);
+      final itemType = _safeText(map['type']);
+
+      final urlMatch = reelUrl.isNotEmpty && itemUrl == reelUrl;
+      final titleTypeMatch =
+          reelUrl.isEmpty &&
+          reelTitle.isNotEmpty &&
+          itemTitle == reelTitle &&
+          (reelType.isEmpty || itemType == reelType);
+
+      if (urlMatch || titleTypeMatch) {
+        updated = true;
+        map['enabled'] = false;
+        map['moderationDisabledAt'] = DateTime.now().toUtc().toIso8601String();
+        map['moderationDisabledReason'] =
+            _safeText(item['reason'], fallback: 'Moderation queue disable');
+      }
+      return map;
+    }).toList();
+
+    if (!updated) return false;
+
+    await configRef.set({
+      'reelItems': nextItems,
+      'lastUpdated': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    return true;
+  }
+
+  int _keywordHits(String text) {
+    final normalized = text.toLowerCase();
+    if (normalized.isEmpty) return 0;
+    return _badWords.where((word) => normalized.contains(word)).length;
+  }
+
+  ({String label, Color bg, Color fg}) _severityForItem({
+    required String content,
+    required String reason,
+    required String type,
+  }) {
+    final hits = _keywordHits(content);
+    final normalizedReason = reason.toLowerCase();
+    final normalizedType = type.toLowerCase();
+
+    if (hits >= 2 ||
+        normalizedReason.contains('violence') ||
+        normalizedReason.contains('threat') ||
+        normalizedReason.contains('self-harm') ||
+        normalizedReason.contains('suicide') ||
+        normalizedType.contains('urgent')) {
+      return (
+        label: 'High',
+        bg: Colors.red.shade100,
+        fg: Colors.red.shade900,
+      );
+    }
+
+    if (hits == 1 || normalizedReason.contains('profanity')) {
+      return (
+        label: 'Medium',
+        bg: Colors.orange.shade100,
+        fg: Colors.orange.shade900,
+      );
+    }
+
+    return (
+      label: 'Review',
+      bg: Colors.blue.shade100,
+      fg: Colors.blue.shade900,
+    );
+  }
+
+  Future<void> _showExpandedImage(String imageUrl) async {
+    await showDialog<void>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.94),
+      builder: (dialogContext) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.all(12),
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: InteractiveViewer(
+                  minScale: 1,
+                  maxScale: 4,
+                  child: Center(
+                    child: Image.network(
+                      imageUrl,
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                top: 8,
+                right: 8,
+                child: IconButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  icon: const Icon(Icons.close, color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  String? _offendingUserIdForItem(Map<String, dynamic> item) {
+    final targetKind = _safeText(item['targetKind']).toLowerCase();
+    final targetUserId = _safeText(item['targetUserId']);
+    if (targetUserId.isNotEmpty) return targetUserId;
+
+    if (targetKind == 'community_post' ||
+        targetKind == 'community_reply' ||
+        targetKind == 'chat_message' ||
+        targetKind == 'support_message' ||
+        targetKind == 'user') {
+      final userId = _safeText(item['userId']);
+      if (userId.isNotEmpty) return userId;
+    }
+
+    return null;
+  }
+
+  String _reportExplanationForItem(Map<String, dynamic> item) {
+    final metadata = item['metadata'];
+    if (metadata is Map) {
+      final value = _safeText(metadata['reportExplanation']);
+      if (value.isNotEmpty) return value;
+    }
+    return _safeText(item['reportExplanation']);
+  }
+
+  Future<String> _applyModerationAction(
+    Map<String, dynamic> item,
+    String contentAction,
+  ) async {
+    final targetKind = _safeText(item['targetKind']).toLowerCase();
+    final targetId = _safeText(item['targetId']);
+    final metadata = item['metadata'];
+
+    if (contentAction == 'remove') {
+      if (_isReelReport(item)) {
+        final disabled = await _disableReportedReel(item);
+        return disabled
+            ? 'Removed: Reel disabled from user app'
+            : 'Requested removal but reel target was not found';
+      }
+
+      if (targetKind == 'community_post' && targetId.isNotEmpty) {
+        await FirebaseFirestore.instance
+            .collection('community_posts')
+            .doc(targetId)
+            .delete();
+        return 'Removed: Community post deleted';
+      }
+
+      if (targetKind == 'community_reply' && metadata is Map) {
+        final postId = _safeText(metadata['postId']);
+        final replyId = _safeText(metadata['replyId'] ?? targetId);
+        if (postId.isNotEmpty && replyId.isNotEmpty) {
+          await FirebaseFirestore.instance
+              .collection('community_posts')
+              .doc(postId)
+              .collection('replies')
+              .doc(replyId)
+              .delete();
+          return 'Removed: Community reply deleted';
+        }
+      }
+
+      return 'Remove requested: No direct removal path for this content type';
+    }
+
+    if (targetKind == 'community_post' && targetId.isNotEmpty) {
+      await FirebaseFirestore.instance
+          .collection('community_posts')
+          .doc(targetId)
+          .set({
+        'isModerated': false,
+        'moderationStatus': 'cleared',
+        'moderatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      return 'Left content active: Community post retained';
+    }
+
+    if (targetKind == 'community_reply' && metadata is Map) {
+      final postId = _safeText(metadata['postId']);
+      final replyId = _safeText(metadata['replyId'] ?? targetId);
+      if (postId.isNotEmpty && replyId.isNotEmpty) {
+        await FirebaseFirestore.instance
+            .collection('community_posts')
+            .doc(postId)
+            .collection('replies')
+            .doc(replyId)
+            .set({
+          'isModerated': false,
+          'moderationStatus': 'cleared',
+          'moderatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+        return 'Left content active: Community reply retained';
+      }
+    }
+
+    return 'Left content active';
+  }
+
+  Future<void> _notifyUserOfUpheldReport({
+    required String userId,
+    required String caseNumber,
+    required String adminReason,
+    required String actionSummary,
+  }) async {
+    final message = [
+      'Your recent content was reported by a community member and reviewed by our moderation team.',
+      'Outcome: The report was upheld.',
+      'Reason: $adminReason',
+      'Action taken: $actionSummary',
+      'Case reference: $caseNumber',
+      'If you would like more information, please contact support@harmonybyintent.com and include your case reference.',
+    ].join('\n');
+
+    final userMessageRef = FirebaseFirestore.instance
+        .collection('users')
+        .doc(userId)
+        .collection('messages')
+        .doc();
+
+    await userMessageRef.set({
+      'title': 'Harmony Content Review Outcome',
+      'content': message,
+      'sender': 'support',
+      'timestamp': FieldValue.serverTimestamp(),
+      'read': false,
+      'category': 'moderation_outcome',
+      'caseNumber': caseNumber,
+    });
+  }
+
+  String _caseNumberNow() {
+    final now = DateTime.now().toUtc();
+    final stamp = DateFormat('yyyyMMdd-HHmmss').format(now);
+    final millisTail = (now.millisecond).toString().padLeft(3, '0');
+    return 'MOD-$stamp-$millisTail';
+  }
+
+  Future<void> _decideModerationItem({
+    required DocumentSnapshot queueDoc,
+    required Map<String, dynamic> item,
+    required String decision,
+    required String decisionNote,
+    required String contentAction,
+  }) async {
+    final caseNumber = _caseNumberNow();
+    final moderator = FirebaseAuth.instance.currentUser;
+    final moderatorLabel = _safeText(
+      moderator?.displayName ?? moderator?.email ?? moderator?.uid,
+      fallback: 'admin_operator',
+    );
+
+    final actionSummary = await _applyModerationAction(item, contentAction);
+    final offenderUserId = _offendingUserIdForItem(item);
+    var notificationSent = false;
+    String? notificationError;
+
+    final caseDocRef = FirebaseFirestore.instance.collection('moderation_cases').doc();
+    await caseDocRef.set({
+      'caseNumber': caseNumber,
+      'status': 'resolved',
+      'decision': decision,
+      'contentAction': contentAction,
+      'actionSummary': actionSummary,
+      'decisionNote': decisionNote,
+      'decidedAt': FieldValue.serverTimestamp(),
+      'decidedBy': moderatorLabel,
+      'decidedByUid': moderator?.uid,
+      'targetKind': _safeText(item['targetKind']),
+      'targetId': _safeText(item['targetId']),
+      'reason': _safeText(item['reason']),
+      'reportExplanation': _reportExplanationForItem(item),
+      'offenderUserId': offenderUserId,
+      'offenderUserName': _safeText(item['userName']),
+      'reporterId': _safeText(item['reporterId']),
+      'reporterName': _safeText(item['reporterName']),
+      'imageUrl': _imageUrlForPost(item),
+      'queueItemId': queueDoc.id,
+      'notificationSent': notificationSent,
+      'source': _safeText(item['source']),
+      'type': _safeText(item['type']),
+      'context': _safeText(item['context']),
+      'originalTimestamp': item['timestamp'],
+      'content': _safeText(item['content']),
+      'rawItem': item,
+    });
+
+    if (decision == 'agree' && offenderUserId != null && offenderUserId.isNotEmpty) {
+      try {
+        await _notifyUserOfUpheldReport(
+          userId: offenderUserId,
+          caseNumber: caseNumber,
+          adminReason: decisionNote,
+          actionSummary: actionSummary,
+        );
+        notificationSent = true;
+      } catch (e) {
+        notificationError = e.toString();
+      }
+
+      await caseDocRef.set({
+        'notificationSent': notificationSent,
+        if (notificationError != null) 'notificationError': notificationError,
+      }, SetOptions(merge: true));
+    }
+
+    await queueDoc.reference.delete();
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          notificationError == null
+              ? 'Case $caseNumber resolved (${decision.toUpperCase()})'
+              : 'Case $caseNumber resolved; user notification failed',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showDecisionDialog(DocumentSnapshot queueDoc, Map<String, dynamic> item) async {
+    final noteController = TextEditingController();
+    String contentAction = 'remove';
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) {
+          return StatefulBuilder(
+            builder: (context, setDialogState) {
+              final note = noteController.text.trim();
+              final canDecide = note.length >= 8;
+              return AlertDialog(
+                title: const Text('Decide Moderation Case'),
+                content: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Add a clear decision reason first, then choose Agree or Disagree.',
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: noteController,
+                        maxLines: 4,
+                        onChanged: (_) => setDialogState(() {}),
+                        decoration: const InputDecoration(
+                          border: OutlineInputBorder(),
+                          labelText: 'Decision reason (required)',
+                          hintText: 'Minimum 8 characters',
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        canDecide
+                            ? 'Reason captured.'
+                            : 'Please enter at least 8 characters.',
+                        style: TextStyle(
+                          color: canDecide ? Colors.green : Colors.orange,
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      const Text('Content action:'),
+                      const SizedBox(height: 8),
+                      SegmentedButton<String>(
+                        segments: const [
+                          ButtonSegment<String>(
+                            value: 'remove',
+                            label: Text('Remove content'),
+                          ),
+                          ButtonSegment<String>(
+                            value: 'leave',
+                            label: Text('Leave active'),
+                          ),
+                        ],
+                        selected: {contentAction},
+                        onSelectionChanged: (selection) {
+                          if (selection.isEmpty) return;
+                          setDialogState(() => contentAction = selection.first);
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(dialogContext),
+                    child: const Text('Cancel'),
+                  ),
+                  TextButton(
+                    onPressed: canDecide
+                        ? () async {
+                            Navigator.pop(dialogContext);
+                              try {
+                                await _decideModerationItem(
+                                  queueDoc: queueDoc,
+                                  item: item,
+                                  decision: 'disagree',
+                                  decisionNote: noteController.text.trim(),
+                                  contentAction: contentAction,
+                                );
+                              } catch (e) {
+                                if (!mounted) return;
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Decision failed: $e'),
+                                    backgroundColor: Colors.red,
+                                  ),
+                                );
+                              }
+                          }
+                        : null,
+                    child: const Text('Disagree'),
+                  ),
+                  ElevatedButton(
+                    onPressed: canDecide
+                        ? () async {
+                            Navigator.pop(dialogContext);
+                              try {
+                                await _decideModerationItem(
+                                  queueDoc: queueDoc,
+                                  item: item,
+                                  decision: 'agree',
+                                  decisionNote: noteController.text.trim(),
+                                  contentAction: contentAction,
+                                );
+                              } catch (e) {
+                                if (!mounted) return;
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Decision failed: $e'),
+                                    backgroundColor: Colors.red,
+                                  ),
+                                );
+                              }
+                          }
+                        : null,
+                    child: const Text('Agree'),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+    } finally {
+      noteController.dispose();
+    }
+  }
+
+  Future<void> _editResolvedCase(DocumentSnapshot caseDoc, Map<String, dynamic> data) async {
+    final controller = TextEditingController(text: _safeText(data['decisionNote']));
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text('Edit ${_safeText(data['caseNumber'], fallback: 'Case')}'),
+          content: TextField(
+            controller: controller,
+            maxLines: 4,
+            decoration: const InputDecoration(
+              border: OutlineInputBorder(),
+              labelText: 'Decision note',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                final updated = controller.text.trim();
+                if (updated.length < 8) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Decision note must be at least 8 characters')),
+                  );
+                  return;
+                }
+                final moderator = FirebaseAuth.instance.currentUser;
+                await caseDoc.reference.set({
+                  'decisionNote': updated,
+                  'editedAt': FieldValue.serverTimestamp(),
+                  'editedBy': _safeText(
+                    moderator?.displayName ?? moderator?.email ?? moderator?.uid,
+                    fallback: 'admin_operator',
+                  ),
+                }, SetOptions(merge: true));
+                if (mounted) {
+                  Navigator.pop(dialogContext);
+                }
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      controller.dispose();
+    }
+  }
+
+  bool _matchesResolvedFilter(String decision) {
+    final normalized = decision.toLowerCase();
+    if (_resolvedDecisionFilter == 'all') return true;
+    return normalized == _resolvedDecisionFilter;
+  }
+
+  String _resolvedHistoryKeyForData(Map<String, dynamic> data) {
+    final offenderUserId = _safeText(data['offenderUserId']);
+    if (offenderUserId.isNotEmpty) return 'uid:$offenderUserId';
+    final offenderUserName = _safeText(data['offenderUserName']).toLowerCase();
+    if (offenderUserName.isNotEmpty) return 'name:$offenderUserName';
+    return '';
+  }
+
+  bool _matchesResolvedHistoryFilter(Map<String, dynamic> data) {
+    if (_resolvedHistoryUserId == null && _resolvedHistoryUserName == null) {
+      return true;
+    }
+
+    final offenderUserId = _safeText(data['offenderUserId']);
+    final offenderUserName = _safeText(data['offenderUserName']);
+
+    if (_resolvedHistoryUserId != null && _resolvedHistoryUserId!.isNotEmpty) {
+      return offenderUserId == _resolvedHistoryUserId;
+    }
+    if (_resolvedHistoryUserName != null && _resolvedHistoryUserName!.isNotEmpty) {
+      return offenderUserName.toLowerCase() == _resolvedHistoryUserName!.toLowerCase();
+    }
+    return true;
+  }
+
+  void _openResolvedHistory(Map<String, dynamic> data) {
+    final offenderUserId = _safeText(data['offenderUserId']);
+    final offenderUserName = _safeText(data['offenderUserName']);
+    if (offenderUserId.isEmpty && offenderUserName.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No user identity is attached to this case.')),
+      );
+      return;
+    }
+    setState(() {
+      _resolvedHistoryUserId = offenderUserId.isNotEmpty ? offenderUserId : null;
+      _resolvedHistoryUserName = offenderUserName.isNotEmpty ? offenderUserName : null;
+    });
+  }
+
+  void _clearResolvedHistory() {
+    setState(() {
+      _resolvedHistoryUserId = null;
+      _resolvedHistoryUserName = null;
+    });
+  }
+
+  Widget _buildResolvedCases() {
+    final searchTerm = _caseSearchController.text.trim().toLowerCase();
+    return Column(
+      children: [
+        if (_resolvedHistoryUserId != null || _resolvedHistoryUserName != null)
+          Container(
+            width: double.infinity,
+            margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.indigo.shade50,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.indigo.shade100),
+            ),
+            child: Row(
+              children: [
+                TextButton.icon(
+                  onPressed: _clearResolvedHistory,
+                  icon: const Icon(Icons.arrow_back),
+                  label: const Text('Back to all cases'),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Viewing history for ${_resolvedHistoryUserName ?? _resolvedHistoryUserId}',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: TextField(
+            controller: _caseSearchController,
+            decoration: InputDecoration(
+              labelText: 'Search by case number',
+              hintText: 'e.g. MOD-20260830-...',
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: searchTerm.isEmpty
+                  ? null
+                  : IconButton(
+                      onPressed: () => _caseSearchController.clear(),
+                      icon: const Icon(Icons.clear),
+                    ),
+              border: const OutlineInputBorder(),
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Row(
+            children: [
+              const Text('Decision:'),
+              const SizedBox(width: 10),
+              SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment<String>(value: 'all', label: Text('Both')),
+                  ButtonSegment<String>(value: 'agree', label: Text('Agree')),
+                  ButtonSegment<String>(value: 'disagree', label: Text('Disagree')),
+                ],
+                selected: {_resolvedDecisionFilter},
+                onSelectionChanged: (selection) {
+                  if (selection.isEmpty) return;
+                  setState(() => _resolvedDecisionFilter = selection.first);
+                },
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: StreamBuilder<QuerySnapshot>(
+            stream: FirebaseFirestore.instance
+                .collection('moderation_cases')
+                .orderBy('decidedAt', descending: true)
+                .limit(200)
+                .snapshots(),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              if (snapshot.hasError) {
+                return Center(child: Text('Failed to load resolved cases: ${snapshot.error}'));
+              }
+              final allDocs = snapshot.data?.docs ?? [];
+              final caseCountsByUser = <String, int>{};
+              for (final doc in allDocs) {
+                final data = doc.data() as Map<String, dynamic>;
+                final key = _resolvedHistoryKeyForData(data);
+                if (key.isEmpty) continue;
+                caseCountsByUser[key] = (caseCountsByUser[key] ?? 0) + 1;
+              }
+
+              final docs = allDocs.where((doc) {
+                final data = doc.data() as Map<String, dynamic>;
+                if (searchTerm.isEmpty) return true;
+                final caseNumber = _safeText(data['caseNumber']).toLowerCase();
+                final matchesCaseSearch = caseNumber.contains(searchTerm);
+                if (!matchesCaseSearch) return false;
+                final decision = _safeText(data['decision'], fallback: 'unknown');
+                if (!_matchesResolvedFilter(decision)) return false;
+                return _matchesResolvedHistoryFilter(data);
+              }).where((doc) {
+                if (searchTerm.isNotEmpty) return true;
+                final data = doc.data() as Map<String, dynamic>;
+                final decision = _safeText(data['decision'], fallback: 'unknown');
+                if (!_matchesResolvedFilter(decision)) return false;
+                return _matchesResolvedHistoryFilter(data);
+              }).toList();
+
+              final historyDisplayName = _resolvedHistoryUserName ?? _resolvedHistoryUserId;
+              final resultSummary = historyDisplayName != null
+                  ? 'Showing ${docs.length} case${docs.length == 1 ? '' : 's'} for $historyDisplayName'
+                  : 'Showing ${docs.length} case${docs.length == 1 ? '' : 's'}';
+
+              if (docs.isEmpty) {
+                return Center(
+                  child: Text(
+                    historyDisplayName != null
+                        ? 'No resolved cases found for $historyDisplayName.'
+                        : 'No resolved cases found.',
+                  ),
+                );
+              }
+
+              return Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        resultSummary,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey.shade700,
+                        ),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: ListView.builder(
+                      padding: const EdgeInsets.all(16),
+                      itemCount: docs.length,
+                      itemBuilder: (context, index) {
+                        final doc = docs[index];
+                        final data = doc.data() as Map<String, dynamic>;
+                        final caseNumber = _safeText(data['caseNumber'], fallback: doc.id);
+                        final decision = _safeText(data['decision'], fallback: 'unknown');
+                        final decisionNormalized = decision.toLowerCase();
+                        final contentAction = _safeText(data['contentAction'], fallback: 'unspecified');
+                        final note = _safeText(data['decisionNote']);
+                        final reason = _safeText(data['reason']);
+                        final reporterName = _safeText(data['reporterName']);
+                        final reporterId = _safeText(data['reporterId']);
+                        final offenderUserName = _safeText(data['offenderUserName']);
+                        final offenderUserId = _safeText(data['offenderUserId']);
+                        final caseUserKey = _resolvedHistoryKeyForData(data);
+                        final caseCountForUser = caseCountsByUser[caseUserKey] ?? 1;
+                        final timestamp = (data['decidedAt'] as Timestamp?)?.toDate();
+                        final decidedBy = _safeText(data['decidedBy']);
+                        return Card(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          color: decisionNormalized == 'disagree'
+                              ? Colors.red.shade50
+                              : (decisionNormalized == 'agree' ? Colors.green.shade50 : null),
+                          child: ListTile(
+                            onTap: () => _openResolvedHistory(data),
+                            title: Text(
+                              '$caseNumber • ${decision.toUpperCase()}',
+                              style: const TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const SizedBox(height: 4),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 6,
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        color: decisionNormalized == 'disagree'
+                                            ? Colors.red.shade100
+                                            : Colors.green.shade100,
+                                        borderRadius: BorderRadius.circular(999),
+                                      ),
+                                      child: Text(
+                                        decisionNormalized == 'disagree' ? 'DISAGREE' : 'AGREE',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w700,
+                                          color: decisionNormalized == 'disagree'
+                                              ? Colors.red.shade900
+                                              : Colors.green.shade900,
+                                        ),
+                                      ),
+                                    ),
+                                    if (caseCountForUser > 1)
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: Colors.indigo.shade100,
+                                          borderRadius: BorderRadius.circular(999),
+                                        ),
+                                        child: Text(
+                                          '$caseCountForUser incidents for this user',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w700,
+                                            color: Colors.indigo.shade900,
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                Text('Reason: ${reason.isEmpty ? 'N/A' : reason}'),
+                                Text('Action: $contentAction'),
+                                Text(
+                                  'Reported user: ${offenderUserName.isNotEmpty ? offenderUserName : 'N/A'}',
+                                ),
+                                Text(
+                                  'Reported user ID: ${offenderUserId.isNotEmpty ? offenderUserId : 'N/A'}',
+                                ),
+                                Text(
+                                  'Reporter: ${reporterName.isNotEmpty ? reporterName : 'N/A'}',
+                                ),
+                                Text(
+                                  'Reporter ID: ${reporterId.isNotEmpty ? reporterId : 'N/A'}',
+                                ),
+                                if (note.isNotEmpty) Text('Decision note: $note'),
+                                const SizedBox(height: 6),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 6,
+                                  children: [
+                                    if (offenderUserId.isNotEmpty && widget.onUserSelected != null)
+                                      OutlinedButton.icon(
+                                        onPressed: () => widget.onUserSelected!(offenderUserId),
+                                        icon: const Icon(Icons.person_search, size: 16),
+                                        label: const Text('Manage User'),
+                                      ),
+                                    if (caseCountForUser > 1)
+                                      OutlinedButton.icon(
+                                        onPressed: () => _openResolvedHistory(data),
+                                        icon: const Icon(Icons.history, size: 16),
+                                        label: const Text('View History'),
+                                      ),
+                                  ],
+                                ),
+                                Text(
+                                  [
+                                    if (timestamp != null)
+                                      DateFormat('MMM d, h:mm a').format(timestamp),
+                                    if (decidedBy.isNotEmpty) 'By: $decidedBy',
+                                  ].join(' • '),
+                                  style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                                ),
+                              ],
+                            ),
+                            trailing: IconButton(
+                              tooltip: 'Edit case note',
+                              icon: const Icon(Icons.edit_note),
+                              onPressed: () => _editResolvedCase(doc, data),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
   String? _imageUrlForPost(Map<String, dynamic> post) {
+    final metadata = post['metadata'];
     final candidates = [
       post['imageUrl'],
       post['thumbnailUrl'],
       post['mediaUrl'],
       post['downloadUrl'],
+      if (metadata is Map) metadata['imageUrl'],
+      if (metadata is Map) metadata['thumbnailUrl'],
+      if (metadata is Map) metadata['mediaUrl'],
     ];
 
     for (final candidate in candidates) {
@@ -514,18 +1457,21 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
   }
 
   Widget _buildImageThumbnail(String imageUrl) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(10),
-      child: Container(
-        width: 52,
-        height: 52,
-        color: Colors.grey.shade200,
-        child: Image.network(
-          imageUrl,
-          fit: BoxFit.cover,
-          errorBuilder: (context, error, stackTrace) => Container(
-            color: Colors.grey.shade200,
-            child: Icon(Icons.broken_image_outlined, color: Colors.grey.shade500, size: 22),
+    return GestureDetector(
+      onTap: () => _showExpandedImage(imageUrl),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          width: 52,
+          height: 52,
+          color: Colors.grey.shade200,
+          child: Image.network(
+            imageUrl,
+            fit: BoxFit.cover,
+            errorBuilder: (context, error, stackTrace) => Container(
+              color: Colors.grey.shade200,
+              child: Icon(Icons.broken_image_outlined, color: Colors.grey.shade500, size: 22),
+            ),
           ),
         ),
       ),
@@ -581,6 +1527,7 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                 indicatorColor: Colors.indigo,
                 tabs: const [
                   Tab(icon: Icon(Icons.gavel), text: 'Moderation Queue'),
+                  Tab(icon: Icon(Icons.assignment_turned_in), text: 'Resolved'),
                   Tab(icon: Icon(Icons.forum), text: 'Live Feed'),
                 ],
               ),
@@ -594,6 +1541,7 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
             controller: _tabController,
             children: [
               _buildModerationQueue(),
+              _buildResolvedCases(),
               _buildLiveFeed(),
             ],
           ),
@@ -673,19 +1621,30 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
             final item = queueDoc.data() as Map<String, dynamic>;
             final timestamp = (item['timestamp'] as Timestamp?)?.toDate();
 
-            final userId =
-                (item['userId'] ??
-                        item['uid'] ??
-                        item['ownerUid'] ??
-                        item['authorUid'] ??
-                        item['reportedUserId'])
-                    ?.toString();
-            final userName = (item['userName'] ?? item['username'] ?? 'Unknown user').toString();
-            final content = (item['content'] ?? '').toString();
-            final reason = (item['reason'] ?? 'Review required').toString();
-            final source = (item['source'] ?? 'unknown').toString();
-            final type = (item['type'] ?? '').toString();
+            final userId = _userIdForModerationItem(item);
+            final userName = _displayUserLabel(item);
+            final content = _safeText(item['content']);
+            final reason = _safeText(item['reason'], fallback: 'Review required');
+            final source = _safeText(item['source'], fallback: 'unknown');
+            final type = _safeText(item['type']);
+            final targetKind = _safeText(item['targetKind']);
+            final targetId = _safeText(item['targetId']);
+            final reporterName = _safeText(item['reporterName']);
+            final reporterId = _safeText(item['reporterId']);
             final imageUrl = _imageUrlForPost(item);
+            final isSystemItem = _isSystemSafeSearchItem(item);
+            final isReelItem = _isReelReport(item);
+            final metadata = item['metadata'];
+            final reelTitle = metadata is Map ? _safeText(metadata['reelTitle']) : '';
+            final reelUrl = metadata is Map ? _safeText(metadata['reelUrl']) : '';
+            final reelType = metadata is Map ? _safeText(metadata['reelType']) : '';
+            final reportExplanation = _reportExplanationForItem(item);
+            final safeSearch = item['safeSearch'];
+            final severity = _severityForItem(
+              content: content,
+              reason: reason,
+              type: type,
+            );
 
             return Card(
               margin: const EdgeInsets.only(bottom: 12),
@@ -737,10 +1696,105 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                   children: [
                     const SizedBox(height: 4),
                     Text(
-                      reason,
+                      'Report reason: $reason',
                       style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                     const SizedBox(height: 4),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: severity.bg,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text(
+                            'Risk: ${severity.label}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: severity.fg,
+                            ),
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: imageUrl != null
+                                ? Colors.indigo.shade100
+                                : Colors.grey.shade200,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text(
+                            imageUrl != null
+                                ? 'Image: Tap thumbnail to expand'
+                                : (isReelItem
+                                    ? 'Image: No reel thumbnail provided'
+                                    : 'Image: Not attached'),
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: imageUrl != null
+                                  ? Colors.indigo.shade900
+                                  : Colors.grey.shade800,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    if (targetKind.isNotEmpty || targetId.isNotEmpty || reporterName.isNotEmpty || reporterId.isNotEmpty)
+                      Text(
+                        [
+                          if (targetKind.isNotEmpty) 'Target: $targetKind',
+                          if (targetId.isNotEmpty) 'ID: $targetId',
+                          if (reporterName.isNotEmpty) 'Reporter: $reporterName',
+                          if (reporterName.isEmpty && isSystemItem) 'Reporter: Automated system',
+                          if (reporterId.isNotEmpty) 'Reporter ID: $reporterId',
+                        ].join(' • '),
+                        style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                      ),
+                    if (targetKind.isNotEmpty || targetId.isNotEmpty || reporterName.isNotEmpty || reporterId.isNotEmpty)
+                      const SizedBox(height: 4),
+                    if (isReelItem && (reelTitle.isNotEmpty || reelType.isNotEmpty || reelUrl.isNotEmpty))
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Text(
+                          [
+                            if (reelTitle.isNotEmpty) 'Reel: $reelTitle',
+                            if (reelType.isNotEmpty) 'Type: $reelType',
+                            if (reelUrl.isNotEmpty) 'URL: $reelUrl',
+                            if (reelUrl.isEmpty) 'URL: missing (legacy report)',
+                          ].join(' • '),
+                          style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                        ),
+                      ),
+                    if (safeSearch is Map)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Text(
+                          'SafeSearch: adult=${_safeText(safeSearch['adult'], fallback: 'UNKNOWN')} • violence=${_safeText(safeSearch['violence'], fallback: 'UNKNOWN')} • racy=${_safeText(safeSearch['racy'], fallback: 'UNKNOWN')}',
+                          style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                        ),
+                      ),
+                    if (reportExplanation.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Text(
+                          'Reporter note: $reportExplanation',
+                          style: TextStyle(fontSize: 12, color: Colors.grey.shade800),
+                        ),
+                      ),
+                    if (reportExplanation.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Text(
+                          'Reporter note: Not provided',
+                          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                        ),
+                      ),
                     if (content.isNotEmpty)
                       Text(content),
                     if (content.isEmpty)
@@ -777,18 +1831,9 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                         ),
                         OutlinedButton.icon(
                           icon: const Icon(Icons.check, size: 16, color: Colors.green),
-                          label: const Text('Resolve', style: TextStyle(color: Colors.green)),
+                          label: const Text('Decide', style: TextStyle(color: Colors.green)),
                           onPressed: () async {
-                              await queueDoc.reference.set({
-                                'status': 'resolved',
-                                'resolvedAt': FieldValue.serverTimestamp(),
-                              }, SetOptions(merge: true));
-                              
-                              if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('Marked as resolved')),
-                                );
-                              }
+                            await _showDecisionDialog(queueDoc, item);
                           },
                           style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.green)),
                         ),
