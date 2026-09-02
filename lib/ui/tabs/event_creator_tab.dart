@@ -1405,7 +1405,7 @@ class _EventCreatorTabState extends State<EventCreatorTab>
                   children: [
                     const SizedBox(height: 40),
                     Text(
-                      'Notice Board',
+                      'International Notice Board',
                       style: TextStyle(
                         color: Colors.white.withOpacity(0.9),
                         fontSize: 24,
