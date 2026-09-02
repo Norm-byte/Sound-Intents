@@ -12,15 +12,84 @@ class EventStatsTab extends StatefulWidget {
 class _EventStatsTabState extends State<EventStatsTab> {
   bool _isSavingOverlay = false;
   bool _isSavingCommunity = false;
+  bool _isSavingWorldwideUsers = false;
+  bool _isSavingInternationalJoined = false;
+  bool _isSavingRegionalUsers = false;
+  bool _isSavingEventViewers = false;
   bool _showLiveStats = false;
   bool _showCommunityLiveCounter = false;
   bool _overlayShowTimezoneFlags = false;
   bool _communityShowTimezoneFlags = false;
+  int _worldwideUserTotal = 0;
+  int _internationalJoinedTotal = 0;
+  int _eventLiveViewerTotal = 0;
+  int _worldwideUserTotalAdjustment = 0;
+  int _internationalJoinedAdjustment = 0;
+  Map<String, int> _regionalUserTotals = const {};
+  Map<String, int> _regionalUserCountAdjustments = const {};
+  String _selectedRegion = 'BST';
+  int _eventLiveViewerAdjustment = 0;
 
   @override
   void initState() {
     super.initState();
     _loadStatsSettings();
+    _loadDerivedCounts();
+  }
+
+  // Kept separate so a failed live query cannot blank the saved settings.
+  Future<void> _loadDerivedCounts() async {
+    final now = DateTime.now();
+    var nearestInternationalJoined = 0;
+    var liveViewers = 0;
+
+    try {
+      final globalEvents = await FirebaseFirestore.instance
+          .collection('global_events')
+          .get();
+      var nearestInternationalDistance = const Duration(days: 36500);
+      for (final eventDoc in globalEvents.docs) {
+        final data = eventDoc.data();
+        if (data['isPublished'] != true || data['isDraft'] == true) continue;
+        final rawStart = data['startTimeUTC'] ?? data['startTime'];
+        final start = rawStart is String ? DateTime.tryParse(rawStart) : null;
+        if (start == null) continue;
+        final distance = start.difference(now).abs();
+        if (distance < nearestInternationalDistance) {
+          nearestInternationalDistance = distance;
+          nearestInternationalJoined =
+              (data['participantCount'] as num?)?.toInt() ?? 0;
+        }
+      }
+    } catch (_) {
+      // Leave the joined total at zero when events cannot be read.
+    }
+
+    try {
+      final eventViewerRoots = await FirebaseFirestore.instance
+          .collection('event_live_viewers')
+          .get();
+      final cutoff =
+          Timestamp.fromDate(now.subtract(const Duration(seconds: 15)));
+      for (final eventDoc in eventViewerRoots.docs) {
+        final sessions = await eventDoc.reference
+            .collection('sessions')
+            .where('lastSeenAt', isGreaterThan: cutoff)
+            .get();
+        liveViewers += sessions.docs
+            .where((session) =>
+                session.data()['source'] != 'backend_live_counter_bridge_v3')
+            .length;
+      }
+    } catch (_) {
+      // Leave the viewer total at zero when sessions cannot be read.
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _internationalJoinedTotal = nearestInternationalJoined;
+      _eventLiveViewerTotal = liveViewers;
+    });
   }
 
   Future<void> _loadStatsSettings() async {
@@ -40,6 +109,28 @@ class _EventStatsTabState extends State<EventStatsTab> {
         setState(() {
         _showLiveStats = homeData['showLiveStats'] ?? false;
         _overlayShowTimezoneFlags = homeData['statsShowTimezoneFlags'] == true;
+        _worldwideUserTotal =
+          (homeData['worldwideUserTotal'] as num?)?.toInt() ?? 0;
+        _worldwideUserTotalAdjustment =
+          (homeData['worldwideUserTotalAdjustment'] as num?)?.toInt() ?? 0;
+        _internationalJoinedAdjustment =
+          (homeData['internationalJoinedAdjustment'] as num?)?.toInt() ?? 0;
+        _regionalUserTotals = Map<String, int>.fromEntries(
+          Map<String, dynamic>.from(
+            homeData['regionalUserTotals'] as Map? ?? const <String, dynamic>{},
+          ).entries.map((entry) => MapEntry(entry.key, (entry.value as num?)?.toInt() ?? 0)),
+        );
+        _regionalUserCountAdjustments = Map<String, int>.fromEntries(
+          Map<String, dynamic>.from(
+            homeData['regionalUserCountAdjustments'] as Map? ?? const <String, dynamic>{},
+          ).entries.map((entry) => MapEntry(entry.key, (entry.value as num?)?.toInt() ?? 0)),
+        );
+        if (!_regionalUserTotals.containsKey(_selectedRegion) &&
+            _regionalUserTotals.isNotEmpty) {
+          _selectedRegion = _regionalUserTotals.keys.first;
+        }
+        _eventLiveViewerAdjustment =
+          (homeData['eventLiveViewerAdjustment'] as num?)?.toInt() ?? 0;
 
         if (communityData.containsKey('showCommunityLiveCounter')) {
           _showCommunityLiveCounter = communityData['showCommunityLiveCounter'] == true;
@@ -135,6 +226,68 @@ class _EventStatsTabState extends State<EventStatsTab> {
     }
   }
 
+  Future<void> _saveDisplayAddition(
+    String field,
+    int value,
+    void Function(bool) setSaving,
+  ) async {
+    setSaving(true);
+    try {
+      await FirebaseFirestore.instance
+          .collection('app_config')
+          .doc('home_screen')
+          .set({
+        field: value,
+        'counterAdjustmentsUpdatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Counter display addition published'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Publish failed: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setSaving(false);
+    }
+  }
+
+  Future<void> _saveRegionalDisplayAddition() async {
+    setState(() => _isSavingRegionalUsers = true);
+    try {
+      await FirebaseFirestore.instance
+          .collection('app_config')
+          .doc('home_screen')
+          .set({
+        'regionalUserCountAdjustments': _regionalUserCountAdjustments,
+        'counterAdjustmentsUpdatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Regional counter display addition published'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Publish failed: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSavingRegionalUsers = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -212,6 +365,128 @@ class _EventStatsTabState extends State<EventStatsTab> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
+                      'Counter Display Additions',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'True counts remain unchanged. Each plus mock value affects only its matching display.',
+                      style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
+                    ),
+                    const SizedBox(height: 16),
+                    _CounterAdditionRow(
+                      label: 'International Users',
+                      trueCount: _worldwideUserTotal,
+                      trueLabel: 'live accounts',
+                      value: _worldwideUserTotalAdjustment,
+                      saving: _isSavingWorldwideUsers,
+                      onChanged: (value) => setState(
+                        () => _worldwideUserTotalAdjustment = value,
+                      ),
+                      onPublish: () => _saveDisplayAddition(
+                        'worldwideUserTotalAdjustment',
+                        _worldwideUserTotalAdjustment,
+                        (saving) => setState(() => _isSavingWorldwideUsers = saving),
+                      ),
+                    ),
+                    _CounterAdditionRow(
+                      label: 'International Joined',
+                      trueCount: _internationalJoinedTotal,
+                      trueLabel: 'current/upcoming event',
+                      value: _internationalJoinedAdjustment,
+                      saving: _isSavingInternationalJoined,
+                      onChanged: (value) => setState(
+                        () => _internationalJoinedAdjustment = value,
+                      ),
+                      onPublish: () => _saveDisplayAddition(
+                        'internationalJoinedAdjustment',
+                        _internationalJoinedAdjustment,
+                        (saving) => setState(() => _isSavingInternationalJoined = saving),
+                      ),
+                    ),
+                    _CounterAdditionRow(
+                      // Rebuild per region so the mock field reloads on switch.
+                      key: ValueKey('regional-$_selectedRegion'),
+                      label: 'Regional Users',
+                      trueCount: _regionalUserTotals[_selectedRegion] ?? 0,
+                      trueLabel: _selectedRegion,
+                      value: _regionalUserCountAdjustments[_selectedRegion] ?? 0,
+                      saving: _isSavingRegionalUsers,
+                      onChanged: (value) => setState(
+                        () => _regionalUserCountAdjustments = {
+                          ..._regionalUserCountAdjustments,
+                          _selectedRegion: value,
+                        },
+                      ),
+                      onPublish: _saveRegionalDisplayAddition,
+                      leading: Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: InputDecorator(
+                          decoration: const InputDecoration(
+                            labelText: 'Region',
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                            contentPadding: EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 10,
+                            ),
+                          ),
+                          child: DropdownButtonHideUnderline(
+                            child: DropdownButton<String>(
+                              value:
+                                  _regionalUserTotals.containsKey(_selectedRegion)
+                                      ? _selectedRegion
+                                      : null,
+                              isExpanded: true,
+                              hint: const Text('Select region'),
+                              items: _regionalUserTotals.keys
+                                  .map((region) => DropdownMenuItem(
+                                        value: region,
+                                        child: Text(
+                                          '$region · ${regionCountryLabel(region)}',
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ))
+                                  .toList(),
+                              onChanged: _isSavingRegionalUsers
+                                  ? null
+                                  : (region) {
+                                      if (region != null) {
+                                        setState(() => _selectedRegion = region);
+                                      }
+                                    },
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    _CounterAdditionRow(
+                      label: 'Live Event Viewers',
+                      trueCount: _eventLiveViewerTotal,
+                      trueLabel: 'active sessions now',
+                      value: _eventLiveViewerAdjustment,
+                      saving: _isSavingEventViewers,
+                      onChanged: (value) => setState(
+                        () => _eventLiveViewerAdjustment = value,
+                      ),
+                      onPublish: () => _saveDisplayAddition(
+                        'eventLiveViewerAdjustment',
+                        _eventLiveViewerAdjustment,
+                        (saving) => setState(() => _isSavingEventViewers = saving),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
                       'Community Room Counter',
                       style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
                     ),
@@ -258,6 +533,177 @@ class _EventStatsTabState extends State<EventStatsTab> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Country hints for the timezone codes stored on user accounts.
+const Map<String, String> _regionCountryLabels = {
+  'GMT': 'UK, Ireland, Portugal, Iceland',
+  'BST': 'UK, Ireland',
+  'WET': 'Portugal, Canary Islands',
+  'WEST': 'Portugal, Canary Islands',
+  'CET': 'France, Germany, Spain, Italy, Poland',
+  'CEST': 'France, Germany, Spain, Italy, Poland',
+  'EET': 'Greece, Finland, Romania, Ukraine',
+  'EEST': 'Greece, Finland, Romania, Ukraine',
+  'EST': 'US East, Canada East',
+  'EDT': 'US East, Canada East',
+  'CST': 'US Central, Mexico',
+  'CDT': 'US Central, Mexico',
+  'MST': 'US Mountain',
+  'MDT': 'US Mountain',
+  'PST': 'US West, Canada West',
+  'PDT': 'US West, Canada West',
+  'AEST': 'Australia East',
+  'AEDT': 'Australia East',
+  'AWST': 'Australia West',
+  'NZST': 'New Zealand',
+  'NZDT': 'New Zealand',
+  'IST': 'India, Sri Lanka',
+  'SAST': 'South Africa',
+  'JST': 'Japan',
+  'KST': 'South Korea',
+  'HKT': 'Hong Kong',
+  'SGT': 'Singapore',
+  'GST': 'UAE, Gulf States',
+  'BRT': 'Brazil',
+  'UTC': 'Coordinated Universal Time',
+  'Unknown': 'Region not yet reported',
+};
+
+String regionCountryLabel(String region) =>
+    _regionCountryLabels[region.trim().toUpperCase()] ??
+    _regionCountryLabels[region.trim()] ??
+    'Region unmapped';
+
+class _CounterAdditionRow extends StatefulWidget {
+  final String label;
+  final int trueCount;
+  final String trueLabel;
+  final Widget? leading;
+  final int value;
+  final bool saving;
+  final ValueChanged<int> onChanged;
+  final VoidCallback onPublish;
+
+  const _CounterAdditionRow({
+    super.key,
+    required this.label,
+    required this.trueCount,
+    required this.trueLabel,
+    this.leading,
+    required this.value,
+    required this.saving,
+    required this.onChanged,
+    required this.onPublish,
+  });
+
+  @override
+  State<_CounterAdditionRow> createState() => _CounterAdditionRowState();
+}
+
+class _CounterAdditionRowState extends State<_CounterAdditionRow> {
+  late final TextEditingController _controller =
+      TextEditingController(text: widget.value.toString());
+
+  @override
+  void didUpdateWidget(covariant _CounterAdditionRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Show published or region-switched values without interrupting typing.
+    final shown = int.tryParse(_controller.text.trim()) ?? 0;
+    if (widget.value != shown) {
+      _controller.text = widget.value.toString();
+      _controller.selection =
+          TextSelection.collapsed(offset: _controller.text.length);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final trueDisplay = widget.trueCount.toString();
+    final totalDisplay = (widget.trueCount + widget.value).toString();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 2,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(widget.label),
+                if (widget.leading != null)
+                  widget.leading!
+                else
+                  Text(widget.trueLabel),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          SizedBox(
+            width: 92,
+            child: _CounterValueBox(label: 'True', value: trueDisplay),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 108,
+            child: TextFormField(
+              controller: _controller,
+              enabled: !widget.saving,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Plus mock',
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (rawValue) {
+                final parsed = int.tryParse(rawValue.trim()) ?? 0;
+                widget.onChanged(parsed < 0 ? 0 : parsed);
+              },
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 92,
+            child: _CounterValueBox(label: 'Total', value: totalDisplay),
+          ),
+          IconButton(
+            tooltip: 'Publish this counter addition',
+            onPressed: widget.saving ? null : widget.onPublish,
+            icon: widget.saving
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.publish),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CounterValueBox extends StatelessWidget {
+  final String label;
+  final String value;
+
+  const _CounterValueBox({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return InputDecorator(
+      decoration: InputDecoration(
+        labelText: label,
+        border: const OutlineInputBorder(),
+      ),
+      child: Text(value),
     );
   }
 }
