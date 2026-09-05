@@ -298,12 +298,6 @@ service cloud.firestore {
                       docId == 'community_settings';
     }
 
-    // Live Hub: members can read published shows, while operators manage drafts.
-    match /live_events/{eventId} {
-      allow read: if isActiveAdmin() || resource.data.isPublished == true;
-      allow write: if isActiveAdmin();
-    }
-
     // Users collection
     match /users/{userId} {
       // TEMPORARY: Allow public access because User App does not use Firebase Auth yet.
