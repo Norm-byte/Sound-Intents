@@ -28,6 +28,7 @@ import 'ui/tabs/chat_management_tab.dart';
 import 'ui/tabs/community_tab.dart';
 import 'ui/tabs/monetization_tab.dart';
 import 'ui/tabs/app_content_tab.dart';
+import 'ui/tabs/live_setup_tab.dart';
 import 'ui/tabs/event_stats_tab.dart';
 import 'ui/tabs/seller_management_tab.dart';
 import 'ui/notifications_screen.dart';
@@ -246,6 +247,7 @@ class _AdminHomePageState extends State<AdminHomePage>
       Tab(icon: Icon(Icons.schedule), text: 'National Events'), // Renamed
       Tab(icon: Icon(Icons.perm_media), text: 'Media Library'),
       Tab(icon: Icon(Icons.mobile_screen_share), text: 'App Content'),
+      Tab(icon: Icon(Icons.live_tv), text: 'Live Setup'),
       Tab(icon: Icon(Icons.query_stats), text: 'Event Stats'),
       Tab(icon: Icon(Icons.badge), text: 'Sellers'),
       Tab(icon: Icon(Icons.chat), text: 'Chat Rooms'),
@@ -354,6 +356,9 @@ class _AdminHomePageState extends State<AdminHomePage>
       buildTab('system', 'App Content', const AppContentTab()),
 
       // 6. Event Stats
+      buildTab('live_setup', 'Live Setup', const LiveSetupTab()),
+
+      // 7. Event Stats
       buildTab('event_stats', 'Event Stats', const EventStatsTab()),
 
       // 7. Seller Management
@@ -375,7 +380,7 @@ class _AdminHomePageState extends State<AdminHomePage>
               _initialModerationUserId = userId;
             });
             if (_hasAccess('system')) {
-              _tabController.animateTo(11);
+              _tabController.animateTo(12);
             } else {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('Access Denied')),
