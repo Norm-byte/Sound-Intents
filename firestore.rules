@@ -257,6 +257,12 @@ service cloud.firestore {
       allow write: if isActiveAdmin();
     }
 
+    // Alert recipients are operator contact details, never public app config.
+    match /admin_alert_settings/{settingId} {
+      allow read: if isActiveAdmin();
+      allow write: if false;
+    }
+
     // VIP Codes
     match /vip_codes/{codeId} {
       // TEMPORARY: Allow all access for debugging

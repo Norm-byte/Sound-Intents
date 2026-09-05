@@ -5,8 +5,10 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'dart:async'; // Added for Timer
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../models/event.dart';
+import '../../models/admin_user.dart';
 import '../widgets/active_operators_card.dart'; // Added for Active Operators
 // import '../widgets/dashboard_clock.dart'; // Removed
 
@@ -22,6 +24,7 @@ class DashboardTab extends StatefulWidget {
   final Function(int weekOffset, int? minuteFilter)?
       onClearTimeSlots; // Clear draft slots only
   final Function(Event)? onPublishEvent;
+  final AdminUser adminUser;
 
   const DashboardTab({
     super.key,
@@ -35,6 +38,7 @@ class DashboardTab extends StatefulWidget {
     this.onClearWeek, // New
     this.onClearTimeSlots,
     this.onPublishEvent,
+    required this.adminUser,
   });
 
   @override
@@ -403,7 +407,7 @@ class _DashboardTabState extends State<DashboardTab> {
                 // Admin Alerts
                 Expanded(
                   flex: 2, 
-                  child: const _AdminAlertsCard(),
+                  child: _AdminAlertsCard(adminUser: widget.adminUser),
                 ),
               ],
             ),
@@ -1452,7 +1456,9 @@ class _NationalParticipationCard extends StatelessWidget {
 }
 
 class _AdminAlertsCard extends StatefulWidget {
-  const _AdminAlertsCard();
+  final AdminUser adminUser;
+
+  const _AdminAlertsCard({required this.adminUser});
 
   @override
   State<_AdminAlertsCard> createState() => _AdminAlertsCardState();
@@ -1460,6 +1466,8 @@ class _AdminAlertsCard extends StatefulWidget {
 
 class _AdminAlertsCardState extends State<_AdminAlertsCard> {
   bool _isLoading = false;
+  bool _notificationsEnabled = false;
+  List<String> _notificationRecipients = const [];
   
   // Real Data
   int _supportMessages = 0;
@@ -1469,6 +1477,154 @@ class _AdminAlertsCardState extends State<_AdminAlertsCard> {
   void initState() {
     super.initState();
     _checkAlerts();
+    _loadNotificationSettings();
+  }
+
+  bool get _canManageNotifications =>
+      widget.adminUser.isSuperAdmin ||
+      (widget.adminUser.permissions?.contains('alert_notifications') ?? false);
+
+  Future<void> _loadNotificationSettings() async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('admin_alert_settings')
+          .doc('notifications')
+          .get();
+      final data = doc.data() ?? const <String, dynamic>{};
+      final recipients = (data['recipients'] as List<dynamic>? ?? const [])
+          .map((value) => value.toString().trim().toLowerCase())
+          .where((value) => value.isNotEmpty)
+          .toList();
+      if (mounted) {
+        setState(() {
+          _notificationsEnabled = data['enabled'] == true;
+          _notificationRecipients = recipients;
+        });
+      }
+    } catch (error) {
+      debugPrint('Could not load alert notification settings: $error');
+    }
+  }
+
+  Future<void> _showNotificationSettings() async {
+    if (!_canManageNotifications) return;
+
+    var enabled = _notificationsEnabled;
+    final recipients = List<String>.from(_notificationRecipients);
+    final emailController = TextEditingController();
+    var isSaving = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          title: const Text('Alert Notifications'),
+          content: SizedBox(
+            width: 520,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Enable email alerts'),
+                  subtitle: const Text('New support messages and moderation reports'),
+                  value: enabled,
+                  onChanged: isSaving
+                      ? null
+                      : (value) => setDialogState(() => enabled = value),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: emailController,
+                        enabled: !isSaving,
+                        keyboardType: TextInputType.emailAddress,
+                        decoration: const InputDecoration(
+                          labelText: 'Recipient email address',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      tooltip: 'Add recipient',
+                      onPressed: isSaving
+                          ? null
+                          : () {
+                              final email = emailController.text.trim().toLowerCase();
+                              final valid = RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(email);
+                              if (!valid || recipients.contains(email)) return;
+                              setDialogState(() {
+                                recipients.add(email);
+                                emailController.clear();
+                              });
+                            },
+                      icon: const Icon(Icons.add),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                if (recipients.isEmpty)
+                  const Text('Add at least one email address before enabling alerts.', style: TextStyle(color: Colors.grey))
+                else
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: recipients
+                        .map((email) => InputChip(
+                              label: Text(email),
+                              onDeleted: isSaving
+                                  ? null
+                                  : () => setDialogState(() => recipients.remove(email)),
+                            ))
+                        .toList(),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: isSaving ? null : () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton.icon(
+              onPressed: isSaving
+                  ? null
+                  : () async {
+                      if (enabled && recipients.isEmpty) return;
+                      setDialogState(() => isSaving = true);
+                      try {
+                        await FirebaseFunctions.instance
+                            .httpsCallable('saveAlertNotificationSettings')
+                            .call({'enabled': enabled, 'recipients': recipients});
+                        if (!mounted) return;
+                        setState(() {
+                          _notificationsEnabled = enabled;
+                          _notificationRecipients = List<String>.from(recipients);
+                        });
+                        if (dialogContext.mounted) Navigator.pop(dialogContext);
+                      } catch (error) {
+                        if (dialogContext.mounted) {
+                          ScaffoldMessenger.of(dialogContext).showSnackBar(
+                            SnackBar(content: Text('Could not save alert notifications: $error')),
+                          );
+                        }
+                        setDialogState(() => isSaving = false);
+                      }
+                    },
+              icon: isSaving
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.save),
+              label: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+    emailController.dispose();
   }
 
   Future<void> _checkAlerts() async {
@@ -1527,6 +1683,17 @@ class _AdminAlertsCardState extends State<_AdminAlertsCard> {
                 const SizedBox(width: 8),
                 const Text('Admin Alerts', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
                 const Spacer(),
+                Tooltip(
+                  message: _canManageNotifications
+                      ? 'Configure alert notifications'
+                      : 'Alert notifications permission required',
+                  child: Switch(
+                    value: _notificationsEnabled,
+                    onChanged: _canManageNotifications
+                        ? (_) => _showNotificationSettings()
+                        : null,
+                  ),
+                ),
                 SizedBox(
                   width: 32, height: 32,
                   child: IconButton(

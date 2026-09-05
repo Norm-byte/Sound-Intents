@@ -66,6 +66,7 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
     'monetization': false,        // Deals/Offers
     'system': false,              // System
     'notifications': false,
+    'alert_notifications': false,
     'legal': false,
     'documentation': true,        // Operators Manual — always granted
   };
@@ -86,6 +87,7 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
     'monetization':    'Deals / Offers',
     'system':          'System',
     'notifications':   'Notifications',
+    'alert_notifications': 'Alert Notifications',
     'legal':           'Legal',
     'documentation':   'Operators Manual',
   };

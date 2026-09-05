@@ -287,6 +287,7 @@ class _AdminHomePageState extends State<AdminHomePage>
         'dashboard',
         'Dashboard',
         DashboardTab(
+          adminUser: widget.adminUser,
           events: events,
           onCreateEvent: () {
             // Animate to Worldwide Events (Index 1)
