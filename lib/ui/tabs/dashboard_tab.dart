@@ -1506,10 +1506,10 @@ class _AdminAlertsCardState extends State<_AdminAlertsCard> {
     }
   }
 
-  Future<void> _showNotificationSettings() async {
+  Future<void> _showNotificationSettings({bool? enabledOverride}) async {
     if (!_canManageNotifications) return;
 
-    var enabled = _notificationsEnabled;
+    var enabled = enabledOverride ?? _notificationsEnabled;
     final recipients = List<String>.from(_notificationRecipients);
     final emailController = TextEditingController();
     var isSaving = false;
@@ -1690,7 +1690,7 @@ class _AdminAlertsCardState extends State<_AdminAlertsCard> {
                   child: Switch(
                     value: _notificationsEnabled,
                     onChanged: _canManageNotifications
-                        ? (_) => _showNotificationSettings()
+                    ? (value) => _showNotificationSettings(enabledOverride: value)
                         : null,
                   ),
                 ),

@@ -2342,7 +2342,7 @@ Widget _buildActiveAdminsTab_UNUSED() {
                               children: _defaultAdminPermissions.keys.map((key) {
                                 final hasPerm = permissions.contains(key);
                                 return FilterChip(
-                                  label: Text(key.replaceAll('_', ' ').toUpperCase(), style: const TextStyle(fontSize: 10)),
+                                  label: Text(_permissionLabels[key] ?? key.replaceAll('_', ' ').toUpperCase(), style: const TextStyle(fontSize: 10)),
                                   selected: hasPerm,
                                   onSelected: isMe ? null : (val) { // Can't edit own permissions here to prevent lockout
                                     final newPerms = List<String>.from(permissions);
