@@ -144,6 +144,11 @@ service cloud.firestore {
       allow update, delete: if isActiveAdmin();
     }
 
+    match /quota_alerts/{alertId} {
+      allow create: if true;
+      allow read, update, delete: if isActiveAdmin();
+    }
+
     // Moderation Cases - resolved moderation audit records
     match /moderation_cases/{caseId} {
       allow read, create, update, delete: if isActiveAdmin();

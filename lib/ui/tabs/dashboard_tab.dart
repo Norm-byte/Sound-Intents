@@ -1472,6 +1472,7 @@ class _AdminAlertsCardState extends State<_AdminAlertsCard> {
   // Real Data
   int _supportMessages = 0;
   int _moderationQueue = 0;
+  int _quotaAlerts = 0;
 
   @override
   void initState() {
@@ -1636,13 +1637,15 @@ class _AdminAlertsCardState extends State<_AdminAlertsCard> {
           .collection('support_inbox')
           .where('read', isEqualTo: false)
           .count()
-          .get();
+          .get()
+          .timeout(const Duration(seconds: 12));
       
       // 2. Check Pending Moderation Items
       final modSnapshot = await FirebaseFirestore.instance
           .collection('moderation_queue')
           .where('status', isEqualTo: 'pending')
-          .get();
+          .get()
+          .timeout(const Duration(seconds: 12));
 
       final actionableModeration = modSnapshot.docs.where((doc) {
         final data = doc.data();
@@ -1650,10 +1653,17 @@ class _AdminAlertsCardState extends State<_AdminAlertsCard> {
         return type != 'safe_search_passed';
       }).length;
 
+      final quotaSnapshot = await FirebaseFirestore.instance
+          .collection('quota_alerts')
+          .where('status', isEqualTo: 'open')
+          .get()
+          .timeout(const Duration(seconds: 12));
+
       if (mounted) {
         setState(() {
           _supportMessages = supportSnapshot.count ?? 0;
           _moderationQueue = actionableModeration;
+          _quotaAlerts = quotaSnapshot.docs.length;
           _isLoading = false;
         });
       }
@@ -1666,7 +1676,7 @@ class _AdminAlertsCardState extends State<_AdminAlertsCard> {
   @override
   Widget build(BuildContext context) {
     // Basic severity check
-    final hasAlerts = _supportMessages > 0 || _moderationQueue > 0;
+    final hasAlerts = _supportMessages > 0 || _moderationQueue > 0 || _quotaAlerts > 0;
     final cardColor = hasAlerts ? Colors.orange.shade50 : Colors.white;
 
     return Card(
@@ -1717,12 +1727,71 @@ class _AdminAlertsCardState extends State<_AdminAlertsCard> {
                        _buildAlertRow(Icons.support_agent, 'Support', _supportMessages, 'New'),
                        const SizedBox(height: 6),
                        _buildAlertRow(Icons.gavel, 'Moderation', _moderationQueue, 'Pending'),
+                       const SizedBox(height: 6),
+                       InkWell(
+                         onTap: _quotaAlerts == 0 ? null : _showQuotaAlerts,
+                         child: _buildAlertRow(
+                           Icons.photo_library_outlined,
+                           'Image allowance review',
+                           _quotaAlerts,
+                           'Open',
+                         ),
+                       ),
                      ],
                    ),
                  ),
                ),
           ],
         ),
+      ),
+    );
+  }
+
+  Future<void> _showQuotaAlerts() async {
+    final snapshot = await FirebaseFirestore.instance
+        .collection('quota_alerts')
+        .where('status', isEqualTo: 'open')
+        .get();
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Image allowance review'),
+        content: SizedBox(
+          width: 560,
+          child: snapshot.docs.isEmpty
+              ? const Text('No open image allowance alerts.')
+              : ListView(
+                  shrinkWrap: true,
+                  children: snapshot.docs.map((doc) {
+                    final data = doc.data();
+                    return ListTile(
+                      title: Text('User ${data['userId'] ?? 'unknown'}'),
+                      subtitle: Text(
+                        'Used ${data['usedThisMonth'] ?? 0} of ${data['monthlyLimit'] ?? 0} images this month',
+                      ),
+                      trailing: TextButton(
+                        onPressed: () async {
+                          await doc.reference.update({
+                            'status': 'resolved',
+                            'resolvedAt': FieldValue.serverTimestamp(),
+                          });
+                          if (dialogContext.mounted) Navigator.pop(dialogContext);
+                          await _checkAlerts();
+                        },
+                        child: const Text('Resolve'),
+                      ),
+                    );
+                  }).toList(),
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Close'),
+          ),
+        ],
       ),
     );
   }
