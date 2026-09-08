@@ -315,7 +315,11 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
     // b) the form was loaded from a local draft (not purely from liveEvents).
     // This prevents clicking between grid tiles from silently resurrecting
     // live events into the local draft without any user intent.
-    if (_selectedSlotId != null && !_currentSlotFromLiveOnly) {
+    // A blank form is never auto-saved: _publishSchedule treats blank draft
+    // entries as a delete instruction for the published doc.
+    if (_selectedSlotId != null &&
+        !_currentSlotFromLiveOnly &&
+        !_isCurrentFormBlank()) {
       _saveCurrentSlot();
     }
 
@@ -334,36 +338,39 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
           final hour = int.parse(parts[0]);
           final minute = int.parse(parts[1]);
           final targetDate = _getTargetDate(); // Use offset
+          // A published slot doc stays valid for its whole Mon-Sun week, which
+          // is how the user app resolves it; match that instead of a single day.
+          final weekStart = targetDate
+              .subtract(Duration(days: targetDate.weekday - DateTime.monday));
+          final weekEndExclusive = weekStart.add(const Duration(days: 7));
 
-          final liveEvent = widget.liveEvents!.firstWhere(
-            (e) {
-              // Filter out Global events from the Scheduler
-              if (e.type == 'global') return false;
+          final matches = widget.liveEvents!.where((e) {
+            // Filter out Global events from the Scheduler
+            if (e.type == 'global') return false;
 
-              if (e.startTimeUTC == null) return false;
-              final start = DateTime.parse(e.startTimeUTC!);
+            if (e.startTimeUTC == null) return false;
+            final start = DateTime.parse(e.startTimeUTC!);
 
-              // Check time match
-              final timeMatch = start.hour == hour &&
-                  start.minute >= minute &&
-                  start.minute < minute + 15;
-              if (!timeMatch) return false;
+            // Check time match
+            final timeMatch = start.hour == hour &&
+                start.minute >= minute &&
+                start.minute < minute + 15;
+            if (!timeMatch) return false;
 
-              final isTargetDate = start.year == targetDate.year &&
-                  start.month == targetDate.month &&
-                  start.day == targetDate.day;
+            final inTargetWeek = !start.isBefore(weekStart) &&
+                start.isBefore(weekEndExclusive);
 
-              if (isTargetDate) return true;
-              if (e.isRecurring == true) return true;
+            if (inTargetWeek) return true;
+            if (e.isRecurring == true) return true;
 
-              return false;
-            },
-            orElse: () =>
-                Event(id: '', title: '', type: 'national', isRecurring: true),
-          );
+            return false;
+          }).toList()
+            // Republishing mid-week can leave several dated docs for one slot.
+            ..sort((a, b) => DateTime.parse(b.startTimeUTC!)
+                .compareTo(DateTime.parse(a.startTimeUTC!)));
 
-          if (liveEvent.id.isNotEmpty) {
-            data = _convertEventToMap(liveEvent);
+          if (matches.isNotEmpty) {
+            data = _convertEventToMap(matches.first);
             _currentSlotFromLiveOnly = true; // loaded from liveEvents, not a local draft
           }
         } catch (e) {
@@ -444,6 +451,14 @@ class EventSchedulerTabState extends State<EventSchedulerTab>
       } catch (e) {
           return "--:--:--";
       }
+  }
+
+  /// Mirrors the blank-slot rule in `_publishSchedule`, which deletes the
+  /// published doc for an empty draft entry.
+  bool _isCurrentFormBlank() {
+    return _titleController.text.trim().isEmpty &&
+        _visualUrlController.text.trim().isEmpty &&
+        _soundUrlController.text.trim().isEmpty;
   }
 
   void _saveCurrentSlot() {
