@@ -7,6 +7,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:video_player/video_player.dart';
 // ignore: deprecated_member_use
 import '../../services/media_library_service.dart';
+import '../../services/youtube_embed_check_service.dart';
 import '../../models/media_item.dart';
 import '../widgets/video_widgets.dart';
 
@@ -910,7 +911,7 @@ class _AppContentTabState extends State<AppContentTab> {
                             );
 
                             return InkWell(
-                              onTap: () {
+                              onTap: () async {
                                 if (_activeReelCount >= kMaxActiveReels) {
                                   ScaffoldMessenger.of(this.context)
                                       .showSnackBar(
@@ -924,6 +925,19 @@ class _AppContentTabState extends State<AppContentTab> {
                                   return;
                                 }
 
+                                if (type == 'youtube') {
+                                  final videoId = _getYoutubeId(item.url);
+                                  if (videoId != null) {
+                                    final canProceed =
+                                        await YoutubeEmbedCheckService
+                                            .confirmBeforePublish(
+                                      context,
+                                      videoId,
+                                    );
+                                    if (!canProceed) return;
+                                  }
+                                }
+
                                 setState(() {
                                   _showReelCarousel = true;
                                   _reelItems.add({
@@ -934,7 +948,7 @@ class _AppContentTabState extends State<AppContentTab> {
                                     'enabled': true,
                                   });
                                 });
-                                Navigator.pop(context);
+                                if (context.mounted) Navigator.pop(context);
                                 if (mounted) {
                                   ScaffoldMessenger.of(this.context)
                                       .showSnackBar(

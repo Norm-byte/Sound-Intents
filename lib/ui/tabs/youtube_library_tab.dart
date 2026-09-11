@@ -7,6 +7,7 @@ import '../widgets/video_widgets.dart';
 // ignore: avoid_web_libraries_in_flutter
 // ignore: avoid_web_libraries_in_flutter
 import '../../services/media_library_service.dart';
+import '../../services/youtube_embed_check_service.dart';
 import '../../models/media_item.dart';
 import '../../models/content_section.dart';
 
@@ -767,6 +768,9 @@ class _YoutubeLibraryTabState extends State<YoutubeLibraryTab> {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Invalid YouTube URL')));
       return;
     }
+
+    final canProceed = await YoutubeEmbedCheckService.confirmBeforePublish(context, videoId);
+    if (!canProceed) return;
 
     _setLoading(true);
     try {

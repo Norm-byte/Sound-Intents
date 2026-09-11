@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 import 'web_pdf_shim.dart' if (dart.library.io) 'web_pdf_shim_stub.dart';
 import '../../services/media_library_service.dart';
+import '../../services/youtube_embed_check_service.dart';
 import '../../models/media_item.dart';
 import '../../utils/thumbnail_generator.dart';
 import '../widgets/video_widgets.dart';
@@ -588,7 +589,15 @@ class _MediaLibraryTabState extends State<MediaLibraryTab> {
             ElevatedButton(
               onPressed: () async {
                 if (urlController.text.isNotEmpty && nameController.text.isNotEmpty) {
-                  Navigator.pop(context);
+                  final videoId = _getYoutubeId(urlController.text.trim());
+                  if (videoId != null) {
+                    final canProceed = await YoutubeEmbedCheckService.confirmBeforePublish(
+                      context,
+                      videoId,
+                    );
+                    if (!canProceed) return;
+                  }
+                  if (context.mounted) Navigator.pop(context);
                   try {
                     await _mediaService.addExternalMedia(
                       name: nameController.text.trim(),
