@@ -300,7 +300,9 @@ service cloud.firestore {
       // admin_users bootstrap records to update community settings.
       allow write: if isActiveAdmin() ||
                       (docId == 'community_settings' && isSignedIn()) ||
-                      docId == 'community_settings';
+                      docId == 'community_settings' ||
+                      (docId == 'community_support' && isSignedIn()) ||
+                      docId == 'community_support';
     }
 
     // Users collection
