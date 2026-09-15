@@ -687,6 +687,71 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
     );
   }
 
+  /// Full-screen view of the reported/resolved post: content + image at
+  /// full size, without leaving this screen. Renders whatever was stored
+  /// on the moderation_queue item (pending) or moderation_cases doc (resolved).
+  Future<void> _showPostContentDialog({
+    required String content,
+    String? imageUrl,
+  }) async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => Dialog(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 480, maxHeight: 640),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text('Reported Post', style: TextStyle(fontWeight: FontWeight.bold)),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.pop(dialogContext),
+                    ),
+                  ],
+                ),
+                const Divider(),
+                Flexible(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (imageUrl != null && imageUrl.isNotEmpty)
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: GestureDetector(
+                              onTap: () => _showExpandedImage(imageUrl),
+                              child: Image.network(imageUrl, fit: BoxFit.contain),
+                            ),
+                          ),
+                        if (imageUrl != null && imageUrl.isNotEmpty)
+                          const Padding(
+                            padding: EdgeInsets.only(top: 4, bottom: 12),
+                            child: Text('Tap image to zoom',
+                                style: TextStyle(fontSize: 11, color: Colors.grey)),
+                          ),
+                        Text(
+                          content.isEmpty ? 'No text content attached to this post.' : content,
+                          style: const TextStyle(fontSize: 14),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _showExpandedImage(String imageUrl) async {
     await showDialog<void>(
       context: context,
@@ -1447,6 +1512,16 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                                   spacing: 8,
                                   runSpacing: 6,
                                   children: [
+                                    OutlinedButton.icon(
+                                      onPressed: () => _showPostContentDialog(
+                                        content: _safeText(data['content']),
+                                        imageUrl: _safeText(data['imageUrl']).isEmpty
+                                            ? null
+                                            : _safeText(data['imageUrl']),
+                                      ),
+                                      icon: const Icon(Icons.visibility_outlined, size: 16),
+                                      label: const Text('View Post'),
+                                    ),
                                     if (offenderUserId.isNotEmpty && widget.onUserSelected != null)
                                       OutlinedButton.icon(
                                         onPressed: () => widget.onUserSelected!(offenderUserId),
@@ -1876,6 +1951,15 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                     Wrap(
                       spacing: 8,
                       children: [
+                        OutlinedButton.icon(
+                          icon: const Icon(Icons.visibility_outlined, size: 16, color: Colors.indigo),
+                          label: const Text('View Post', style: TextStyle(color: Colors.indigo)),
+                          onPressed: () => _showPostContentDialog(
+                            content: content,
+                            imageUrl: imageUrl,
+                          ),
+                          style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.indigo)),
+                        ),
                         OutlinedButton.icon(
                           icon: const Icon(Icons.person_search, size: 16),
                           label: const Text('Manage User'),
