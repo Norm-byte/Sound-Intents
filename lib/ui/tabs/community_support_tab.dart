@@ -39,9 +39,12 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
   bool _isLoading = true;
   bool _isSaving = false;
   bool _isUploadingIcon = false;
+  bool _isUploadingBackground = false;
 
   bool _isSupportFeatureEnabled = false;
   final _buttonTextController = TextEditingController(text: 'Community Support');
+
+  String? _backgroundImageUrl;
 
   String _iconMode = 'builtin'; // 'builtin' | 'custom' | 'text'
   String _iconBuiltInKey = 'front_hand';
@@ -102,6 +105,7 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
             ? data['supportIconBuiltInKey']
             : 'front_hand';
         _iconCustomUrl = data['supportIconCustomUrl'] as String?;
+        _backgroundImageUrl = data['supportBackgroundImageUrl'] as String?;
         _textLabelController.text =
             (data['supportTextLabel'] as String?)?.trim().isNotEmpty == true
                 ? data['supportTextLabel']
@@ -173,6 +177,34 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
     }
   }
 
+  Future<void> _pickAndUploadBackground() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      withData: true,
+    );
+    final file = result?.files.single;
+    if (file == null || file.bytes == null) return;
+
+    setState(() => _isUploadingBackground = true);
+    try {
+      final ext = file.name.split('.').last.toLowerCase();
+      final url = await _storage.uploadBytes(
+        Uint8List.fromList(file.bytes!),
+        fileExt: ext,
+        folder: 'community_support_backgrounds',
+      );
+      setState(() => _backgroundImageUrl = url);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Background upload failed: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isUploadingBackground = false);
+    }
+  }
+
   Future<void> _save() async {
     setState(() => _isSaving = true);
     try {
@@ -185,6 +217,7 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
         'supportIconMode': _iconMode,
         'supportIconBuiltInKey': _iconBuiltInKey,
         'supportIconCustomUrl': _iconCustomUrl,
+        'supportBackgroundImageUrl': _backgroundImageUrl,
         'supportTextLabel': _textLabelController.text.trim(),
         'supportTextColor': _textColorController.text.trim(),
         'enableOnboardingPopup': _enableOnboardingPopup,
@@ -379,6 +412,64 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
                           ),
                         ],
                       ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Support Screen Background',
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                    const Text(
+                      'Optional. Leave unset to use the default design. Uploading a new image replaces it immediately once saved.',
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Container(
+                          width: 72,
+                          height: 48,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.grey.shade300),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: _backgroundImageUrl == null
+                              ? const Icon(Icons.image_outlined, color: Colors.grey)
+                              : ClipRRect(
+                                  borderRadius: BorderRadius.circular(7),
+                                  child: Image.network(_backgroundImageUrl!,
+                                      fit: BoxFit.cover),
+                                ),
+                        ),
+                        const SizedBox(width: 16),
+                        ElevatedButton.icon(
+                          onPressed:
+                              _isUploadingBackground ? null : _pickAndUploadBackground,
+                          icon: _isUploadingBackground
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2))
+                              : const Icon(Icons.upload),
+                          label: Text(
+                              _isUploadingBackground ? 'Uploading...' : 'Upload background'),
+                        ),
+                        if (_backgroundImageUrl != null) ...[
+                          const SizedBox(width: 8),
+                          TextButton(
+                            onPressed: () => setState(() => _backgroundImageUrl = null),
+                            child: const Text('Reset to default'),
+                          ),
+                        ],
+                      ],
+                    ),
                   ],
                 ),
               ),
