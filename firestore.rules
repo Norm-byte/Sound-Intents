@@ -92,6 +92,33 @@ service cloud.firestore {
              (newLikedBySize == oldLikedBySize + 1 ||
               newLikedBySize == oldLikedBySize - 1);
         }
+
+        function isCommunitySupportOnlyUpdate() {
+          let oldTaps =
+            (resource.data.keys().hasAny(['supportTapCount']) &&
+                resource.data.supportTapCount is int)
+              ? resource.data.supportTapCount
+              : 0;
+          let newTaps = request.resource.data.supportTapCount;
+          let oldSupportedBySize =
+            (resource.data.keys().hasAny(['supportedBy']) &&
+                resource.data.supportedBy is list)
+              ? resource.data.supportedBy.size()
+              : 0;
+          let newSupportedBySize =
+            request.resource.data.supportedBy is list
+              ? request.resource.data.supportedBy.size()
+              : -999;
+
+          return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+               'supportTapCount',
+               'supportedBy',
+             ]) &&
+             newTaps is int &&
+             request.resource.data.supportedBy is list &&
+             newTaps == oldTaps + 1 &&
+             newSupportedBySize == oldSupportedBySize + 1;
+        }
     
     // Admin users collection - only admins can read, only super-admins can write
     match /admin_users/{userId} {
@@ -281,7 +308,8 @@ service cloud.firestore {
       allow create: if true;
       allow update, delete: if isActiveAdmin() ||
                             (isSignedIn() && request.auth.uid == resource.data.userId) ||
-                            isCommunityReactionOnlyUpdate();
+                            isCommunityReactionOnlyUpdate() ||
+                            isCommunitySupportOnlyUpdate();
 
       // Replies under each community post
       match /replies/{replyId} {
