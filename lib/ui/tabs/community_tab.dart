@@ -3,6 +3,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 
+import '../../services/translation_service.dart';
+import '../../widgets/translatable_text.dart';
+
 // Shared with CommunitySupportTab: both dropdowns read/write the same
 // app_config/community_settings.postRetentionDays field.
 const List<int> kPostRetentionDayOptions = [7, 14, 21, 30, 45, 60, 90];
@@ -38,6 +41,7 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
   @override
   void initState() {
     super.initState();
+    TranslationService.instance.init();
     _tabController = TabController(length: 3, vsync: this);
     _caseSearchController.addListener(() {
       if (mounted) setState(() {});
@@ -425,7 +429,7 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                 subtitle: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(content),
+                    TranslatableText(content),
                   ],
                 ),
                 trailing: PopupMenuButton(
@@ -760,7 +764,7 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                             child: Text('Tap image to zoom',
                                 style: TextStyle(fontSize: 11, color: Colors.grey)),
                           ),
-                        Text(
+                        TranslatableText(
                           content.isEmpty ? 'No text content attached to this post.' : content,
                           style: const TextStyle(fontSize: 14),
                         ),
@@ -1673,6 +1677,16 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                     ),
                   ),
                   const Spacer(),
+                  ValueListenableBuilder<bool>(
+                    valueListenable: TranslationService.instance.enabledNotifier,
+                    builder: (context, enabled, _) {
+                      return IconButton(
+                        tooltip: enabled ? 'Disable Translation' : 'Enable Translation',
+                        onPressed: () => TranslationService.instance.setEnabled(!enabled),
+                        icon: Icon(Icons.translate, color: enabled ? Colors.green : Colors.grey, size: 20),
+                      );
+                    },
+                  ),
                   Text(
                     'Live moderation workspace',
                     style: TextStyle(
@@ -1945,7 +1959,7 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                     if (reportExplanation.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 4),
-                        child: Text(
+                        child: TranslatableText(
                           'Reporter note: $reportExplanation',
                           style: TextStyle(fontSize: 12, color: Colors.grey.shade800),
                         ),
@@ -1959,7 +1973,7 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                         ),
                       ),
                     if (content.isNotEmpty)
-                      Text(content),
+                      TranslatableText(content),
                     if (content.isEmpty)
                       Text(
                         imageUrl != null
