@@ -112,6 +112,7 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
     // two dropdowns can never drift apart.
     final postRetentionDays =
         ((data['postRetentionDays'] as num?)?.toInt() ?? 30).clamp(1, 365);
+    final isPostRetentionEnabled = data['isPostRetentionEnabled'] == true;
 
     if (!_featuredControlsHydrated || _lastFeaturedKeywordsText != featuredKeywordsText) {
       _featuredKeywordsController.text = featuredKeywordsText;
@@ -164,6 +165,29 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
           Text(
             'Posts older than this are deleted automatically (paused for anything under active moderation). Same value applies in the Community Support tab.',
             style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+          ),
+          Row(
+            children: [
+              Switch(
+                value: isPostRetentionEnabled,
+                onChanged: (value) =>
+                    _saveCommunitySettings({'isPostRetentionEnabled': value}),
+              ),
+              Expanded(
+                child: Text(
+                  isPostRetentionEnabled
+                      ? 'Active — automatic deletion is running.'
+                      : 'Off — no posts are deleted automatically.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: isPostRetentionEnabled
+                        ? Colors.green.shade700
+                        : Colors.grey.shade700,
+                  ),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 10),
           const Divider(height: 18),

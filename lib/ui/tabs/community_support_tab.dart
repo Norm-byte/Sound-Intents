@@ -63,6 +63,7 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
   final _popupButtonTextController = TextEditingController(text: 'Enter');
 
   int _postRetentionDays = 30;
+  bool _isPostRetentionEnabled = false;
 
   @override
   void initState() {
@@ -130,10 +131,12 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
       }
 
       if (settingsDoc.exists) {
-        final days = (settingsDoc.data()!['postRetentionDays'] as num?)?.toInt();
+        final data = settingsDoc.data()!;
+        final days = (data['postRetentionDays'] as num?)?.toInt();
         if (days != null && kPostRetentionDayOptions.contains(days)) {
           _postRetentionDays = days;
         }
+        _isPostRetentionEnabled = data['isPostRetentionEnabled'] == true;
       }
     } catch (e) {
       if (mounted) {
@@ -231,7 +234,10 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
       await FirebaseFirestore.instance
           .collection('app_config')
           .doc('community_settings')
-          .set({'postRetentionDays': _postRetentionDays}, SetOptions(merge: true));
+          .set({
+        'postRetentionDays': _postRetentionDays,
+        'isPostRetentionEnabled': _isPostRetentionEnabled,
+      }, SetOptions(merge: true));
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -487,6 +493,19 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
                       style: TextStyle(fontSize: 12, color: Colors.grey),
                     ),
                     const SizedBox(height: 8),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Enable automatic post deletion'),
+                      subtitle: Text(
+                        _isPostRetentionEnabled
+                            ? 'Active — posts older than the limit below are deleted automatically (paused for anything under dispute).'
+                            : 'Off — no posts are deleted automatically. Everything is kept, regardless of age.',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      value: _isPostRetentionEnabled,
+                      onChanged: (v) => setState(() => _isPostRetentionEnabled = v),
+                    ),
+                    const SizedBox(height: 4),
                     DropdownButton<int>(
                       value: _postRetentionDays,
                       items: kPostRetentionDayOptions
