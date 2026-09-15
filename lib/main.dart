@@ -438,7 +438,8 @@ class _AdminHomePageState extends State<AdminHomePage>
     }
   }
 
-  Future<void> _handlePublishWeek(int weekOffset, int? minuteFilter) async {
+  Future<void> _handlePublishWeek(int weekOffset, int? minuteFilter,
+      [int? noticeBoardShowBeforeMinutes]) async {
     final now = DateTime.now().toUtc();
     final today = DateTime.utc(now.year, now.month, now.day);
     final daysSinceMonday = today.weekday - 1;
@@ -492,6 +493,10 @@ class _AdminHomePageState extends State<AdminHomePage>
           id: publishedId,
           isPublished: true,
           isDraft: false,
+          // Week-card dropdown is the authority on publish: it always wins
+          // over whatever value the slot/draft doc happened to carry, so a
+          // stale per-week draft can no longer silently revert the window.
+          noticeBoardShowBeforeMinutes: noticeBoardShowBeforeMinutes,
         );
         await _repository.saveEvent(updated);
         if (e.id.startsWith('draft_slot_') && e.id != publishedId) {

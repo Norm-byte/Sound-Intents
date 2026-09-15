@@ -19,7 +19,8 @@ class DashboardTab extends StatefulWidget {
   final Function(Event) onEditEvent;
   final Function(Event) onDeleteEvent;
   final Function(List<Event>)? onImportEvents;
-  final Function(int weekOffset, int? minuteFilter)? onPublishWeek;
+  final Function(int weekOffset, int? minuteFilter, [int? noticeBoardShowBeforeMinutes])?
+      onPublishWeek;
   final Function(int weekOffset, int? minuteFilter)? onClearWeek; // Updated callback
   final Function(int weekOffset, int? minuteFilter)?
       onClearTimeSlots; // Clear draft slots only
@@ -54,7 +55,29 @@ class _DashboardTabState extends State<DashboardTab> {
   // Key: weekOffset, Value: minute (0, 15, 30, 45)
   // NOTE: This is also used by the "Year Command Center"
   final Map<int, int> _weekViewOffset = {};
-  
+
+  // Noticeboard show-before window chosen per week card (minutes).
+  // Lazily seeded from the week's existing docs, then held in memory only —
+  // deliberately NOT persisted to SharedPreferences/local drafts, since a
+  // stale per-week local value is what caused the 6hr->1hr regression.
+  final Map<int, int> _weekNoticeMinutes = {};
+
+  // Fixed list only: keeps National slots below International's 1440 default
+  // so display-priority ordering can never invert.
+  static const List<int> _noticeMinutesOptions = [60, 180, 360, 720];
+
+  int _defaultNoticeMinutesForWeek(List<Event> weekEvents) {
+    final published = weekEvents.where((e) => e.isPublished).toList();
+    final source = published.isNotEmpty ? published : weekEvents;
+    if (source.isEmpty) return 360;
+    final values = source
+        .map((e) => e.noticeBoardShowBeforeMinutes)
+        .whereType<int>()
+        .toSet();
+    if (values.length == 1) return values.first;
+    return 360;
+  }
+
   // Dashboard Status Card State
   int _selectedNationalOffset = 0; // 0, 15, 30, 45
 
@@ -613,6 +636,11 @@ class _DashboardTabState extends State<DashboardTab> {
       }
     }).toList();
 
+    // Seed the notice-window dropdown once from existing docs; afterwards the
+    // admin's own selection wins until they change it again.
+    final int currentNoticeMinutes = _weekNoticeMinutes[weekOffset] ??=
+        _defaultNoticeMinutesForWeek(weekEvents);
+
     String slotStatusKey(DateTime start) =>
         '${start.year}-${start.month}-${start.day}-${start.hour}-${start.minute}';
 
@@ -844,11 +872,52 @@ class _DashboardTabState extends State<DashboardTab> {
                             },
                           ),
                           const SizedBox(width: 8),
+                          // Notice-window dropdown: applied to every slot in this
+                          // week/lane at publish time, replacing the per-slot editor
+                          // slider as the source of truth so a stale draft can no
+                          // longer silently override it.
+                          Tooltip(
+                            message: 'Noticeboard display window (applied on publish)',
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8),
+                              decoration: BoxDecoration(
+                                border: Border.all(color: Colors.grey.shade400),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: DropdownButtonHideUnderline(
+                                child: DropdownButton<int>(
+                                  value: currentNoticeMinutes,
+                                  isDense: true,
+                                  items: _noticeMinutesOptions
+                                      .map((m) => DropdownMenuItem(
+                                            value: m,
+                                            child: Text(
+                                              m < 60
+                                                  ? '${m}m'
+                                                  : (m % 60 == 0
+                                                      ? '${m ~/ 60}h'
+                                                      : '${m}m'),
+                                              style: const TextStyle(fontSize: 13),
+                                            ),
+                                          ))
+                                      .toList(),
+                                  onChanged: (value) {
+                                    if (value == null) return;
+                                    setState(() {
+                                      _weekNoticeMinutes[weekOffset] = value;
+                                    });
+                                  },
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
                           ElevatedButton(
                             onPressed: anyEventsInWeek
                                 ? () {
                               if (widget.onPublishWeek != null) {
-                                widget.onPublishWeek!(weekOffset, currentOffset);
+                                widget.onPublishWeek!(
+                                    weekOffset, currentOffset, currentNoticeMinutes);
                               }
                               final laneLabel = ':${currentOffset.toString().padLeft(2, '0')}';
                               final msg = anyDraftsInWeek
