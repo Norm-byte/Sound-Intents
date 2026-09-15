@@ -63,6 +63,7 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
     'chat_management': false,     // Chat Rooms
     'topics': false,
     'community': false,           // Community
+    'community_support': false,   // Community Support
     'monetization': false,        // Deals/Offers
     'system': false,              // System
     'notifications': false,
@@ -84,6 +85,7 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
     'chat_management': 'Chat Rooms',
     'topics':          'Topics',
     'community':       'Community',
+    'community_support': 'Community Support',
     'monetization':    'Deals / Offers',
     'system':          'System',
     'notifications':   'Notifications',

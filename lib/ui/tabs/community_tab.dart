@@ -3,6 +3,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 
+// Shared with CommunitySupportTab: both dropdowns read/write the same
+// app_config/community_settings.postRetentionDays field.
+const List<int> kPostRetentionDayOptions = [7, 14, 21, 30, 45, 60, 90];
+
 class CommunityTab extends StatefulWidget {
   final Function(String userId)? onUserSelected;
   const CommunityTab({super.key, this.onUserSelected});
@@ -104,6 +108,10 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
         .where((e) => e.isNotEmpty)
         .toList();
     final featuredKeywordsText = featuredKeywords.join(', ');
+    // Shared with the Community Support tab: same field, same value, so the
+    // two dropdowns can never drift apart.
+    final postRetentionDays =
+        ((data['postRetentionDays'] as num?)?.toInt() ?? 30).clamp(1, 365);
 
     if (!_featuredControlsHydrated || _lastFeaturedKeywordsText != featuredKeywordsText) {
       _featuredKeywordsController.text = featuredKeywordsText;
@@ -129,6 +137,36 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
             style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
           ),
           const SizedBox(height: 10),
+          Row(
+            children: [
+              const Icon(Icons.timer_outlined, size: 18, color: Colors.deepOrange),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'Post Retention (Live Feed + Support)',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                ),
+              ),
+              DropdownButton<int>(
+                value: kPostRetentionDayOptions.contains(postRetentionDays)
+                    ? postRetentionDays
+                    : kPostRetentionDayOptions.first,
+                items: kPostRetentionDayOptions
+                    .map((d) => DropdownMenuItem(value: d, child: Text('$d days')))
+                    .toList(),
+                onChanged: (value) {
+                  if (value == null) return;
+                  _saveCommunitySettings({'postRetentionDays': value});
+                },
+              ),
+            ],
+          ),
+          Text(
+            'Posts older than this are deleted automatically (paused for anything under active moderation). Same value applies in the Community Support tab.',
+            style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+          ),
+          const SizedBox(height: 10),
+          const Divider(height: 18),
           Row(
             children: [
               const Icon(Icons.swap_vert, size: 18, color: Colors.indigo),
@@ -714,8 +752,9 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
 
   Future<String> _applyModerationAction(
     Map<String, dynamic> item,
-    String contentAction,
-  ) async {
+    String contentAction, {
+    bool refreshRetention = false,
+  }) async {
     final targetKind = _safeText(item['targetKind']).toLowerCase();
     final targetId = _safeText(item['targetId']);
     final metadata = item['metadata'];
@@ -761,6 +800,7 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
         'isModerated': false,
         'moderationStatus': 'cleared',
         'moderatedAt': FieldValue.serverTimestamp(),
+        if (refreshRetention) 'retentionAnchorAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
       return 'Left content active: Community post retained';
     }
@@ -778,6 +818,7 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
           'isModerated': false,
           'moderationStatus': 'cleared',
           'moderatedAt': FieldValue.serverTimestamp(),
+          if (refreshRetention) 'retentionAnchorAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
         return 'Left content active: Community reply retained';
       }
@@ -831,6 +872,7 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
     required String decision,
     required String decisionNote,
     required String contentAction,
+    bool refreshRetention = false,
   }) async {
     final caseNumber = _caseNumberNow();
     final moderator = FirebaseAuth.instance.currentUser;
@@ -839,7 +881,11 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
       fallback: 'admin_operator',
     );
 
-    final actionSummary = await _applyModerationAction(item, contentAction);
+    final actionSummary = await _applyModerationAction(
+      item,
+      contentAction,
+      refreshRetention: refreshRetention,
+    );
     final offenderUserId = _offendingUserIdForItem(item);
     var notificationSent = false;
     String? notificationError;
@@ -910,6 +956,7 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
   Future<void> _showDecisionDialog(DocumentSnapshot queueDoc, Map<String, dynamic> item) async {
     final noteController = TextEditingController();
     String contentAction = 'remove';
+    bool refreshRetention = false;
     try {
       await showDialog<void>(
         context: context,
@@ -969,6 +1016,21 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                           setDialogState(() => contentAction = selection.first);
                         },
                       ),
+                      if (contentAction == 'leave') ...[
+                        const SizedBox(height: 8),
+                        CheckboxListTile(
+                          value: refreshRetention,
+                          onChanged: (value) =>
+                              setDialogState(() => refreshRetention = value ?? false),
+                          controlAffinity: ListTileControlAffinity.leading,
+                          contentPadding: EdgeInsets.zero,
+                          dense: true,
+                          title: const Text(
+                            'Give this post a fresh retention period from today',
+                            style: TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -988,6 +1050,7 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                                   decision: 'disagree',
                                   decisionNote: noteController.text.trim(),
                                   contentAction: contentAction,
+                                  refreshRetention: refreshRetention,
                                 );
                               } catch (e) {
                                 if (!mounted) return;
@@ -1013,6 +1076,7 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                                   decision: 'agree',
                                   decisionNote: noteController.text.trim(),
                                   contentAction: contentAction,
+                                  refreshRetention: refreshRetention,
                                 );
                               } catch (e) {
                                 if (!mounted) return;

@@ -26,6 +26,7 @@ import 'ui/tabs/legal_tab.dart';
 import 'ui/tabs/documentation_tab.dart'; // Added for Operators Manual
 import 'ui/tabs/chat_management_tab.dart';
 import 'ui/tabs/community_tab.dart';
+import 'ui/tabs/community_support_tab.dart';
 import 'ui/tabs/monetization_tab.dart';
 import 'ui/tabs/app_content_tab.dart';
 import 'ui/tabs/event_stats_tab.dart';
@@ -251,6 +252,7 @@ class _AdminHomePageState extends State<AdminHomePage>
       Tab(icon: Icon(Icons.chat), text: 'Chat Rooms'),
       Tab(icon: Icon(Icons.lightbulb), text: 'Topics'),
       Tab(icon: Icon(Icons.forum), text: 'Community'),
+      Tab(icon: Icon(Icons.volunteer_activism), text: 'Community Support'),
       Tab(icon: Icon(Icons.monetization_on), text: 'Deals/Offers'),
       Tab(icon: Icon(Icons.settings), text: 'System'),
       Tab(icon: Icon(Icons.notifications_active), text: 'Notifications'),
@@ -375,7 +377,7 @@ class _AdminHomePageState extends State<AdminHomePage>
               _initialModerationUserId = userId;
             });
             if (_hasAccess('system')) {
-              _tabController.animateTo(11);
+              _tabController.animateTo(12);
             } else {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('Access Denied')),
@@ -385,10 +387,17 @@ class _AdminHomePageState extends State<AdminHomePage>
         ),
       ),
 
-      // 11. Monetization / Deals
+      // 11. Community Support
+      buildTab(
+        'community_support',
+        'Community Support',
+        const CommunitySupportTab(),
+      ),
+
+      // 12. Monetization / Deals
       buildTab('monetization', 'Deals', const MonetizationTab()),
 
-      // 12. System
+      // 13. System
       buildTab(
         'system',
         'System',
