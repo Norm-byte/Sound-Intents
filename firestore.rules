@@ -361,6 +361,10 @@ service cloud.firestore {
         allow read, write: if true;
       }
 
+      match /support_intents/{intentId} {
+        allow read, write: if true;
+      }
+
       match /joined_groups/{groupId} {
         allow read, write: if true;
       }

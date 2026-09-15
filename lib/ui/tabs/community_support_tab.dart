@@ -3,9 +3,12 @@ import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 import 'community_tab.dart' show kPostRetentionDayOptions;
 import '../../services/storage_service.dart';
+import '../../services/translation_service.dart';
+import '../../widgets/translatable_text.dart';
 
 // Built-in icon options. Material has no literal "praying hands" glyph, so
 // this starts on the closest stock icon; admin can upload real artwork via
@@ -68,6 +71,7 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
   @override
   void initState() {
     super.initState();
+    TranslationService.instance.init();
     _load();
   }
 
@@ -574,6 +578,152 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
               label: Text(_isSaving ? 'Saving...' : 'Save Settings'),
             ),
             const SizedBox(height: 24),
+            _buildSupportRequestsSection(),
+            const SizedBox(height: 24),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSupportRequestsSection() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Text('Support Requests (Live)', style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+                ValueListenableBuilder<bool>(
+                  valueListenable: TranslationService.instance.enabledNotifier,
+                  builder: (context, enabled, _) {
+                    return IconButton(
+                      tooltip: enabled ? 'Disable Translation' : 'Enable Translation',
+                      onPressed: () => TranslationService.instance.setEnabled(!enabled),
+                      icon: Icon(Icons.translate, color: enabled ? Colors.green : Colors.grey),
+                    );
+                  },
+                ),
+              ],
+            ),
+            const Text(
+              'Same facilities as the Live Feed tab: delete, suspend, send to moderation.',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+            const SizedBox(height: 8),
+            StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: FirebaseFirestore.instance
+                  .collection('community_posts')
+                  .where('isSupportRequest', isEqualTo: true)
+                  .orderBy('timestamp', descending: true)
+                  .snapshots(),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Center(child: CircularProgressIndicator()),
+                  );
+                }
+                final docs = snapshot.data?.docs ?? [];
+                if (docs.isEmpty) {
+                  return const Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Text('No support requests yet.', style: TextStyle(color: Colors.grey)),
+                  );
+                }
+                return ListView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: docs.length,
+                  itemBuilder: (context, index) {
+                    final doc = docs[index];
+                    final data = doc.data();
+                    final content = (data['content'] as String?) ?? '';
+                    final userName = (data['userName'] as String?) ?? 'Member';
+                    final userId = (data['userId'] as String?) ?? '';
+                    final timestamp = (data['timestamp'] as Timestamp?)?.toDate();
+                    final supportCount = (data['supportTapCount'] as num?)?.toInt() ?? 0;
+
+                    return Card(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      child: ListTile(
+                        title: Row(
+                          children: [
+                            Text(userName, style: const TextStyle(fontWeight: FontWeight.bold)),
+                            const SizedBox(width: 8),
+                            if (timestamp != null)
+                              Text(
+                                DateFormat('MMM d, h:mm a').format(timestamp),
+                                style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+                              ),
+                          ],
+                        ),
+                        subtitle: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const SizedBox(height: 4),
+                            TranslatableText(content),
+                            const SizedBox(height: 4),
+                            Text('Support taps: $supportCount', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                          ],
+                        ),
+                        trailing: PopupMenuButton<String>(
+                          onSelected: (value) async {
+                            if (value == 'delete') {
+                              await doc.reference.delete();
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Support request deleted')),
+                                );
+                              }
+                            } else if (value == 'moderate') {
+                              await FirebaseFirestore.instance.collection('moderation_queue').add({
+                                'content': content,
+                                'userId': userId,
+                                'userName': userName,
+                                'source': 'Community Support (Admin Flagged)',
+                                'type': 'admin_flag',
+                                'targetKind': 'community_post',
+                                'targetId': doc.id,
+                                'timestamp': FieldValue.serverTimestamp(),
+                                'reason': 'Flagged by admin from Community Support tab',
+                                'status': 'pending',
+                              });
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Sent to moderation')),
+                                );
+                              }
+                            } else if (value == 'suspend' && userId.isNotEmpty) {
+                              await FirebaseFirestore.instance.collection('users').doc(userId).update({
+                                'status': 'suspended',
+                                'suspensionExpiry': null,
+                                'lastAdminAction': 'Suspended from Community Support',
+                                'lastAdminActionDate': FieldValue.serverTimestamp(),
+                              });
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('User $userName suspended.')),
+                                );
+                              }
+                            }
+                          },
+                          itemBuilder: (context) => const [
+                            PopupMenuItem(value: 'moderate', child: Text('Send to Moderation')),
+                            PopupMenuItem(value: 'delete', child: Text('Delete Post')),
+                            PopupMenuItem(value: 'suspend', child: Text('Suspend User')),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
           ],
         ),
       ),
