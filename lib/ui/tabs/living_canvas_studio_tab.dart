@@ -27,6 +27,8 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   bool _showPin = false;
   bool _showGoodometer = false;
   String _canvasScope = 'national';
+  String _selectedTimeZoneLabel = 'UTC';
+  int _selectedTimeZoneOffset = 0;
   final _title = TextEditingController(text: 'Living Canvas');
   final _durationSeconds = TextEditingController(text: '30');
   final _mediaUrl = TextEditingController();
@@ -39,12 +41,109 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   Map<String, Map<String, dynamic>> _drafts = const {};
   Map<String, Map<String, dynamic>> _published = const {};
 
+  final List<Map<String, dynamic>> _timeZones = const [
+    {'label': 'UTC', 'offset': 0},
+    {'label': 'London (Auto DST)', 'offset': 0},
+    {'label': 'Paris (Auto DST)', 'offset': 1},
+    {'label': 'New York (Auto DST)', 'offset': -5},
+    {'label': 'Los Angeles (Auto DST)', 'offset': -8},
+    {'label': 'Tokyo (JST)', 'offset': 9},
+    {'label': 'Sydney (Auto DST)', 'offset': 10},
+  ];
+
   String get _dateKey => DateFormat('yyyyMMdd').format(_date);
   DateTime get _weekStart => _date.subtract(Duration(days: _date.weekday - DateTime.monday));
   DateTime get _weekEndExclusive => _weekStart.add(const Duration(days: 7));
   String get _weekKey => DateFormat('yyyyMMdd').format(_weekStart);
   String _slotId(int hour, int lane) => 'lc_${_canvasScope}_${hour.toString().padLeft(2, '0')}${lane.toString().padLeft(2, '0')}_$_dateKey';
   String get _selectedSlotId => _slotId(_hour, _lane);
+
+  String _normalizeTimeZoneLabel(String? rawLabel) {
+    final label = (rawLabel ?? 'UTC').trim();
+    switch (label) {
+      case 'London (GMT)':
+      case 'London (BST)':
+      case 'London (Auto DST)':
+        return 'London (Auto DST)';
+      case 'Paris (CET)':
+      case 'Paris (CEST)':
+      case 'Paris (Auto DST)':
+        return 'Paris (Auto DST)';
+      case 'New York (EST)':
+      case 'New York (EDT)':
+      case 'New York (Auto DST)':
+        return 'New York (Auto DST)';
+      case 'Los Angeles (PST)':
+      case 'Los Angeles (PDT)':
+      case 'Los Angeles (Auto DST)':
+        return 'Los Angeles (Auto DST)';
+      case 'Sydney (AEST)':
+      case 'Sydney (AEDT)':
+      case 'Sydney (Auto DST)':
+        return 'Sydney (Auto DST)';
+      default:
+        return label;
+    }
+  }
+
+  DateTime _lastSundayOfMonth(int year, int month) {
+    final firstOfNextMonth = month == 12
+        ? DateTime(year + 1, 1, 1)
+        : DateTime(year, month + 1, 1);
+    final lastOfMonth = firstOfNextMonth.subtract(const Duration(days: 1));
+    return lastOfMonth.subtract(Duration(days: lastOfMonth.weekday % 7));
+  }
+
+  DateTime _nthSundayOfMonth(int year, int month, int n) {
+    final firstDay = DateTime(year, month, 1);
+    final daysUntilSunday = (DateTime.sunday - firstDay.weekday + 7) % 7;
+    return firstDay.add(Duration(days: daysUntilSunday + ((n - 1) * 7)));
+  }
+
+  bool _isEuropeDst(DateTime date) {
+    final start = _lastSundayOfMonth(date.year, 3);
+    final end = _lastSundayOfMonth(date.year, 10);
+    final d = DateTime(date.year, date.month, date.day);
+    return !d.isBefore(start) && d.isBefore(end);
+  }
+
+  bool _isUsDst(DateTime date) {
+    final start = _nthSundayOfMonth(date.year, 3, 2);
+    final end = _nthSundayOfMonth(date.year, 11, 1);
+    final d = DateTime(date.year, date.month, date.day);
+    return !d.isBefore(start) && d.isBefore(end);
+  }
+
+  bool _isSydneyDst(DateTime date) {
+    final start = _nthSundayOfMonth(date.year, 10, 1);
+    final end = _nthSundayOfMonth(date.year, 4, 1);
+    final d = DateTime(date.year, date.month, date.day);
+    if (d.month >= 10) return !d.isBefore(start);
+    if (d.month <= 4) return d.isBefore(end);
+    return false;
+  }
+
+  int _offsetForZone(String label, DateTime date) {
+    final normalized = _normalizeTimeZoneLabel(label).toLowerCase();
+    if (normalized == 'utc') return 0;
+    if (normalized.contains('tokyo')) return 9;
+    if (normalized.contains('london')) return _isEuropeDst(date) ? 1 : 0;
+    if (normalized.contains('paris')) return _isEuropeDst(date) ? 2 : 1;
+    if (normalized.contains('new york')) return _isUsDst(date) ? -4 : -5;
+    if (normalized.contains('los angeles')) return _isUsDst(date) ? -7 : -8;
+    if (normalized.contains('sydney')) return _isSydneyDst(date) ? 11 : 10;
+    return 0;
+  }
+
+  DateTime _slotStartUtc() {
+    if (_canvasScope == 'international') {
+      final originDateTime = DateTime.utc(_date.year, _date.month, _date.day, _hour, _lane);
+      return originDateTime.subtract(Duration(hours: _selectedTimeZoneOffset));
+    }
+    return DateTime(_date.year, _date.month, _date.day, _hour, _lane).toUtc();
+  }
+
+  String _formatUtcPreview(DateTime dt) => DateFormat('yyyy-MM-dd HH:mm').format(dt);
 
   @override
   void initState() {
@@ -108,6 +207,8 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
     _showPin = data['showPinCard'] == true;
     _showGoodometer = data['showGoodometerGraph'] == true;
     _canvasScope = (data['canvasScope'] as String?) ?? _canvasScope;
+    _selectedTimeZoneLabel = _normalizeTimeZoneLabel(data['originTimeZone'] as String?);
+    _selectedTimeZoneOffset = _offsetForZone(_selectedTimeZoneLabel, _date);
     _title.text = (data['title'] as String?) ?? 'Living Canvas';
     _durationSeconds.text = ((data['durationSeconds'] as num?)?.toInt() ?? (data['durationMinutes'] as num?)?.toInt() ?? 30).toString();
     _mediaUrl.text = (data['mediaUrl'] as String?) ?? (data['backgroundImageUrl'] as String?) ?? (data['backgroundVideoUrl'] as String?) ?? '';
@@ -120,13 +221,18 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   }
 
   Map<String, dynamic> _data({required bool published}) {
-    final start = DateTime(_date.year, _date.month, _date.day, _hour, _lane).toUtc();
+    final start = _slotStartUtc();
     return {
       'slotId': _selectedSlotId,
       'canvasScope': _canvasScope,
       'dateKey': _dateKey,
       'weekKey': _weekKey,
       'startTimeUTC': start.toIso8601String(),
+        'originTimeZone': _canvasScope == 'international' ? _selectedTimeZoneLabel : null,
+        'originTimeZoneOffset': _canvasScope == 'international' ? _selectedTimeZoneOffset : null,
+        'originLocalDateTime': _canvasScope == 'international'
+          ? DateTime.utc(_date.year, _date.month, _date.day, _hour, _lane).toIso8601String()
+          : null,
       'hour': _hour,
       'laneMinute': _lane,
       'durationSeconds': (int.tryParse(_durationSeconds.text.trim()) ?? 30).clamp(1, 3600),
@@ -472,6 +578,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
             ]),
             const SizedBox(height: 10),
             Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text('Mode:'),
                 const SizedBox(width: 8),
@@ -482,14 +589,66 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
                   ],
                   selected: {_canvasScope},
                   onSelectionChanged: (v) async {
-                    setState(() => _canvasScope = v.first);
+                    setState(() {
+                      _canvasScope = v.first;
+                      _selectedTimeZoneOffset = _offsetForZone(_selectedTimeZoneLabel, _date);
+                    });
                     await _loadSlots();
                     _loadSelectedSlot();
                     if (mounted) setState(() {});
                   },
                 ),
+                if (_canvasScope == 'international') ...[
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      isExpanded: true,
+                      initialValue: _selectedTimeZoneLabel,
+                      decoration: const InputDecoration(
+                        labelText: 'Origin Time Zone / Country',
+                        isDense: true,
+                      ),
+                      items: _timeZones
+                          .map(
+                            (tz) => DropdownMenuItem<String>(
+                              value: tz['label'] as String,
+                              child: Text((tz['label'] as String), overflow: TextOverflow.ellipsis),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setState(() {
+                          _selectedTimeZoneLabel = _normalizeTimeZoneLabel(value);
+                          _selectedTimeZoneOffset = _offsetForZone(_selectedTimeZoneLabel, _date);
+                        });
+                      },
+                    ),
+                  ),
+                ],
               ],
             ),
+            if (_canvasScope == 'international') ...[
+              const SizedBox(height: 8),
+              Builder(builder: (context) {
+                final utcDateTime = _slotStartUtc();
+                final londonLocal = utcDateTime.add(Duration(hours: _offsetForZone('London (Auto DST)', _date)));
+                final parisLocal = utcDateTime.add(Duration(hours: _offsetForZone('Paris (Auto DST)', _date)));
+                return Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.blue.shade100),
+                  ),
+                  child: Text(
+                    'UTC stored: ${_formatUtcPreview(utcDateTime)}  |  UK view: ${_formatUtcPreview(londonLocal)}  |  Paris view: ${_formatUtcPreview(parisLocal)}',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                );
+              }),
+            ],
             const SizedBox(height: 10),
             SegmentedButton<int>(
               segments: const [ButtonSegment(value: 0, label: Text(':00')), ButtonSegment(value: 15, label: Text(':15')), ButtonSegment(value: 30, label: Text(':30')), ButtonSegment(value: 45, label: Text(':45'))],
