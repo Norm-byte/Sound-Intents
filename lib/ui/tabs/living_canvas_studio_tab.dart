@@ -388,8 +388,84 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
         child: Padding(
           padding: const EdgeInsets.all(14),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              margin: const EdgeInsets.only(bottom: 12),
+              decoration: BoxDecoration(
+                color: _globalThumbprintModeActive
+                    ? Colors.green.withValues(alpha: 0.08)
+                    : Colors.grey.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: _globalThumbprintModeActive
+                      ? Colors.green.shade300
+                      : Colors.grey.shade300,
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    _globalThumbprintModeActive
+                        ? Icons.fingerprint
+                        : Icons.pause_circle_outline,
+                    color: _globalThumbprintModeActive
+                        ? Colors.green.shade700
+                        : Colors.grey.shade700,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _globalThumbprintModeActive
+                              ? 'Living Canvas / Thumbprint Mode is ACTIVE'
+                              : 'Living Canvas / Thumbprint Mode is OFF',
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        const Text(
+                          'When off, the user app keeps the current stable National/International event experience.',
+                          style: TextStyle(fontSize: 12, color: Colors.black54),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Switch(
+                    value: _globalThumbprintModeActive,
+                    onChanged: (v) async {
+                      setState(() => _globalThumbprintModeActive = v);
+                      await FirebaseFirestore.instance.collection('app_config').doc('living_canvas').set({
+                        'isThumbprintModeActive': v,
+                        'updatedAt': FieldValue.serverTimestamp(),
+                      }, SetOptions(merge: true));
+                    },
+                  ),
+                ],
+              ),
+            ),
             Row(children: [
               Expanded(child: Text('Living Canvas ${_canvasScope == 'international' ? 'International' : 'National'} week: ${DateFormat('MMM d').format(_weekStart)} - ${DateFormat('MMM d').format(_weekEndExclusive.subtract(const Duration(days: 1)))}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: _canvasScope == 'international'
+                      ? Colors.purple.withValues(alpha: 0.12)
+                      : Colors.indigo.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  _canvasScope == 'international' ? 'INTERNATIONAL' : 'NATIONAL',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    color: _canvasScope == 'international'
+                        ? Colors.purple.shade800
+                        : Colors.indigo.shade800,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
               OutlinedButton.icon(onPressed: _pickDate, icon: const Icon(Icons.calendar_month), label: const Text('Pick date')),
               const SizedBox(width: 8),
               ElevatedButton.icon(onPressed: _publishing ? null : _publishWeek, icon: _publishing ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.publish), label: Text(_publishing ? 'Publishing...' : 'Publish week')),
@@ -460,19 +536,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
           padding: const EdgeInsets.all(16),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('Editing ${_canvasScope == 'international' ? 'International' : 'National'} ${DateFormat('MMM d').format(_date)} ${_hour.toString().padLeft(2, '0')}:${_lane.toString().padLeft(2, '0')}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Activate Living Canvas / Thumbprint Mode globally'),
-              subtitle: const Text('When off, user app keeps the current stable event experience.'),
-              value: _globalThumbprintModeActive,
-              onChanged: (v) async {
-                setState(() => _globalThumbprintModeActive = v);
-                await FirebaseFirestore.instance.collection('app_config').doc('living_canvas').set({
-                  'isThumbprintModeActive': v,
-                  'updatedAt': FieldValue.serverTimestamp(),
-                }, SetOptions(merge: true));
-              },
-            ),
+            const SizedBox(height: 8),
             TextField(controller: _title, decoration: const InputDecoration(labelText: 'Canvas title')),
             TextField(controller: _durationSeconds, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Duration (Seconds)', helperText: 'Enter exact seconds (e.g. 10), matching the current event editors')),
             Row(children: [
@@ -548,7 +612,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
               borderRadius: BorderRadius.circular(20),
               child: Stack(children: [
                 if (isVideo) const Center(child: Icon(Icons.movie_filter, color: Colors.white38, size: 72)),
-                Positioned(top: 18, left: 16, child: _previewPill('National • 128 live')),
+                Positioned(top: 18, left: 16, child: _previewPill('${_canvasScope == 'international' ? 'World' : 'National'} • 128 live')),
                 Positioned(top: 18, right: 16, child: _previewPill('Exit Event')),
                 Positioned(top: 54, left: 18, right: 18, child: Column(children: [Text(_title.text.trim().isEmpty ? 'Living Canvas' : _title.text.trim(), textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)), const SizedBox(height: 6), Text('${DateFormat('EEE MMM d').format(_date)} • ${_hour.toString().padLeft(2, '0')}:${_lane.toString().padLeft(2, '0')}', style: const TextStyle(color: Colors.white70, fontSize: 12))])),
                 if (_showPin && _pinText.text.trim().isNotEmpty) Positioned(left: 18, right: 18, top: 96, child: Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.45), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.white24)), child: Text(_pinText.text.trim(), style: const TextStyle(color: Colors.white70, fontSize: 12)))),
