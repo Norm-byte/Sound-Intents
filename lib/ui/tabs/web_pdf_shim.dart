@@ -15,9 +15,7 @@ void registerPdfViewFactory(String viewType, String url) {
       ..style.border = 'none'
       ..style.width = '100%'
       ..style.height = '100%'
-      ..style.overflow = 'auto'
       ..style.display = 'block'; // Ensure block display to fill container
-    iframe.setAttribute('scrolling', 'yes');
     return iframe;
   });
 }
