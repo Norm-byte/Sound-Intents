@@ -337,7 +337,7 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
       registerVideoViewFactory(viewId, url);
       return HtmlElementView(viewType: viewId);
     }
-    return SizedBox.expand(child: HtmlElementView(viewType: viewId));
+    return HtmlElementView(viewType: viewId);
   }
 
   String? _youtubeId(String url) {
