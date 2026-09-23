@@ -344,6 +344,18 @@ service cloud.firestore {
       allow write: if isActiveAdmin() || isSignedIn();
     }
 
+    // Additive v69 Living Canvas slots. Separate from legacy event documents
+    // so the whole feature can be rolled back by ignoring these collections.
+    match /draft_living_canvas_slots/{slotId} {
+      allow read: if true;
+      allow write: if isActiveAdmin() || isSignedIn();
+    }
+
+    match /living_canvas_slots/{slotId} {
+      allow read: if true;
+      allow write: if isActiveAdmin() || isSignedIn();
+    }
+
     // Users collection
     match /users/{userId} {
       // TEMPORARY: Allow public access because User App does not use Firebase Auth yet.

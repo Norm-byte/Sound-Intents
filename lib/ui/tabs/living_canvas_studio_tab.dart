@@ -61,10 +61,19 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
 
   Future<void> _loadAll() async {
     setState(() => _loading = true);
-    await _loadDefaults();
-    await _loadSlots();
-    _loadSelectedSlot();
-    if (mounted) setState(() => _loading = false);
+    try {
+      await _loadDefaults();
+      await _loadSlots();
+      _loadSelectedSlot();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not load Living Canvas data: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   Future<void> _loadDefaults() async {
