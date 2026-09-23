@@ -307,6 +307,7 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
     final isYoutube = lower.contains('youtube') || lower.contains('youtu.be');
     final isVideo = isYoutube || lower.endsWith('.mp4') || lower.endsWith('.mov') || lower.endsWith('.webm');
     final isPdf = pathOnly.endsWith('.pdf');
+    final isPortraitYoutube = isYoutube && Uri.tryParse(url)?.pathSegments.contains('shorts') == true;
     final viewId = 'noticeboard-learn-more-inline-${url.hashCode}';
     if (isYoutube) {
       final id = _youtubeId(url);
@@ -325,7 +326,7 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
     if (isYoutube) {
       return Center(
         child: AspectRatio(
-          aspectRatio: 16 / 9,
+          aspectRatio: isPortraitYoutube ? 9 / 16 : 16 / 9,
           child: HtmlElementView(viewType: viewId),
         ),
       );
