@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../../models/media_item.dart';
 import '../../services/media_library_service.dart';
 import '../widgets/video_widgets.dart';
+import 'web_pdf_shim.dart' if (dart.library.io) 'web_pdf_shim_stub.dart';
 
 class NoticeboardStudioTab extends StatefulWidget {
   const NoticeboardStudioTab({super.key});
@@ -36,11 +37,33 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
   @override
   void initState() {
     super.initState();
+    for (final controller in [
+      _titleController,
+      _bodyController,
+      _imageUrlController,
+      _learnMoreLabelController,
+      _learnMoreContentUrlController,
+    ]) {
+      controller.addListener(_refreshPreview);
+    }
     _load();
+  }
+
+  void _refreshPreview() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    for (final controller in [
+      _titleController,
+      _bodyController,
+      _imageUrlController,
+      _learnMoreLabelController,
+      _learnMoreContentUrlController,
+    ]) {
+      controller.removeListener(_refreshPreview);
+    }
     _titleController.dispose();
     _bodyController.dispose();
     _imageUrlController.dispose();
@@ -267,6 +290,10 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
     final isImage = lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.gif') || lower.endsWith('.webp');
     final isYoutube = lower.contains('youtube') || lower.contains('youtu.be');
     final isVideo = isYoutube || lower.endsWith('.mp4') || lower.endsWith('.mov') || lower.endsWith('.webm');
+    final viewId = 'noticeboard-learn-more-${url.hashCode}-${DateTime.now().millisecondsSinceEpoch}';
+    if (!isImage && !isVideo) {
+      registerPdfViewFactory(viewId, url);
+    }
     await showDialog<void>(
       context: context,
       builder: (context) => Dialog(
@@ -294,7 +321,7 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
                         ? InteractiveViewer(child: Image.network(url, fit: BoxFit.contain))
                         : isVideo
                             ? VideoGridItem(url: url, type: isYoutube ? 'youtube' : 'upload', enablePreview: true, autoPlay: false)
-                            : Center(child: SelectableText(url)),
+                        : HtmlElementView(viewType: viewId),
                   ),
                 ),
               ),
@@ -415,7 +442,7 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
               Row(children: [
                 Expanded(child: TextField(controller: _learnMoreContentUrlController, decoration: const InputDecoration(labelText: 'Learn More content URL'))),
                 const SizedBox(width: 8),
-                OutlinedButton.icon(onPressed: () => _pickMediaUrl(allowedTypes: {'image', 'video', 'youtube', 'pdf', 'other'}, target: _learnMoreContentUrlController), icon: const Icon(Icons.perm_media), label: const Text('Media Library')),
+                OutlinedButton.icon(onPressed: () => _pickMediaUrl(allowedTypes: {'image', 'video', 'youtube', 'document', 'other'}, target: _learnMoreContentUrlController), icon: const Icon(Icons.perm_media), label: const Text('Media Library')),
                 IconButton(onPressed: () => setState(() => _learnMoreContentUrlController.clear()), icon: const Icon(Icons.clear), tooltip: 'Remove Learn More'),
                 IconButton(onPressed: _testLearnMore, icon: const Icon(Icons.open_in_browser), tooltip: 'Test'),
               ]),
