@@ -290,16 +290,18 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
     final isImage = lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.gif') || lower.endsWith('.webp');
     final isYoutube = lower.contains('youtube') || lower.contains('youtu.be');
     final isVideo = isYoutube || lower.endsWith('.mp4') || lower.endsWith('.mov') || lower.endsWith('.webm');
+    final isPdf = lower.contains('.pdf');
     final viewId = 'noticeboard-learn-more-${url.hashCode}-${DateTime.now().millisecondsSinceEpoch}';
     if (!isImage && !isVideo) {
-      registerPdfViewFactory(viewId, url);
+      registerPdfViewFactory(viewId, isPdf ? '$url#toolbar=0&navpanes=0' : url);
     }
     await showDialog<void>(
       context: context,
       builder: (context) => Dialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
         child: SizedBox(
-          width: 520,
-          height: 680,
+          width: 760,
+          height: 840,
           child: Column(
             children: [
               Padding(
@@ -313,16 +315,16 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
               ),
               const Divider(height: 1),
               Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: isImage
-                        ? InteractiveViewer(child: Image.network(url, fit: BoxFit.contain))
-                        : isVideo
-                            ? VideoGridItem(url: url, type: isYoutube ? 'youtube' : 'upload', enablePreview: true, autoPlay: false)
-                        : HtmlElementView(viewType: viewId),
-                  ),
+                child: ClipRRect(
+                  borderRadius: const BorderRadius.vertical(bottom: Radius.circular(4)),
+                  child: isImage
+                      ? Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: InteractiveViewer(child: Image.network(url, fit: BoxFit.contain)),
+                        )
+                      : isVideo
+                          ? VideoGridItem(url: url, type: isYoutube ? 'youtube' : 'upload', enablePreview: true, autoPlay: false)
+                          : HtmlElementView(viewType: viewId),
                 ),
               ),
             ],
