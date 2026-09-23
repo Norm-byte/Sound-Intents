@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 
 import '../../models/media_item.dart';
 import '../../services/media_library_service.dart';
+import '../widgets/video_widgets.dart';
 
 class LivingCanvasStudioTab extends StatefulWidget {
   const LivingCanvasStudioTab({super.key});
@@ -25,6 +26,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
 
   bool _showPin = false;
   bool _showGoodometer = false;
+  String _canvasScope = 'national';
   final _title = TextEditingController(text: 'Living Canvas');
   final _durationSeconds = TextEditingController(text: '30');
   final _mediaUrl = TextEditingController();
@@ -38,7 +40,10 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   Map<String, Map<String, dynamic>> _published = const {};
 
   String get _dateKey => DateFormat('yyyyMMdd').format(_date);
-  String _slotId(int hour, int lane) => 'lc_${hour.toString().padLeft(2, '0')}${lane.toString().padLeft(2, '0')}_$_dateKey';
+  DateTime get _weekStart => _date.subtract(Duration(days: _date.weekday - DateTime.monday));
+  DateTime get _weekEndExclusive => _weekStart.add(const Duration(days: 7));
+  String get _weekKey => DateFormat('yyyyMMdd').format(_weekStart);
+  String _slotId(int hour, int lane) => 'lc_${_canvasScope}_${hour.toString().padLeft(2, '0')}${lane.toString().padLeft(2, '0')}_$_dateKey';
   String get _selectedSlotId => _slotId(_hour, _lane);
 
   @override
@@ -80,8 +85,16 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   }
 
   Future<void> _loadSlots() async {
-    final drafts = await FirebaseFirestore.instance.collection('draft_living_canvas_slots').where('dateKey', isEqualTo: _dateKey).get();
-    final published = await FirebaseFirestore.instance.collection('living_canvas_slots').where('dateKey', isEqualTo: _dateKey).get();
+    final drafts = await FirebaseFirestore.instance
+      .collection('draft_living_canvas_slots')
+      .where('dateKey', isEqualTo: _dateKey)
+      .where('canvasScope', isEqualTo: _canvasScope)
+      .get();
+    final published = await FirebaseFirestore.instance
+      .collection('living_canvas_slots')
+      .where('dateKey', isEqualTo: _dateKey)
+      .where('canvasScope', isEqualTo: _canvasScope)
+      .get();
     _drafts = {for (final d in drafts.docs) d.id: d.data()};
     _published = {for (final d in published.docs) d.id: d.data()};
   }
@@ -94,6 +107,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   void _apply(Map<String, dynamic> data) {
     _showPin = data['showPinCard'] == true;
     _showGoodometer = data['showGoodometerGraph'] == true;
+    _canvasScope = (data['canvasScope'] as String?) ?? _canvasScope;
     _title.text = (data['title'] as String?) ?? 'Living Canvas';
     _durationSeconds.text = ((data['durationSeconds'] as num?)?.toInt() ?? (data['durationMinutes'] as num?)?.toInt() ?? 30).toString();
     _mediaUrl.text = (data['mediaUrl'] as String?) ?? (data['backgroundImageUrl'] as String?) ?? (data['backgroundVideoUrl'] as String?) ?? '';
@@ -109,7 +123,9 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
     final start = DateTime(_date.year, _date.month, _date.day, _hour, _lane).toUtc();
     return {
       'slotId': _selectedSlotId,
+      'canvasScope': _canvasScope,
       'dateKey': _dateKey,
+      'weekKey': _weekKey,
       'startTimeUTC': start.toIso8601String(),
       'hour': _hour,
       'laneMinute': _lane,
@@ -145,7 +161,9 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   Future<void> _saveDefaults({bool showSnack = true}) async {
     final data = Map<String, dynamic>.from(_data(published: false))
       ..remove('slotId')
+      ..remove('canvasScope')
       ..remove('dateKey')
+      ..remove('weekKey')
       ..remove('startTimeUTC')
       ..remove('hour')
       ..remove('laneMinute')
@@ -156,9 +174,13 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
     }
   }
 
-  Future<void> _publishDate() async {
+  Future<void> _publishWeek() async {
     setState(() => _publishing = true);
-    final snap = await FirebaseFirestore.instance.collection('draft_living_canvas_slots').where('dateKey', isEqualTo: _dateKey).get();
+    final snap = await FirebaseFirestore.instance
+        .collection('draft_living_canvas_slots')
+        .where('weekKey', isEqualTo: _weekKey)
+        .where('canvasScope', isEqualTo: _canvasScope)
+        .get();
     final batch = FirebaseFirestore.instance.batch();
     for (final doc in snap.docs) {
       final data = Map<String, dynamic>.from(doc.data())..['published'] = true;
@@ -168,7 +190,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
     await _loadSlots();
     if (mounted) {
       setState(() => _publishing = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Published ${snap.docs.length} slot${snap.docs.length == 1 ? '' : 's'}')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Published ${snap.docs.length} ${_canvasScope == 'international' ? 'International' : 'National'} slot${snap.docs.length == 1 ? '' : 's'} for week of ${DateFormat('MMM d').format(_weekStart)}')));
     }
   }
 
@@ -187,13 +209,15 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   }
 
   Future<void> _pickMediaUrl({required Set<String> allowedTypes, required TextEditingController target}) async {
+    String? selectedSection;
     final selected = await showDialog<MediaItem>(
       context: context,
-      builder: (context) {
-        return Dialog(
-          child: SizedBox(
-            width: 720,
-            height: 560,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return Dialog(
+            child: SizedBox(
+              width: 900,
+              height: 700,
             child: Column(
               children: [
                 Padding(
@@ -202,8 +226,36 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
                     children: [
                       Expanded(
                         child: Text(
-                          allowedTypes.contains('audio') ? 'Select Event Chime / Audio' : 'Select Background Media',
+                          allowedTypes.contains('audio')
+                              ? 'Select Event Chime / Audio'
+                              : 'Select Background Media',
                           style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                      ),
+                      SizedBox(
+                        width: 260,
+                        child: StreamBuilder<List<MediaItem>>(
+                          stream: _mediaLibrary.getMediaStream(),
+                          builder: (context, snapshot) {
+                            if (!snapshot.hasData) {
+                              return const LinearProgressIndicator();
+                            }
+                            final sections = snapshot.data!
+                                .map((item) => item.section)
+                                .toSet()
+                                .toList()
+                              ..sort();
+                            return DropdownButton<String>(
+                              value: selectedSection,
+                              hint: const Text('Select Category'),
+                              isExpanded: true,
+                              items: [
+                                const DropdownMenuItem(value: 'All', child: Text('All Categories')),
+                                ...sections.map((section) => DropdownMenuItem(value: section, child: Text(section))),
+                              ],
+                              onChanged: (value) => setDialogState(() => selectedSection = value),
+                            );
+                          },
                         ),
                       ),
                       IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close)),
@@ -212,53 +264,110 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
                 ),
                 const Divider(height: 1),
                 Expanded(
-                  child: StreamBuilder<List<MediaItem>>(
-                    stream: _mediaLibrary.getMediaStream(),
-                    builder: (context, snapshot) {
-                      if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-                      final items = snapshot.data!
-                          .where((item) => allowedTypes.contains(item.type))
-                          .toList();
-                      if (items.isEmpty) {
-                        return const Center(child: Text('No matching media found in Media Library.'));
-                      }
-                      return ListView.separated(
-                        itemCount: items.length,
-                        separatorBuilder: (_, __) => const Divider(height: 1),
-                        itemBuilder: (context, index) {
-                          final item = items[index];
-                          return ListTile(
-                            leading: Icon(_iconForMediaType(item.type)),
-                            title: Text(item.name),
-                            subtitle: Text('${item.type} • ${item.section}', maxLines: 1, overflow: TextOverflow.ellipsis),
-                            onTap: () => Navigator.pop(context, item),
-                          );
-                        },
-                      );
-                    },
-                  ),
+                  child: selectedSection == null
+                      ? const Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.category, size: 60, color: Colors.grey),
+                              SizedBox(height: 12),
+                              Text('Please select a category from the dropdown above'),
+                            ],
+                          ),
+                        )
+                      : StreamBuilder<List<MediaItem>>(
+                          stream: _mediaLibrary.getMediaStream(
+                            section: selectedSection == 'All' ? null : selectedSection,
+                          ),
+                          builder: (context, snapshot) {
+                            if (snapshot.connectionState == ConnectionState.waiting) {
+                              return const Center(child: CircularProgressIndicator());
+                            }
+                            if (snapshot.hasError) {
+                              return Center(child: Text('Error: ${snapshot.error}'));
+                            }
+                            final items = (snapshot.data ?? [])
+                                .where((item) => allowedTypes.contains(item.type))
+                                .toList();
+                            if (items.isEmpty) {
+                              return Center(
+                                child: Text(
+                                  'No matching media found in ${selectedSection == 'All' ? 'library' : selectedSection}.',
+                                ),
+                              );
+                            }
+                            return GridView.builder(
+                              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 4,
+                                crossAxisSpacing: 10,
+                                mainAxisSpacing: 10,
+                                childAspectRatio: 1.0,
+                              ),
+                              itemCount: items.length,
+                              itemBuilder: (context, index) {
+                                final item = items[index];
+                                final isImage = item.type == 'image';
+                                final urlLower = item.url.toLowerCase();
+                                final isYoutube = item.type == 'youtube' ||
+                                    urlLower.contains('youtube') ||
+                                    urlLower.contains('youtu.be');
+                                final isVideo = item.type == 'video' || isYoutube;
+
+                                Widget preview;
+                                if (isImage) {
+                                  preview = Image.network(item.url, fit: BoxFit.cover);
+                                } else if (isVideo) {
+                                  preview = VideoGridItem(
+                                    url: item.url,
+                                    type: isYoutube ? 'youtube' : 'upload',
+                                    enablePreview: true,
+                                    autoPlay: false,
+                                  );
+                                } else {
+                                  preview = const Center(child: Icon(Icons.audiotrack, size: 48));
+                                }
+
+                                return InkWell(
+                                  onTap: () => Navigator.pop(context, item),
+                                  child: Card(
+                                    clipBehavior: Clip.antiAlias,
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                                      children: [
+                                        Expanded(child: IgnorePointer(child: preview)),
+                                        Padding(
+                                          padding: const EdgeInsets.all(4),
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                                              Text(
+                                                '${item.type} • ${item.section}',
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(fontSize: 11, color: Colors.grey),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            );
+                          },
+                        ),
                 ),
               ],
             ),
-          ),
-        );
-      },
+            ),
+          );
+        },
+      ),
     );
     if (selected == null) return;
     setState(() => target.text = selected.url);
-  }
-
-  IconData _iconForMediaType(String type) {
-    switch (type) {
-      case 'audio':
-        return Icons.music_note;
-      case 'video':
-        return Icons.movie;
-      case 'image':
-        return Icons.image;
-      default:
-        return Icons.insert_drive_file;
-    }
   }
 
   @override
@@ -280,11 +389,31 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
           padding: const EdgeInsets.all(14),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
-              Expanded(child: Text('Living Canvas schedule: ${DateFormat('EEE, MMM d, yyyy').format(_date)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
+              Expanded(child: Text('Living Canvas ${_canvasScope == 'international' ? 'International' : 'National'} week: ${DateFormat('MMM d').format(_weekStart)} - ${DateFormat('MMM d').format(_weekEndExclusive.subtract(const Duration(days: 1)))}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
               OutlinedButton.icon(onPressed: _pickDate, icon: const Icon(Icons.calendar_month), label: const Text('Pick date')),
               const SizedBox(width: 8),
-              ElevatedButton.icon(onPressed: _publishing ? null : _publishDate, icon: _publishing ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.publish), label: Text(_publishing ? 'Publishing...' : 'Publish date')),
+              ElevatedButton.icon(onPressed: _publishing ? null : _publishWeek, icon: _publishing ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.publish), label: Text(_publishing ? 'Publishing...' : 'Publish week')),
             ]),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                const Text('Mode:'),
+                const SizedBox(width: 8),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: 'national', label: Text('National')),
+                    ButtonSegment(value: 'international', label: Text('International')),
+                  ],
+                  selected: {_canvasScope},
+                  onSelectionChanged: (v) async {
+                    setState(() => _canvasScope = v.first);
+                    await _loadSlots();
+                    _loadSelectedSlot();
+                    if (mounted) setState(() {});
+                  },
+                ),
+              ],
+            ),
             const SizedBox(height: 10),
             SegmentedButton<int>(
               segments: const [ButtonSegment(value: 0, label: Text(':00')), ButtonSegment(value: 15, label: Text(':15')), ButtonSegment(value: 30, label: Text(':30')), ButtonSegment(value: 45, label: Text(':45'))],
@@ -330,7 +459,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Editing ${DateFormat('MMM d').format(_date)} ${_hour.toString().padLeft(2, '0')}:${_lane.toString().padLeft(2, '0')}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            Text('Editing ${_canvasScope == 'international' ? 'International' : 'National'} ${DateFormat('MMM d').format(_date)} ${_hour.toString().padLeft(2, '0')}:${_lane.toString().padLeft(2, '0')}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               title: const Text('Activate Living Canvas / Thumbprint Mode globally'),
@@ -345,12 +474,12 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
               },
             ),
             TextField(controller: _title, decoration: const InputDecoration(labelText: 'Canvas title')),
-            TextField(controller: _durationSeconds, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Event duration (seconds)', helperText: 'Matches the chime/audio length, same principle as the current event editors')),
+            TextField(controller: _durationSeconds, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Duration (Seconds)', helperText: 'Enter exact seconds (e.g. 10), matching the current event editors')),
             Row(children: [
               Expanded(child: TextField(controller: _mediaUrl, decoration: const InputDecoration(labelText: 'Background image/video URL'))),
               const SizedBox(width: 8),
               OutlinedButton.icon(
-                onPressed: () => _pickMediaUrl(allowedTypes: {'image', 'video'}, target: _mediaUrl),
+                onPressed: () => _pickMediaUrl(allowedTypes: {'image', 'video', 'youtube'}, target: _mediaUrl),
                 icon: const Icon(Icons.perm_media),
                 label: const Text('Media Library'),
               ),
