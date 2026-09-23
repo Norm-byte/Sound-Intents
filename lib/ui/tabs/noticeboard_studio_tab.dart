@@ -311,7 +311,7 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
     if (isYoutube) {
       final id = _youtubeId(url);
       if (id != null) {
-        registerYoutubeViewFactory(viewId, 'https://www.youtube.com/embed/$id?autoplay=1&mute=1&controls=0&playsinline=1&rel=0&modestbranding=1', autoPlay: true);
+        registerYoutubeViewFactory(viewId, 'https://www.youtube.com/embed/$id?autoplay=0&controls=1&playsinline=1&rel=0&modestbranding=1');
       }
     } else if (isPdf) {
       registerPdfObjectViewFactory(viewId, '$url#toolbar=0&navpanes=0&scrollbar=0');
@@ -335,7 +335,13 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
     final uri = Uri.tryParse(url);
     if (uri == null) return null;
     if (uri.host.contains('youtu.be') && uri.pathSegments.isNotEmpty) return uri.pathSegments.first;
-    return uri.queryParameters['v'];
+    final queryId = uri.queryParameters['v'];
+    if (queryId != null && queryId.isNotEmpty) return queryId;
+    for (final segmentName in ['shorts', 'embed', 'live']) {
+      final index = uri.pathSegments.indexOf(segmentName);
+      if (index >= 0 && index + 1 < uri.pathSegments.length) return uri.pathSegments[index + 1];
+    }
+    return null;
   }
 
   @override

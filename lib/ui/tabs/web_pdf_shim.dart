@@ -27,6 +27,7 @@ void registerYoutubeViewFactory(String viewType, String url, {bool autoPlay = fa
       ..style.border = 'none'
       ..style.width = '100%'
       ..style.height = '100%'
+      ..allowFullscreen = true
       ..allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture';
     return iframe;
   });
