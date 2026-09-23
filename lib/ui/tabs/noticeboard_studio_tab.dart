@@ -396,7 +396,8 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
               title: Text('Hide legacy Events tab', style: TextStyle(color: _hideLegacyEventsTab ? Colors.amber.shade800 : null, fontWeight: _hideLegacyEventsTab ? FontWeight.bold : null)),
               subtitle: Text(_hideLegacyEventsTab ? 'ACTIVE: removes Events from the user app navigation immediately.' : 'Off: the existing Events tab remains visible.'),
               value: _hideLegacyEventsTab,
-              activeColor: Colors.amber,
+              activeThumbColor: Colors.amber,
+              activeTrackColor: Colors.amber.withValues(alpha: 0.45),
               onChanged: _isSavingNavigation ? null : (v) async {
                 setState(() => _hideLegacyEventsTab = v);
                 await _saveNavigationSetting('hideLegacyEventsTab', v);
@@ -407,7 +408,8 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
               title: Text('Enable Noticeboard Studio feed', style: TextStyle(color: _enableNoticeboardStudioFeed ? Colors.amber.shade800 : null, fontWeight: _enableNoticeboardStudioFeed ? FontWeight.bold : null)),
               subtitle: const Text('Saves immediately; user-app Studio card display is a separate delivery step.'),
               value: _enableNoticeboardStudioFeed,
-              activeColor: Colors.amber,
+              activeThumbColor: Colors.amber,
+              activeTrackColor: Colors.amber.withValues(alpha: 0.45),
               onChanged: _isSavingNavigation ? null : (v) async {
                 setState(() => _enableNoticeboardStudioFeed = v);
                 await _saveNavigationSetting('enableNoticeboardStudioFeed', v);
