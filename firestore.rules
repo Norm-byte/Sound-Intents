@@ -330,7 +330,18 @@ service cloud.firestore {
                       (docId == 'community_settings' && isSignedIn()) ||
                       docId == 'community_settings' ||
                       (docId == 'community_support' && isSignedIn()) ||
-                      docId == 'community_support';
+                      docId == 'community_support' ||
+                      (docId == 'living_canvas' && isSignedIn()) ||
+                      docId == 'living_canvas' ||
+                      (docId == 'noticeboard_studio' && isSignedIn()) ||
+                      docId == 'noticeboard_studio';
+    }
+
+    // Additive v69 Noticeboard Studio cards. Kept separate from legacy events
+    // and legacy noticeboard fields for complete rollback safety.
+    match /noticeboard_studio_cards/{cardId} {
+      allow read: if true;
+      allow write: if isActiveAdmin() || isSignedIn();
     }
 
     // Users collection

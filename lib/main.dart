@@ -27,6 +27,8 @@ import 'ui/tabs/documentation_tab.dart'; // Added for Operators Manual
 import 'ui/tabs/chat_management_tab.dart';
 import 'ui/tabs/community_tab.dart';
 import 'ui/tabs/community_support_tab.dart';
+import 'ui/tabs/living_canvas_studio_tab.dart';
+import 'ui/tabs/noticeboard_studio_tab.dart';
 import 'ui/tabs/monetization_tab.dart';
 import 'ui/tabs/app_content_tab.dart';
 import 'ui/tabs/event_stats_tab.dart';
@@ -253,6 +255,8 @@ class _AdminHomePageState extends State<AdminHomePage>
       Tab(icon: Icon(Icons.lightbulb), text: 'Topics'),
       Tab(icon: Icon(Icons.forum), text: 'Community'),
       Tab(icon: Icon(Icons.volunteer_activism), text: 'Community Support'),
+      Tab(icon: Icon(Icons.fingerprint), text: 'Living Canvas'),
+      Tab(icon: Icon(Icons.chrome_reader_mode), text: 'Noticeboard Studio'),
       Tab(icon: Icon(Icons.monetization_on), text: 'Deals/Offers'),
       Tab(icon: Icon(Icons.settings), text: 'System'),
       Tab(icon: Icon(Icons.notifications_active), text: 'Notifications'),
@@ -377,7 +381,7 @@ class _AdminHomePageState extends State<AdminHomePage>
               _initialModerationUserId = userId;
             });
             if (_hasAccess('system')) {
-              _tabController.animateTo(12);
+              _tabController.animateTo(14);
             } else {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('Access Denied')),
@@ -394,10 +398,24 @@ class _AdminHomePageState extends State<AdminHomePage>
         const CommunitySupportTab(),
       ),
 
-      // 12. Monetization / Deals
+      // 12. Living Canvas Studio (v69 additive system; does not replace legacy events)
+      buildTab(
+        'living_canvas_studio',
+        'Living Canvas',
+        const LivingCanvasStudioTab(),
+      ),
+
+      // 13. Noticeboard Studio (v69 additive system; does not replace legacy noticeboards)
+      buildTab(
+        'noticeboard_studio',
+        'Noticeboard Studio',
+        const NoticeboardStudioTab(),
+      ),
+
+      // 14. Monetization / Deals
       buildTab('monetization', 'Deals', const MonetizationTab()),
 
-      // 13. System
+      // 15. System
       buildTab(
         'system',
         'System',
@@ -407,13 +425,13 @@ class _AdminHomePageState extends State<AdminHomePage>
         ),
       ),
 
-      // 13. Notifications
+      // 16. Notifications
       buildTab('notifications', 'Notifications', const NotificationsScreen()),
 
-      // 14. Legal (Locked)
+      // 17. Legal (Locked)
       buildTab('legal', 'Legal', const LegalTab()),
 
-      // 15. Operators Manual (Accessible to All - DocumentationTab under the hood)
+      // 18. Operators Manual (Accessible to All - DocumentationTab under the hood)
       buildTab('documentation', 'Operators Manual', const DocumentationTab()),
     ];
   }
