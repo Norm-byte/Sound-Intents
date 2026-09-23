@@ -18,6 +18,7 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
 
   bool _isLoading = true;
   bool _isSaving = false;
+  bool _isSavingNavigation = false;
   bool _hideLegacyEventsTab = false;
   bool _enableNoticeboardStudioFeed = true;
   bool _remindMeEnabled = false;
@@ -153,6 +154,23 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
       );
     } finally {
       if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  Future<void> _saveNavigationSetting(String field, bool value) async {
+    setState(() => _isSavingNavigation = true);
+    try {
+      await FirebaseFirestore.instance.collection('app_config').doc('noticeboard_studio').set({
+        field: value,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(value ? '$field enabled' : '$field disabled')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSavingNavigation = false);
     }
   }
 
@@ -377,16 +395,24 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
             const Text('Navigation override toggles', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('Hide legacy Events tab'),
-              subtitle: const Text('Default off. User app will ignore this until mobile integration is deliberately built.'),
+              title: Text('Hide legacy Events tab', style: TextStyle(color: _hideLegacyEventsTab ? Colors.amber.shade800 : null, fontWeight: _hideLegacyEventsTab ? FontWeight.bold : null)),
+              subtitle: Text(_hideLegacyEventsTab ? 'ACTIVE: removes Events from the user app navigation immediately.' : 'Off: the existing Events tab remains visible.'),
               value: _hideLegacyEventsTab,
-              onChanged: (v) => setState(() => _hideLegacyEventsTab = v),
+              activeColor: Colors.amber,
+              onChanged: _isSavingNavigation ? null : (v) async {
+                setState(() => _hideLegacyEventsTab = v);
+                await _saveNavigationSetting('hideLegacyEventsTab', v);
+              },
             ),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               title: const Text('Enable Noticeboard Studio feed'),
+              subtitle: const Text('Saves immediately; user-app Studio card display is a separate delivery step.'),
               value: _enableNoticeboardStudioFeed,
-              onChanged: (v) => setState(() => _enableNoticeboardStudioFeed = v),
+              onChanged: _isSavingNavigation ? null : (v) async {
+                setState(() => _enableNoticeboardStudioFeed = v);
+                await _saveNavigationSetting('enableNoticeboardStudioFeed', v);
+              },
             ),
           ]),
         ),
