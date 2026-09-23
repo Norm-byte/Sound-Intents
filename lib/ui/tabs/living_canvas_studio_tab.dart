@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:video_player/video_player.dart';
 
 import '../../models/media_item.dart';
 import '../../services/media_library_service.dart';
@@ -15,10 +16,12 @@ class LivingCanvasStudioTab extends StatefulWidget {
 
 class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   final MediaLibraryService _mediaLibrary = MediaLibraryService();
+  VideoPlayerController? _audioPreviewController;
 
   bool _loading = true;
   bool _saving = false;
   bool _publishing = false;
+  bool _audioPreviewPlaying = false;
   bool _globalThumbprintModeActive = false;
   DateTime _date = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
   int _lane = 0;
@@ -153,10 +156,43 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
 
   @override
   void dispose() {
+    _audioPreviewController?.dispose();
     for (final c in [_title, _durationSeconds, _mediaUrl, _audioUrl, _glow, _pinText, _thanksTitle, _thanksBody]) {
       c.dispose();
     }
     super.dispose();
+  }
+
+  Future<void> _toggleAudioPreview() async {
+    final url = _audioUrl.text.trim();
+    if (url.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Choose event audio first')),
+      );
+      return;
+    }
+
+    if (_audioPreviewPlaying) {
+      await _audioPreviewController?.pause();
+      if (mounted) setState(() => _audioPreviewPlaying = false);
+      return;
+    }
+
+    await _audioPreviewController?.dispose();
+    final controller = VideoPlayerController.networkUrl(Uri.parse(url));
+    try {
+      await controller.initialize();
+      await controller.setLooping(false);
+      await controller.play();
+      _audioPreviewController = controller;
+      if (mounted) setState(() => _audioPreviewPlaying = true);
+    } catch (e) {
+      await controller.dispose();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not preview audio: $e')),
+      );
+    }
   }
 
   Future<void> _loadAll() async {
@@ -706,6 +742,11 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
                 icon: const Icon(Icons.perm_media),
                 label: const Text('Media Library'),
               ),
+              IconButton(
+                tooltip: 'Remove background media',
+                onPressed: () => setState(() => _mediaUrl.clear()),
+                icon: const Icon(Icons.clear),
+              ),
             ]),
             Row(children: [
               Expanded(child: TextField(controller: _audioUrl, decoration: const InputDecoration(labelText: 'Event audio / chime URL'))),
@@ -714,6 +755,24 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
                 onPressed: () => _pickMediaUrl(allowedTypes: {'audio'}, target: _audioUrl),
                 icon: const Icon(Icons.library_music),
                 label: const Text('Media Library'),
+              ),
+              IconButton(
+                tooltip: _audioPreviewPlaying ? 'Stop audio preview' : 'Preview audio',
+                onPressed: _toggleAudioPreview,
+                icon: Icon(_audioPreviewPlaying ? Icons.stop_circle : Icons.play_circle),
+              ),
+              IconButton(
+                tooltip: 'Remove event audio',
+                onPressed: () async {
+                  await _audioPreviewController?.pause();
+                  if (mounted) {
+                    setState(() {
+                      _audioPreviewPlaying = false;
+                      _audioUrl.clear();
+                    });
+                  }
+                },
+                icon: const Icon(Icons.clear),
               ),
             ]),
             TextField(controller: _glow, decoration: const InputDecoration(labelText: 'Thumbprint glow color (hex)')),
