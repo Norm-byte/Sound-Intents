@@ -404,9 +404,10 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
             ),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('Enable Noticeboard Studio feed'),
+              title: Text('Enable Noticeboard Studio feed', style: TextStyle(color: _enableNoticeboardStudioFeed ? Colors.amber.shade800 : null, fontWeight: _enableNoticeboardStudioFeed ? FontWeight.bold : null)),
               subtitle: const Text('Saves immediately; user-app Studio card display is a separate delivery step.'),
               value: _enableNoticeboardStudioFeed,
+              activeColor: Colors.amber,
               onChanged: _isSavingNavigation ? null : (v) async {
                 setState(() => _enableNoticeboardStudioFeed = v);
                 await _saveNavigationSetting('enableNoticeboardStudioFeed', v);
