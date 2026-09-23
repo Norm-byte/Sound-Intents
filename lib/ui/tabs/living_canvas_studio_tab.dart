@@ -345,7 +345,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
               },
             ),
             TextField(controller: _title, decoration: const InputDecoration(labelText: 'Canvas title')),
-            TextField(controller: _durationSeconds, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Event duration seconds')),
+            TextField(controller: _durationSeconds, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Event duration (seconds)', helperText: 'Matches the chime/audio length, same principle as the current event editors')),
             Row(children: [
               Expanded(child: TextField(controller: _mediaUrl, decoration: const InputDecoration(labelText: 'Background image/video URL'))),
               const SizedBox(width: 8),
@@ -356,7 +356,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
               ),
             ]),
             Row(children: [
-              Expanded(child: TextField(controller: _audioUrl, decoration: const InputDecoration(labelText: 'Event-start chime/audio URL'))),
+              Expanded(child: TextField(controller: _audioUrl, decoration: const InputDecoration(labelText: 'Event audio / chime URL'))),
               const SizedBox(width: 8),
               OutlinedButton.icon(
                 onPressed: () => _pickMediaUrl(allowedTypes: {'audio'}, target: _audioUrl),
@@ -365,11 +365,30 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
               ),
             ]),
             TextField(controller: _glow, decoration: const InputDecoration(labelText: 'Thumbprint glow color (hex)')),
-            SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('Show floating pin card'), value: _showPin, onChanged: (v) => setState(() => _showPin = v)),
-            TextField(controller: _pinText, maxLines: 3, decoration: const InputDecoration(labelText: 'Pin card text')),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              children: [
+                for (final swatch in const ['FFD54F', '4FC3F7', '81C784', 'CE93D8', 'FF8A65', 'FFFFFF'])
+                  InkWell(
+                    onTap: () => setState(() => _glow.text = swatch),
+                    child: Container(
+                      width: 28,
+                      height: 28,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: _hex(swatch) ?? Colors.amber,
+                        border: Border.all(color: Colors.black26),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('Preview tap popup card'), subtitle: const Text('User will see this popup after tapping the thumbprint.'), value: _showPin, onChanged: (v) => setState(() => _showPin = v)),
+            TextField(controller: _pinText, maxLines: 3, decoration: const InputDecoration(labelText: 'Tap popup text')),
             TextField(controller: _thanksTitle, decoration: const InputDecoration(labelText: 'Thank-you title')),
             TextField(controller: _thanksBody, maxLines: 3, decoration: const InputDecoration(labelText: 'Thank-you body')),
-            SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('Show Goodometer graph'), value: _showGoodometer, onChanged: (v) => setState(() => _showGoodometer = v)),
+            SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('Show Goodometer graph'), subtitle: const Text('National view shows National; World view will include World + National when built.'), value: _showGoodometer, onChanged: (v) => setState(() => _showGoodometer = v)),
             const SizedBox(height: 12),
             Wrap(spacing: 8, runSpacing: 8, children: [
               ElevatedButton.icon(onPressed: _saving ? null : _saveDraft, icon: _saving ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.save), label: Text(_saving ? 'Saving...' : 'Save slot draft')),
@@ -400,10 +419,12 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
               borderRadius: BorderRadius.circular(20),
               child: Stack(children: [
                 if (isVideo) const Center(child: Icon(Icons.movie_filter, color: Colors.white38, size: 72)),
-                Positioned(top: 22, left: 18, right: 18, child: Column(children: [Text(_title.text.trim().isEmpty ? 'Living Canvas' : _title.text.trim(), textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)), const SizedBox(height: 6), Text('${DateFormat('EEE MMM d').format(_date)} • ${_hour.toString().padLeft(2, '0')}:${_lane.toString().padLeft(2, '0')}', style: const TextStyle(color: Colors.white70, fontSize: 12))])),
+                Positioned(top: 18, left: 16, child: _previewPill('National • 128 live')),
+                Positioned(top: 18, right: 16, child: _previewPill('Exit Event')),
+                Positioned(top: 54, left: 18, right: 18, child: Column(children: [Text(_title.text.trim().isEmpty ? 'Living Canvas' : _title.text.trim(), textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)), const SizedBox(height: 6), Text('${DateFormat('EEE MMM d').format(_date)} • ${_hour.toString().padLeft(2, '0')}:${_lane.toString().padLeft(2, '0')}', style: const TextStyle(color: Colors.white70, fontSize: 12))])),
                 if (_showPin && _pinText.text.trim().isNotEmpty) Positioned(left: 18, right: 18, top: 96, child: Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.45), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.white24)), child: Text(_pinText.text.trim(), style: const TextStyle(color: Colors.white70, fontSize: 12)))),
                 Center(child: Container(width: 150, height: 150, decoration: BoxDecoration(shape: BoxShape.circle, boxShadow: [BoxShadow(color: glow.withValues(alpha: 0.55), blurRadius: 32, spreadRadius: 12)], border: Border.all(color: glow, width: 2), color: Colors.black.withValues(alpha: 0.24)), child: Icon(Icons.fingerprint, size: 92, color: glow))),
-                if (_showGoodometer) Positioned(left: 18, right: 18, bottom: 92, child: Row(children: [Expanded(child: _bar('National', 0.62, Colors.amberAccent)), const SizedBox(width: 8), Expanded(child: _bar('World', 0.46, Colors.lightBlueAccent))])),
+                if (_showGoodometer) Positioned(left: 18, right: 18, bottom: 118, child: Row(children: [Expanded(child: _bar('National', 0.62, Colors.amberAccent)), const SizedBox(width: 8), Expanded(child: _bar('Last high', 0.52, Colors.lightBlueAccent))])),
                 Positioned(left: 18, right: 18, bottom: 24, child: Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.45), borderRadius: BorderRadius.circular(14)), child: Column(children: [Text(_thanksTitle.text.trim().isEmpty ? 'Thank you' : _thanksTitle.text.trim(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)), const SizedBox(height: 4), Text(_thanksBody.text.trim(), textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70, fontSize: 11))]))),
               ]),
             ),
@@ -414,6 +435,18 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   }
 
   Widget _bar(String label, double value, Color color) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(label, style: const TextStyle(color: Colors.white70, fontSize: 10)), const SizedBox(height: 4), ClipRRect(borderRadius: BorderRadius.circular(999), child: LinearProgressIndicator(value: value, minHeight: 8, color: color, backgroundColor: Colors.white24))]);
+
+  Widget _previewPill(String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.42),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white24),
+      ),
+      child: Text(text, style: const TextStyle(color: Colors.white70, fontSize: 10)),
+    );
+  }
 
   Color? _hex(String value) {
     final cleaned = value.trim().replaceAll('#', '');
