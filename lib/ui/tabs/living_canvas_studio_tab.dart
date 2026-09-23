@@ -236,7 +236,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
 
   void _loadSelectedSlot() {
     final data = _drafts[_selectedSlotId] ?? _published[_selectedSlotId];
-    if (data != null) _apply(data);
+    _apply(data ?? const <String, dynamic>{});
   }
 
   void _apply(Map<String, dynamic> data) {
