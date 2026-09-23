@@ -255,7 +255,7 @@ class _AdminHomePageState extends State<AdminHomePage>
       Tab(icon: Icon(Icons.lightbulb), text: 'Topics'),
       Tab(icon: Icon(Icons.forum), text: 'Community'),
       Tab(icon: Icon(Icons.volunteer_activism), text: 'Community Support'),
-      Tab(icon: Icon(Icons.fingerprint), text: 'Living Canvas'),
+      Tab(icon: Icon(Icons.fingerprint), text: 'Thumbprints'),
       Tab(icon: Icon(Icons.chrome_reader_mode), text: 'Noticeboard Studio'),
       Tab(icon: Icon(Icons.monetization_on), text: 'Deals/Offers'),
       Tab(icon: Icon(Icons.settings), text: 'System'),

@@ -826,7 +826,8 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   Widget _preview() {
     final glow = _hex(_glow.text) ?? Colors.amber;
     final mediaUrl = _mediaUrl.text.trim();
-    final isVideo = mediaUrl.toLowerCase().endsWith('.mp4') || mediaUrl.toLowerCase().endsWith('.mov') || mediaUrl.toLowerCase().endsWith('.webm');
+    final mediaPath = Uri.tryParse(mediaUrl)?.path.toLowerCase() ?? mediaUrl.toLowerCase().split('?').first;
+    final isVideo = mediaPath.endsWith('.mp4') || mediaPath.endsWith('.mov') || mediaPath.endsWith('.webm') || mediaPath.endsWith('.mpeg4');
     return Container(
       color: Colors.grey.shade100,
       padding: const EdgeInsets.all(18),
@@ -843,7 +844,15 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
             child: ClipRRect(
               borderRadius: BorderRadius.circular(20),
               child: Stack(children: [
-                if (isVideo) const Center(child: Icon(Icons.movie_filter, color: Colors.white38, size: 72)),
+                if (isVideo)
+                  Positioned.fill(
+                    child: VideoGridItem(
+                      url: mediaUrl,
+                      type: 'upload',
+                      enablePreview: false,
+                      autoPlay: true,
+                    ),
+                  ),
                 Positioned(top: 18, left: 16, child: _previewPill('${_canvasScope == 'international' ? 'World' : 'National'} • 128 live')),
                 Positioned(top: 18, right: 16, child: _previewPill('Exit Event')),
                 Positioned(top: 54, left: 18, right: 18, child: Column(children: [Text(_title.text.trim().isEmpty ? 'Living Canvas' : _title.text.trim(), textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)), const SizedBox(height: 6), Text('${DateFormat('EEE MMM d').format(_date)} • ${_hour.toString().padLeft(2, '0')}:${_lane.toString().padLeft(2, '0')}', style: const TextStyle(color: Colors.white70, fontSize: 12))])),
