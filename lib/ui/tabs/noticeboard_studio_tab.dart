@@ -315,7 +315,7 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
         registerYoutubeViewFactory(viewId, 'https://www.youtube.com/embed/$id?autoplay=1&mute=1&controls=1&playsinline=1&rel=0&modestbranding=1');
       }
     } else if (isPdf) {
-      registerPdfCanvasViewFactory(viewId, url);
+      registerPdfViewFactory(viewId, '$url#toolbar=0&navpanes=0');
     } else if (!isImage && !isVideo) {
       registerPdfViewFactory(viewId, url);
     }
