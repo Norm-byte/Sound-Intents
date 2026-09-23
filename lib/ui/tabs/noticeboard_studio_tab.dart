@@ -326,15 +326,9 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
     if (isPdf) {
       return SfPdfViewer.network(
         url,
-        pageLayoutMode: PdfPageLayoutMode.single,
-        scrollDirection: PdfScrollDirection.vertical,
-        initialZoomLevel: 0.5,
-        maxZoomLevel: 1,
-        enableDoubleTapZooming: false,
-        canShowScrollHead: false,
-        canShowScrollStatus: false,
-        canShowPaginationDialog: false,
-        interactionMode: PdfInteractionMode.pan,
+        enableDoubleTapZooming: true,
+        canShowScrollHead: true,
+        canShowScrollStatus: true,
       );
     }
     if (isVideo) {
