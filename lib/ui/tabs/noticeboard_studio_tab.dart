@@ -302,10 +302,11 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
     }
 
     final lower = url.toLowerCase();
+    final pathOnly = lower.split('?').first.split('#').first;
     final isImage = lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.gif') || lower.endsWith('.webp');
     final isYoutube = lower.contains('youtube') || lower.contains('youtu.be');
     final isVideo = isYoutube || lower.endsWith('.mp4') || lower.endsWith('.mov') || lower.endsWith('.webm');
-    final isPdf = lower.contains('.pdf');
+    final isPdf = pathOnly.endsWith('.pdf');
     final viewId = 'noticeboard-learn-more-inline-${url.hashCode}';
     if (isYoutube) {
       final id = _youtubeId(url);
