@@ -140,8 +140,6 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
     setState(() => _isSaving = true);
     try {
       await FirebaseFirestore.instance.collection('app_config').doc('noticeboard_studio').set({
-        'hideLegacyEventsTab': _hideLegacyEventsTab,
-        'enableNoticeboardStudioFeed': _enableNoticeboardStudioFeed,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
       await FirebaseFirestore.instance
