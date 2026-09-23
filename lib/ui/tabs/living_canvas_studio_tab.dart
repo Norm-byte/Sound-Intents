@@ -2,6 +2,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../models/media_item.dart';
+import '../../services/media_library_service.dart';
+
 class LivingCanvasStudioTab extends StatefulWidget {
   const LivingCanvasStudioTab({super.key});
 
@@ -10,25 +13,21 @@ class LivingCanvasStudioTab extends StatefulWidget {
 }
 
 class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
+  final MediaLibraryService _mediaLibrary = MediaLibraryService();
+
   bool _loading = true;
   bool _saving = false;
   bool _publishing = false;
+  bool _globalThumbprintModeActive = false;
   DateTime _date = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
   int _lane = 0;
   int _hour = 12;
 
-  bool _active = false;
   bool _showPin = false;
   bool _showGoodometer = false;
-  bool _loopAudio = true;
-  bool _tapAudioOnly = false;
-  String _backgroundMode = 'image';
   final _title = TextEditingController(text: 'Living Canvas');
-  final _duration = TextEditingController(text: '30');
-  final _imageUrl = TextEditingController();
-  final _videoUrl = TextEditingController();
-  final _carouselUrls = TextEditingController();
-  final _carouselMinutes = TextEditingController(text: '10');
+  final _durationSeconds = TextEditingController(text: '30');
+  final _mediaUrl = TextEditingController();
   final _audioUrl = TextEditingController();
   final _glow = TextEditingController(text: 'FFD54F');
   final _pinText = TextEditingController();
@@ -50,7 +49,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
 
   @override
   void dispose() {
-    for (final c in [_title, _duration, _imageUrl, _videoUrl, _carouselUrls, _carouselMinutes, _audioUrl, _glow, _pinText, _thanksTitle, _thanksBody]) {
+    for (final c in [_title, _durationSeconds, _mediaUrl, _audioUrl, _glow, _pinText, _thanksTitle, _thanksBody]) {
       c.dispose();
     }
     super.dispose();
@@ -75,7 +74,9 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
 
   Future<void> _loadDefaults() async {
     final doc = await FirebaseFirestore.instance.collection('app_config').doc('living_canvas').get();
-    _apply(doc.data() ?? const <String, dynamic>{});
+    final data = doc.data() ?? const <String, dynamic>{};
+    _globalThumbprintModeActive = data['isThumbprintModeActive'] == true;
+    _apply(data);
   }
 
   Future<void> _loadSlots() async {
@@ -91,18 +92,11 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   }
 
   void _apply(Map<String, dynamic> data) {
-    _active = data['isThumbprintModeActive'] == true;
     _showPin = data['showPinCard'] == true;
     _showGoodometer = data['showGoodometerGraph'] == true;
-    _loopAudio = data['loopAudio'] != false;
-    _tapAudioOnly = data['playOnThumbprintTapOnly'] == true;
-    _backgroundMode = (data['backgroundMode'] as String?) ?? 'image';
     _title.text = (data['title'] as String?) ?? 'Living Canvas';
-    _duration.text = ((data['durationMinutes'] as num?)?.toInt() ?? 30).toString();
-    _imageUrl.text = (data['backgroundImageUrl'] as String?) ?? '';
-    _videoUrl.text = (data['backgroundVideoUrl'] as String?) ?? '';
-    _carouselUrls.text = ((data['carouselImageUrls'] as List?) ?? const []).map((e) => e.toString()).join('\n');
-    _carouselMinutes.text = ((data['carouselRotateMinutes'] as num?)?.toInt() ?? 10).toString();
+    _durationSeconds.text = ((data['durationSeconds'] as num?)?.toInt() ?? (data['durationMinutes'] as num?)?.toInt() ?? 30).toString();
+    _mediaUrl.text = (data['mediaUrl'] as String?) ?? (data['backgroundImageUrl'] as String?) ?? (data['backgroundVideoUrl'] as String?) ?? '';
     _audioUrl.text =
       (data['chimeAudioUrl'] as String?) ?? (data['customAudioUrl'] as String?) ?? '';
     _glow.text = (data['thumbprintGlowColor'] as String?) ?? 'FFD54F';
@@ -119,19 +113,13 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
       'startTimeUTC': start.toIso8601String(),
       'hour': _hour,
       'laneMinute': _lane,
-      'durationMinutes': (int.tryParse(_duration.text.trim()) ?? 30).clamp(1, 240),
-      'isThumbprintModeActive': _active,
+      'durationSeconds': (int.tryParse(_durationSeconds.text.trim()) ?? 30).clamp(1, 3600),
       'title': _title.text.trim(),
-      'backgroundMode': _backgroundMode,
-      'backgroundImageUrl': _imageUrl.text.trim(),
-      'backgroundVideoUrl': _videoUrl.text.trim(),
-      'carouselImageUrls': _carouselUrls.text.split('\n').map((e) => e.trim()).where((e) => e.isNotEmpty).toList(),
-      'carouselRotateMinutes': (int.tryParse(_carouselMinutes.text.trim()) ?? 10).clamp(1, 240),
+      'mediaUrl': _mediaUrl.text.trim(),
+      'backgroundImageUrl': _mediaUrl.text.trim(),
       'audioMode': _audioUrl.text.trim().isEmpty ? 'silent' : 'custom',
       'chimeAudioUrl': _audioUrl.text.trim(),
       'customAudioUrl': _audioUrl.text.trim(),
-      'loopAudio': _loopAudio,
-      'playOnThumbprintTapOnly': _tapAudioOnly,
       'thumbprintGlowColor': _glow.text.trim(),
       'showPinCard': _showPin,
       'pinCardText': _pinText.text.trim(),
@@ -196,6 +184,81 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
     await _loadSlots();
     _loadSelectedSlot();
     if (mounted) setState(() {});
+  }
+
+  Future<void> _pickMediaUrl({required Set<String> allowedTypes, required TextEditingController target}) async {
+    final selected = await showDialog<MediaItem>(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          child: SizedBox(
+            width: 720,
+            height: 560,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          allowedTypes.contains('audio') ? 'Select Event Chime / Audio' : 'Select Background Media',
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                      ),
+                      IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close)),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+                Expanded(
+                  child: StreamBuilder<List<MediaItem>>(
+                    stream: _mediaLibrary.getMediaStream(),
+                    builder: (context, snapshot) {
+                      if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+                      final items = snapshot.data!
+                          .where((item) => allowedTypes.contains(item.type))
+                          .toList();
+                      if (items.isEmpty) {
+                        return const Center(child: Text('No matching media found in Media Library.'));
+                      }
+                      return ListView.separated(
+                        itemCount: items.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (context, index) {
+                          final item = items[index];
+                          return ListTile(
+                            leading: Icon(_iconForMediaType(item.type)),
+                            title: Text(item.name),
+                            subtitle: Text('${item.type} • ${item.section}', maxLines: 1, overflow: TextOverflow.ellipsis),
+                            onTap: () => Navigator.pop(context, item),
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (selected == null) return;
+    setState(() => target.text = selected.url);
+  }
+
+  IconData _iconForMediaType(String type) {
+    switch (type) {
+      case 'audio':
+        return Icons.music_note;
+      case 'video':
+        return Icons.movie;
+      case 'image':
+        return Icons.image;
+      default:
+        return Icons.insert_drive_file;
+    }
   }
 
   @override
@@ -268,17 +331,39 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
           padding: const EdgeInsets.all(16),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('Editing ${DateFormat('MMM d').format(_date)} ${_hour.toString().padLeft(2, '0')}:${_lane.toString().padLeft(2, '0')}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-            SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('Thumbprint mode active for this slot'), subtitle: const Text('Off means this slot is inert. Existing Events/Noticeboards are not changed.'), value: _active, onChanged: (v) => setState(() => _active = v)),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Activate Living Canvas / Thumbprint Mode globally'),
+              subtitle: const Text('When off, user app keeps the current stable event experience.'),
+              value: _globalThumbprintModeActive,
+              onChanged: (v) async {
+                setState(() => _globalThumbprintModeActive = v);
+                await FirebaseFirestore.instance.collection('app_config').doc('living_canvas').set({
+                  'isThumbprintModeActive': v,
+                  'updatedAt': FieldValue.serverTimestamp(),
+                }, SetOptions(merge: true));
+              },
+            ),
             TextField(controller: _title, decoration: const InputDecoration(labelText: 'Canvas title')),
-            TextField(controller: _duration, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Duration minutes')),
-            DropdownButtonFormField<String>(initialValue: _backgroundMode, decoration: const InputDecoration(labelText: 'Background mode'), items: const [DropdownMenuItem(value: 'image', child: Text('Single image')), DropdownMenuItem(value: 'video', child: Text('Looping MP4 video')), DropdownMenuItem(value: 'carousel', child: Text('Timed image carousel'))], onChanged: (v) => setState(() => _backgroundMode = v ?? 'image')),
-            TextField(controller: _imageUrl, decoration: const InputDecoration(labelText: 'Image URL / Media Library image URL')),
-            TextField(controller: _videoUrl, decoration: const InputDecoration(labelText: 'MP4 URL / Media Library video URL')),
-            TextField(controller: _carouselUrls, maxLines: 4, decoration: const InputDecoration(labelText: 'Carousel image URLs (one per line)')),
-            TextField(controller: _carouselMinutes, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Carousel rotate minutes')),
-            TextField(controller: _audioUrl, decoration: const InputDecoration(labelText: 'Event-start chime/audio URL')),
-            SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('Loop audio'), value: _loopAudio, onChanged: (v) => setState(() => _loopAudio = v)),
-            SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('Play audio only after thumbprint tap'), value: _tapAudioOnly, onChanged: (v) => setState(() => _tapAudioOnly = v)),
+            TextField(controller: _durationSeconds, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Event duration seconds')),
+            Row(children: [
+              Expanded(child: TextField(controller: _mediaUrl, decoration: const InputDecoration(labelText: 'Background image/video URL'))),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: () => _pickMediaUrl(allowedTypes: {'image', 'video'}, target: _mediaUrl),
+                icon: const Icon(Icons.perm_media),
+                label: const Text('Media Library'),
+              ),
+            ]),
+            Row(children: [
+              Expanded(child: TextField(controller: _audioUrl, decoration: const InputDecoration(labelText: 'Event-start chime/audio URL'))),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: () => _pickMediaUrl(allowedTypes: {'audio'}, target: _audioUrl),
+                icon: const Icon(Icons.library_music),
+                label: const Text('Media Library'),
+              ),
+            ]),
             TextField(controller: _glow, decoration: const InputDecoration(labelText: 'Thumbprint glow color (hex)')),
             SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('Show floating pin card'), value: _showPin, onChanged: (v) => setState(() => _showPin = v)),
             TextField(controller: _pinText, maxLines: 3, decoration: const InputDecoration(labelText: 'Pin card text')),
@@ -296,8 +381,8 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
 
   Widget _preview() {
     final glow = _hex(_glow.text) ?? Colors.amber;
-    final carousel = _carouselUrls.text.split('\n').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-    final image = _backgroundMode == 'carousel' ? (carousel.isEmpty ? null : carousel.first) : (_backgroundMode == 'image' ? _imageUrl.text.trim() : null);
+    final mediaUrl = _mediaUrl.text.trim();
+    final isVideo = mediaUrl.toLowerCase().endsWith('.mp4') || mediaUrl.toLowerCase().endsWith('.mov') || mediaUrl.toLowerCase().endsWith('.webm');
     return Container(
       color: Colors.grey.shade100,
       padding: const EdgeInsets.all(18),
@@ -309,12 +394,12 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
               borderRadius: BorderRadius.circular(28),
               border: Border.all(color: Colors.black87, width: 8),
               color: const Color(0xFF111827),
-              image: image != null && image.isNotEmpty ? DecorationImage(image: NetworkImage(image), fit: BoxFit.cover, colorFilter: ColorFilter.mode(Colors.black.withValues(alpha: 0.28), BlendMode.darken)) : null,
+              image: mediaUrl.isNotEmpty && !isVideo ? DecorationImage(image: NetworkImage(mediaUrl), fit: BoxFit.cover, colorFilter: ColorFilter.mode(Colors.black.withValues(alpha: 0.28), BlendMode.darken)) : null,
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(20),
               child: Stack(children: [
-                if (_backgroundMode == 'video') const Center(child: Icon(Icons.movie_filter, color: Colors.white38, size: 72)),
+                if (isVideo) const Center(child: Icon(Icons.movie_filter, color: Colors.white38, size: 72)),
                 Positioned(top: 22, left: 18, right: 18, child: Column(children: [Text(_title.text.trim().isEmpty ? 'Living Canvas' : _title.text.trim(), textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)), const SizedBox(height: 6), Text('${DateFormat('EEE MMM d').format(_date)} • ${_hour.toString().padLeft(2, '0')}:${_lane.toString().padLeft(2, '0')}', style: const TextStyle(color: Colors.white70, fontSize: 12))])),
                 if (_showPin && _pinText.text.trim().isNotEmpty) Positioned(left: 18, right: 18, top: 96, child: Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.45), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.white24)), child: Text(_pinText.text.trim(), style: const TextStyle(color: Colors.white70, fontSize: 12)))),
                 Center(child: Container(width: 150, height: 150, decoration: BoxDecoration(shape: BoxShape.circle, boxShadow: [BoxShadow(color: glow.withValues(alpha: 0.55), blurRadius: 32, spreadRadius: 12)], border: Border.all(color: glow, width: 2), color: Colors.black.withValues(alpha: 0.24)), child: Icon(Icons.fingerprint, size: 92, color: glow))),
