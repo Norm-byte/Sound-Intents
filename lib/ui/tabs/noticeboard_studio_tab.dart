@@ -308,7 +308,12 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
     final isVideo = isYoutube || lower.endsWith('.mp4') || lower.endsWith('.mov') || lower.endsWith('.webm');
     final isPdf = pathOnly.endsWith('.pdf');
     final viewId = 'noticeboard-learn-more-inline-${url.hashCode}';
-    if (isPdf) {
+    if (isYoutube) {
+      final id = _youtubeId(url);
+      if (id != null) {
+        registerYoutubeViewFactory(viewId, 'https://www.youtube.com/embed/$id?autoplay=0&playsinline=1&rel=0');
+      }
+    } else if (isPdf) {
       registerPdfCanvasViewFactory(viewId, url);
     } else if (!isImage && !isVideo) {
       registerPdfViewFactory(viewId, url);
@@ -319,9 +324,18 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
     }
     if (isPdf) return HtmlElementView(viewType: viewId);
     if (isVideo) {
-      return VideoGridItem(url: url, type: isYoutube ? 'youtube' : 'upload', enablePreview: true, autoPlay: false);
+      if (isYoutube) return HtmlElementView(viewType: viewId);
+      registerVideoViewFactory(viewId, url);
+      return HtmlElementView(viewType: viewId);
     }
     return HtmlElementView(viewType: viewId);
+  }
+
+  String? _youtubeId(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return null;
+    if (uri.host.contains('youtu.be') && uri.pathSegments.isNotEmpty) return uri.pathSegments.first;
+    return uri.queryParameters['v'];
   }
 
   @override

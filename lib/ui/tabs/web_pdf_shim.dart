@@ -20,6 +20,33 @@ void registerPdfViewFactory(String viewType, String url) {
   });
 }
 
+void registerYoutubeViewFactory(String viewType, String url, {bool autoPlay = false}) {
+  ui_web.platformViewRegistry.registerViewFactory(viewType, (int viewId) {
+    final iframe = html.IFrameElement()
+      ..src = url
+      ..style.border = 'none'
+      ..style.width = '100%'
+      ..style.height = '100%'
+      ..allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture';
+    return iframe;
+  });
+}
+
+void registerVideoViewFactory(String viewType, String url) {
+  ui_web.platformViewRegistry.registerViewFactory(viewType, (int viewId) {
+    final video = html.VideoElement()
+      ..src = url
+      ..autoplay = false
+      ..loop = false
+      ..controls = true
+      ..style.objectFit = 'contain'
+      ..style.width = '100%'
+      ..style.height = '100%';
+    video.setAttribute('playsinline', 'true');
+    return video;
+  });
+}
+
 void registerPdfObjectViewFactory(String viewType, String url) {
   ui_web.platformViewRegistry.registerViewFactory(viewType, (int viewId) {
     final element = html.ObjectElement()
