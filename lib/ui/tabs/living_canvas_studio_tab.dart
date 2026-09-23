@@ -23,9 +23,6 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   bool _loopAudio = true;
   bool _tapAudioOnly = false;
   String _backgroundMode = 'image';
-  String _audioMode = 'preset';
-  String _presetTrackId = '528hz';
-
   final _title = TextEditingController(text: 'Living Canvas');
   final _duration = TextEditingController(text: '30');
   final _imageUrl = TextEditingController();
@@ -100,15 +97,14 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
     _loopAudio = data['loopAudio'] != false;
     _tapAudioOnly = data['playOnThumbprintTapOnly'] == true;
     _backgroundMode = (data['backgroundMode'] as String?) ?? 'image';
-    _audioMode = (data['audioMode'] as String?) ?? 'preset';
-    _presetTrackId = (data['presetTrackId'] as String?) ?? '528hz';
     _title.text = (data['title'] as String?) ?? 'Living Canvas';
     _duration.text = ((data['durationMinutes'] as num?)?.toInt() ?? 30).toString();
     _imageUrl.text = (data['backgroundImageUrl'] as String?) ?? '';
     _videoUrl.text = (data['backgroundVideoUrl'] as String?) ?? '';
     _carouselUrls.text = ((data['carouselImageUrls'] as List?) ?? const []).map((e) => e.toString()).join('\n');
     _carouselMinutes.text = ((data['carouselRotateMinutes'] as num?)?.toInt() ?? 10).toString();
-    _audioUrl.text = (data['customAudioUrl'] as String?) ?? '';
+    _audioUrl.text =
+      (data['chimeAudioUrl'] as String?) ?? (data['customAudioUrl'] as String?) ?? '';
     _glow.text = (data['thumbprintGlowColor'] as String?) ?? 'FFD54F';
     _pinText.text = (data['pinCardText'] as String?) ?? '';
     _thanksTitle.text = (data['thankYouTitle'] as String?) ?? 'Thank you';
@@ -131,8 +127,8 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
       'backgroundVideoUrl': _videoUrl.text.trim(),
       'carouselImageUrls': _carouselUrls.text.split('\n').map((e) => e.trim()).where((e) => e.isNotEmpty).toList(),
       'carouselRotateMinutes': (int.tryParse(_carouselMinutes.text.trim()) ?? 10).clamp(1, 240),
-      'audioMode': _audioMode,
-      'presetTrackId': _presetTrackId,
+      'audioMode': _audioUrl.text.trim().isEmpty ? 'silent' : 'custom',
+      'chimeAudioUrl': _audioUrl.text.trim(),
       'customAudioUrl': _audioUrl.text.trim(),
       'loopAudio': _loopAudio,
       'playOnThumbprintTapOnly': _tapAudioOnly,
@@ -280,9 +276,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
             TextField(controller: _videoUrl, decoration: const InputDecoration(labelText: 'MP4 URL / Media Library video URL')),
             TextField(controller: _carouselUrls, maxLines: 4, decoration: const InputDecoration(labelText: 'Carousel image URLs (one per line)')),
             TextField(controller: _carouselMinutes, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Carousel rotate minutes')),
-            DropdownButtonFormField<String>(initialValue: _audioMode, decoration: const InputDecoration(labelText: 'Slot audio source'), items: const [DropdownMenuItem(value: 'preset', child: Text('Preset chime')), DropdownMenuItem(value: 'custom', child: Text('Media Library/custom audio URL')), DropdownMenuItem(value: 'silent', child: Text('Silent'))], onChanged: (v) => setState(() => _audioMode = v ?? 'preset')),
-            DropdownButtonFormField<String>(initialValue: _presetTrackId, decoration: const InputDecoration(labelText: 'Preset track'), items: const [DropdownMenuItem(value: '528hz', child: Text('528Hz')), DropdownMenuItem(value: 'singing_bowl', child: Text('Singing bowl')), DropdownMenuItem(value: 'rainfall', child: Text('Rainfall')), DropdownMenuItem(value: 'soft_chime', child: Text('Soft chime'))], onChanged: (v) => setState(() => _presetTrackId = v ?? '528hz')),
-            TextField(controller: _audioUrl, decoration: const InputDecoration(labelText: 'Audio URL / Media Library audio URL')),
+            TextField(controller: _audioUrl, decoration: const InputDecoration(labelText: 'Event-start chime/audio URL')),
             SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('Loop audio'), value: _loopAudio, onChanged: (v) => setState(() => _loopAudio = v)),
             SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('Play audio only after thumbprint tap'), value: _tapAudioOnly, onChanged: (v) => setState(() => _tapAudioOnly = v)),
             TextField(controller: _glow, decoration: const InputDecoration(labelText: 'Thumbprint glow color (hex)')),
