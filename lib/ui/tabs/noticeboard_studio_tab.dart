@@ -304,17 +304,38 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
     final isVideo = isYoutube || lower.endsWith('.mp4') || lower.endsWith('.mov') || lower.endsWith('.webm');
     final isPdf = lower.contains('.pdf');
     final viewId = 'noticeboard-learn-more-inline-${url.hashCode}';
-    if (!isImage && !isVideo) {
-      registerPdfViewFactory(viewId, isPdf ? '$url#toolbar=0&navpanes=0' : url);
+    if (isYoutube) {
+      final id = _youtubeId(url);
+      if (id != null) {
+        registerPdfViewFactory(viewId, 'https://www.youtube.com/embed/$id?autoplay=0&playsinline=1&rel=0');
+      }
+    } else if (!isImage && !isVideo) {
+      registerPdfViewFactory(viewId, isPdf ? '$url#toolbar=0&navpanes=0&scrollbar=1&view=FitH' : url);
     }
 
     if (isImage) {
       return InteractiveViewer(child: Image.network(url, fit: BoxFit.contain));
     }
+    if (isYoutube) {
+      return HtmlElementView(viewType: viewId);
+    }
     if (isVideo) {
-      return VideoGridItem(url: url, type: isYoutube ? 'youtube' : 'upload', enablePreview: true, autoPlay: false);
+      return VideoGridItem(url: url, type: 'upload', enablePreview: false, autoPlay: true);
     }
     return HtmlElementView(viewType: viewId);
+  }
+
+  String? _youtubeId(String url) {
+    try {
+      final uri = Uri.parse(url);
+      if (uri.queryParameters.containsKey('v')) return uri.queryParameters['v'];
+      if (uri.host.contains('youtu.be') && uri.pathSegments.isNotEmpty) return uri.pathSegments.first;
+      final shorts = uri.pathSegments.indexOf('shorts');
+      if (shorts >= 0 && shorts + 1 < uri.pathSegments.length) return uri.pathSegments[shorts + 1];
+      final embed = uri.pathSegments.indexOf('embed');
+      if (embed >= 0 && embed + 1 < uri.pathSegments.length) return uri.pathSegments[embed + 1];
+    } catch (_) {}
+    return null;
   }
 
   @override
@@ -462,24 +483,31 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
             decoration: BoxDecoration(borderRadius: BorderRadius.circular(28), border: Border.all(color: Colors.black87, width: 8), color: const Color(0xFF111827)),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(20),
-              child: Stack(children: [
-                Positioned.fill(child: Container(decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0xFF1E293B), Color(0xFF020617)])))),
-                if (_phonePreviewShowingLearnMore) ...[
-                  Positioned.fill(child: _buildLearnMorePreviewContent()),
-                  Positioned(
-                    top: 12,
-                    left: 12,
-                    child: CircleAvatar(
-                      backgroundColor: Colors.black54,
-                      child: IconButton(
-                        tooltip: 'Back to noticeboard',
-                        icon: const Icon(Icons.arrow_back, color: Colors.white),
-                        onPressed: () => setState(() => _phonePreviewShowingLearnMore = false),
-                      ),
-                    ),
-                  ),
-                ] else
-                  Center(
+              child: _phonePreviewShowingLearnMore
+                  ? Column(
+                      children: [
+                        Container(
+                          height: 48,
+                          color: Colors.black,
+                          child: Row(
+                            children: [
+                              IconButton(
+                                tooltip: 'Back to noticeboard',
+                                icon: const Icon(Icons.arrow_back, color: Colors.white),
+                                onPressed: () => setState(() => _phonePreviewShowingLearnMore = false),
+                              ),
+                              const Expanded(
+                                child: Text('Learn More', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Expanded(child: _buildLearnMorePreviewContent()),
+                      ],
+                    )
+                  : Stack(children: [
+                      Positioned.fill(child: Container(decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0xFF1E293B), Color(0xFF020617)])))),
+                      Center(
                     child: Container(
                       margin: const EdgeInsets.all(20),
                       padding: const EdgeInsets.all(16),
@@ -509,8 +537,8 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
                         ],
                       ]),
                     ),
-                  ),
-              ]),
+                    ),
+                  ]),
             ),
           ),
         ),
