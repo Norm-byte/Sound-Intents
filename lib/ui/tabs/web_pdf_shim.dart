@@ -74,8 +74,10 @@ void registerPdfCanvasViewFactory(String viewType, String url) {
       ..style.maxHeight = '100%';
     host.append(canvas);
 
-    Timer(const Duration(milliseconds: 80), () async {
+    Timer.periodic(const Duration(milliseconds: 100), (timer) async {
       try {
+        if (host.clientWidth <= 0 || host.clientHeight <= 0) return;
+        timer.cancel();
         final pdfjs = globalContext['pdfjsLib'];
         if (pdfjs == null) return;
         final loadingTask = (pdfjs as JSObject).callMethod<JSAny?>('getDocument'.toJS, url.toJS) as JSObject;
@@ -99,7 +101,9 @@ void registerPdfCanvasViewFactory(String viewType, String url) {
           'viewport': viewport,
         }.jsify()) as JSObject;
         await (renderTask['promise'] as JSPromise).toDart;
-      } catch (_) {}
+      } catch (_) {
+        timer.cancel();
+      }
     });
     return host;
   });
