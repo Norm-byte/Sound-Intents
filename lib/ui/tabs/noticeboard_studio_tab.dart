@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 
 import '../../models/media_item.dart';
 import '../../services/media_library_service.dart';
@@ -23,6 +24,7 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
   bool _remindMeEnabled = false;
   bool _learnMoreEnabled = false;
   bool _phonePreviewShowingLearnMore = false;
+  bool _phonePreviewRemindMeRequested = false;
   String _borderTheme = 'standard';
   String _selectedCardId = 'draft_main';
 
@@ -101,6 +103,7 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
     _selectedCardId = cardId;
     _borderTheme = (card['borderTheme'] as String?) ?? 'standard';
     _remindMeEnabled = card['remindMeEnabled'] == true;
+    _phonePreviewRemindMeRequested = false;
     _learnMoreEnabled = card['learnMoreEnabled'] == true;
     _titleController.text = (card['title'] as String?) ?? '';
     _bodyController.text = (card['body'] as String?) ?? '';
@@ -181,6 +184,7 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
     _learnMoreContentUrlController.clear();
     _linkedSlotIdController.clear();
     _remindMeEnabled = false;
+    _phonePreviewRemindMeRequested = false;
     _showBeforeHoursController.text = '24';
     _hideAfterHoursController.text = '0';
     setState(() {});
@@ -309,8 +313,8 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
       if (id != null) {
         registerPdfViewFactory(viewId, 'https://www.youtube.com/embed/$id?autoplay=0&playsinline=1&rel=0');
       }
-    } else if (!isImage && !isVideo) {
-      registerPdfViewFactory(viewId, isPdf ? '$url#toolbar=0&navpanes=0&scrollbar=1&view=FitH' : url);
+    } else if (!isImage && !isVideo && !isPdf) {
+      registerPdfViewFactory(viewId, url);
     }
 
     if (isImage) {
@@ -318,6 +322,20 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
     }
     if (isYoutube) {
       return HtmlElementView(viewType: viewId);
+    }
+    if (isPdf) {
+      return SfPdfViewer.network(
+        url,
+        pageLayoutMode: PdfPageLayoutMode.single,
+        scrollDirection: PdfScrollDirection.vertical,
+        initialZoomLevel: 0.5,
+        maxZoomLevel: 1,
+        enableDoubleTapZooming: false,
+        canShowScrollHead: false,
+        canShowScrollStatus: false,
+        canShowPaginationDialog: false,
+        interactionMode: PdfInteractionMode.pan,
+      );
     }
     if (isVideo) {
       return VideoGridItem(url: url, type: 'upload', enablePreview: false, autoPlay: true);
@@ -533,7 +551,11 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
                         ],
                         if (_remindMeEnabled) ...[
                           const SizedBox(height: 8),
-                          OutlinedButton(onPressed: null, child: const Text('Remind Me')),
+                          OutlinedButton.icon(
+                            onPressed: () => setState(() => _phonePreviewRemindMeRequested = true),
+                            icon: Icon(_phonePreviewRemindMeRequested ? Icons.notifications_active : Icons.notifications_none),
+                            label: Text(_phonePreviewRemindMeRequested ? 'Notification requested' : 'Remind Me'),
+                          ),
                         ],
                       ]),
                     ),
