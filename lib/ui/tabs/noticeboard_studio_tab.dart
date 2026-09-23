@@ -437,7 +437,14 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
                       Text(_bodyController.text.trim().isEmpty ? 'Noticeboard body text appears here.' : _bodyController.text.trim(), textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70, fontSize: 13)),
                       if (_learnMoreEnabled) ...[
                         const SizedBox(height: 14),
-                        ElevatedButton(onPressed: null, child: Text(_learnMoreLabelController.text.trim().isEmpty ? 'Learn More' : _learnMoreLabelController.text.trim())),
+                        ElevatedButton(
+                          onPressed: _testLearnMore,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.amberAccent,
+                            foregroundColor: Colors.black87,
+                          ),
+                          child: Text(_learnMoreLabelController.text.trim().isEmpty ? 'Learn More' : _learnMoreLabelController.text.trim()),
+                        ),
                       ],
                       if (_remindMeEnabled) ...[
                         const SizedBox(height: 8),

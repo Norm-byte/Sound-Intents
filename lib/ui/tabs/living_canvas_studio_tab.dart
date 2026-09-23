@@ -291,12 +291,19 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
 
   Future<void> _saveDraft() async {
     setState(() => _saving = true);
-    await FirebaseFirestore.instance.collection('draft_living_canvas_slots').doc(_selectedSlotId).set(_data(published: false), SetOptions(merge: true));
-    await _saveDefaults(showSnack: false);
-    await _loadSlots();
-    if (mounted) {
-      setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Living Canvas draft saved')));
+    try {
+      await FirebaseFirestore.instance.collection('draft_living_canvas_slots').doc(_selectedSlotId).set(_data(published: false), SetOptions(merge: true));
+      await _saveDefaults(showSnack: false);
+      await _loadSlots();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Living Canvas draft saved')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not save Living Canvas draft: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
   }
 
@@ -318,21 +325,28 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
 
   Future<void> _publishWeek() async {
     setState(() => _publishing = true);
-    final snap = await FirebaseFirestore.instance
-        .collection('draft_living_canvas_slots')
-        .where('weekKey', isEqualTo: _weekKey)
-        .where('canvasScope', isEqualTo: _canvasScope)
-        .get();
-    final batch = FirebaseFirestore.instance.batch();
-    for (final doc in snap.docs) {
-      final data = Map<String, dynamic>.from(doc.data())..['published'] = true;
-      batch.set(FirebaseFirestore.instance.collection('living_canvas_slots').doc(doc.id), data, SetOptions(merge: true));
-    }
-    await batch.commit();
-    await _loadSlots();
-    if (mounted) {
-      setState(() => _publishing = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Published ${snap.docs.length} ${_canvasScope == 'international' ? 'International' : 'National'} slot${snap.docs.length == 1 ? '' : 's'} for week of ${DateFormat('MMM d').format(_weekStart)}')));
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('draft_living_canvas_slots')
+          .where('weekKey', isEqualTo: _weekKey)
+          .where('canvasScope', isEqualTo: _canvasScope)
+          .get();
+      final batch = FirebaseFirestore.instance.batch();
+      for (final doc in snap.docs) {
+        final data = Map<String, dynamic>.from(doc.data())..['published'] = true;
+        batch.set(FirebaseFirestore.instance.collection('living_canvas_slots').doc(doc.id), data, SetOptions(merge: true));
+      }
+      await batch.commit();
+      await _loadSlots();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Published ${snap.docs.length} ${_canvasScope == 'international' ? 'International' : 'National'} slot${snap.docs.length == 1 ? '' : 's'} for week of ${DateFormat('MMM d').format(_weekStart)}')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not publish Living Canvas week: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _publishing = false);
     }
   }
 
