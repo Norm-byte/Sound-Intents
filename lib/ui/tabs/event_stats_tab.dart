@@ -16,7 +16,6 @@ class _EventStatsTabState extends State<EventStatsTab> {
   bool _isSavingInternationalJoined = false;
   bool _isSavingRegionalUsers = false;
   bool _isSavingEventViewers = false;
-  bool _isSavingThumbprints = false;
   bool _showLiveStats = false;
   bool _showCommunityLiveCounter = false;
   bool _overlayShowTimezoneFlags = false;
@@ -31,7 +30,6 @@ class _EventStatsTabState extends State<EventStatsTab> {
   Map<String, int> _regionalUserCountAdjustments = const {};
   String _selectedRegion = 'BST';
   int _eventLiveViewerAdjustment = 0;
-  int _thumbprintAdjustment = 0;
 
   @override
   void initState() {
@@ -137,8 +135,6 @@ class _EventStatsTabState extends State<EventStatsTab> {
         }
         _eventLiveViewerAdjustment =
           (homeData['eventLiveViewerAdjustment'] as num?)?.toInt() ?? 0;
-        _thumbprintAdjustment =
-          (homeData['thumbprintCountAdjustment'] as num?)?.toInt() ?? 0;
 
         if (communityData.containsKey('showCommunityLiveCounter')) {
           _showCommunityLiveCounter = communityData['showCommunityLiveCounter'] == true;
@@ -483,20 +479,10 @@ class _EventStatsTabState extends State<EventStatsTab> {
                         (saving) => setState(() => _isSavingEventViewers = saving),
                       ),
                     ),
-                    _CounterAdditionRow(
+                    _ThumbprintCountRow(
                       label: 'Thumbprints',
                       trueCount: _thumbprintTotal,
                       trueLabel: 'thumbprint taps',
-                      value: _thumbprintAdjustment,
-                      saving: _isSavingThumbprints,
-                      onChanged: (value) => setState(
-                        () => _thumbprintAdjustment = value,
-                      ),
-                      onPublish: () => _saveDisplayAddition(
-                        'thumbprintCountAdjustment',
-                        _thumbprintAdjustment,
-                        (saving) => setState(() => _isSavingThumbprints = saving),
-                      ),
                     ),
                   ],
                 ),
@@ -624,6 +610,49 @@ class _CounterAdditionRow extends StatefulWidget {
 
   @override
   State<_CounterAdditionRow> createState() => _CounterAdditionRowState();
+}
+
+class _ThumbprintCountRow extends StatelessWidget {
+  final String label;
+  final int trueCount;
+  final String trueLabel;
+
+  const _ThumbprintCountRow({
+    required this.label,
+    required this.trueCount,
+    required this.trueLabel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 2,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label),
+                Text(trueLabel),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          SizedBox(
+            width: 92,
+            child: _CounterValueBox(label: 'True', value: '$trueCount'),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 92,
+            child: _CounterValueBox(label: 'Total', value: '$trueCount'),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _CounterAdditionRowState extends State<_CounterAdditionRow> {
