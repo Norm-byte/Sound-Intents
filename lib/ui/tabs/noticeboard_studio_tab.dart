@@ -1,6 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 
 import '../../models/media_item.dart';
 import '../../services/media_library_service.dart';
@@ -313,7 +312,9 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
       if (id != null) {
         registerPdfViewFactory(viewId, 'https://www.youtube.com/embed/$id?autoplay=0&playsinline=1&rel=0');
       }
-    } else if (!isImage && !isVideo && !isPdf) {
+    } else if (isPdf) {
+      registerPdfObjectViewFactory(viewId, '$url#toolbar=0&navpanes=0&scrollbar=0');
+    } else if (!isImage && !isVideo) {
       registerPdfViewFactory(viewId, url);
     }
 
@@ -323,14 +324,7 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
     if (isYoutube) {
       return HtmlElementView(viewType: viewId);
     }
-    if (isPdf) {
-      return SfPdfViewer.network(
-        url,
-        enableDoubleTapZooming: true,
-        canShowScrollHead: true,
-        canShowScrollStatus: true,
-      );
-    }
+    if (isPdf) return HtmlElementView(viewType: viewId);
     if (isVideo) {
       return VideoGridItem(url: url, type: 'upload', enablePreview: false, autoPlay: true);
     }

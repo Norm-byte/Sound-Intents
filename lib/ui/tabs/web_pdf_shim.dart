@@ -14,3 +14,15 @@ void registerPdfViewFactory(String viewType, String url) {
     return iframe;
   });
 }
+
+void registerPdfObjectViewFactory(String viewType, String url) {
+  ui_web.platformViewRegistry.registerViewFactory(viewType, (int viewId) {
+    final element = html.ObjectElement()
+      ..data = url
+      ..type = 'application/pdf'
+      ..style.border = 'none'
+      ..style.width = '100%'
+      ..style.height = '100%';
+    return element;
+  });
+}
