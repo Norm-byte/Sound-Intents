@@ -163,7 +163,7 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
   }
 
   Future<void> _pickMediaUrl({required Set<String> allowedTypes, required TextEditingController target}) async {
-    String? selectedSection;
+    String? selectedSection = 'All';
     final selected = await showDialog<MediaItem>(
       context: context,
       builder: (context) => StatefulBuilder(
@@ -205,9 +205,7 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
                   ),
                   const Divider(height: 1),
                   Expanded(
-                    child: selectedSection == null
-                        ? const Center(child: Text('Please select a category from the dropdown above'))
-                        : StreamBuilder<List<MediaItem>>(
+                      child: StreamBuilder<List<MediaItem>>(
                             stream: _mediaLibrary.getMediaStream(section: selectedSection == 'All' ? null : selectedSection),
                             builder: (context, snapshot) {
                               if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
@@ -265,12 +263,44 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Add Learn More content first')));
       return;
     }
+    final lower = url.toLowerCase();
+    final isImage = lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.gif') || lower.endsWith('.webp');
+    final isYoutube = lower.contains('youtube') || lower.contains('youtu.be');
+    final isVideo = isYoutube || lower.endsWith('.mp4') || lower.endsWith('.mov') || lower.endsWith('.webm');
     await showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Learn More content URL'),
-        content: SelectableText(url),
-        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
+      builder: (context) => Dialog(
+        child: SizedBox(
+          width: 520,
+          height: 680,
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+                child: Row(
+                  children: [
+                    const Expanded(child: Text('Learn More Preview', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+                    IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close)),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: isImage
+                        ? InteractiveViewer(child: Image.network(url, fit: BoxFit.contain))
+                        : isVideo
+                            ? VideoGridItem(url: url, type: isYoutube ? 'youtube' : 'upload', enablePreview: true, autoPlay: false)
+                            : Center(child: SelectableText(url)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
