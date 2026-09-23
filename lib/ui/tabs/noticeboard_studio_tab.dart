@@ -22,6 +22,7 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
   bool _enableNoticeboardStudioFeed = true;
   bool _remindMeEnabled = false;
   bool _learnMoreEnabled = false;
+  bool _phonePreviewShowingLearnMore = false;
   String _borderTheme = 'standard';
   String _selectedCardId = 'draft_main';
 
@@ -286,52 +287,34 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Add Learn More content first')));
       return;
     }
+    setState(() => _phonePreviewShowingLearnMore = true);
+  }
+
+  Widget _buildLearnMorePreviewContent() {
+    final url = _learnMoreContentUrlController.text.trim();
+    if (url.isEmpty) {
+      return const Center(
+        child: Text('No Learn More content selected', style: TextStyle(color: Colors.white54)),
+      );
+    }
+
     final lower = url.toLowerCase();
     final isImage = lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.gif') || lower.endsWith('.webp');
     final isYoutube = lower.contains('youtube') || lower.contains('youtu.be');
     final isVideo = isYoutube || lower.endsWith('.mp4') || lower.endsWith('.mov') || lower.endsWith('.webm');
     final isPdf = lower.contains('.pdf');
-    final viewId = 'noticeboard-learn-more-${url.hashCode}-${DateTime.now().millisecondsSinceEpoch}';
+    final viewId = 'noticeboard-learn-more-inline-${url.hashCode}';
     if (!isImage && !isVideo) {
       registerPdfViewFactory(viewId, isPdf ? '$url#toolbar=0&navpanes=0' : url);
     }
-    await showDialog<void>(
-      context: context,
-      builder: (context) => Dialog(
-        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
-        child: SizedBox(
-          width: 760,
-          height: 840,
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
-                child: Row(
-                  children: [
-                    const Expanded(child: Text('Learn More Preview', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
-                    IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close)),
-                  ],
-                ),
-              ),
-              const Divider(height: 1),
-              Expanded(
-                child: ClipRRect(
-                  borderRadius: const BorderRadius.vertical(bottom: Radius.circular(4)),
-                  child: isImage
-                      ? Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: InteractiveViewer(child: Image.network(url, fit: BoxFit.contain)),
-                        )
-                      : isVideo
-                          ? VideoGridItem(url: url, type: isYoutube ? 'youtube' : 'upload', enablePreview: true, autoPlay: false)
-                          : HtmlElementView(viewType: viewId),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+
+    if (isImage) {
+      return InteractiveViewer(child: Image.network(url, fit: BoxFit.contain));
+    }
+    if (isVideo) {
+      return VideoGridItem(url: url, type: isYoutube ? 'youtube' : 'upload', enablePreview: true, autoPlay: false);
+    }
+    return HtmlElementView(viewType: viewId);
   }
 
   @override
@@ -481,37 +464,52 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
               borderRadius: BorderRadius.circular(20),
               child: Stack(children: [
                 Positioned.fill(child: Container(decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0xFF1E293B), Color(0xFF020617)])))),
-                Center(
-                  child: Container(
-                    margin: const EdgeInsets.all(20),
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(color: Colors.black.withValues(alpha: _borderTheme == 'glass' ? 0.32 : 0.55), borderRadius: BorderRadius.circular(14), border: Border.all(color: borderColor, width: _borderTheme == 'gold' ? 2 : 1)),
-                    child: Column(mainAxisSize: MainAxisSize.min, children: [
-                      if (_imageUrlController.text.trim().isNotEmpty) ...[
-                        ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.network(_imageUrlController.text.trim(), height: 120, fit: BoxFit.cover)),
-                        const SizedBox(height: 12),
-                      ],
-                      Text(_titleController.text.trim().isEmpty ? 'Noticeboard title' : _titleController.text.trim(), textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                      const SizedBox(height: 10),
-                      Text(_bodyController.text.trim().isEmpty ? 'Noticeboard body text appears here.' : _bodyController.text.trim(), textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70, fontSize: 13)),
-                      if (_learnMoreEnabled) ...[
-                        const SizedBox(height: 14),
-                        ElevatedButton(
-                          onPressed: _testLearnMore,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.amberAccent,
-                            foregroundColor: Colors.black87,
-                          ),
-                          child: Text(_learnMoreLabelController.text.trim().isEmpty ? 'Learn More' : _learnMoreLabelController.text.trim()),
-                        ),
-                      ],
-                      if (_remindMeEnabled) ...[
-                        const SizedBox(height: 8),
-                        OutlinedButton(onPressed: null, child: const Text('Remind Me')),
-                      ],
-                    ]),
+                if (_phonePreviewShowingLearnMore) ...[
+                  Positioned.fill(child: _buildLearnMorePreviewContent()),
+                  Positioned(
+                    top: 12,
+                    left: 12,
+                    child: CircleAvatar(
+                      backgroundColor: Colors.black54,
+                      child: IconButton(
+                        tooltip: 'Back to noticeboard',
+                        icon: const Icon(Icons.arrow_back, color: Colors.white),
+                        onPressed: () => setState(() => _phonePreviewShowingLearnMore = false),
+                      ),
+                    ),
                   ),
-                ),
+                ] else
+                  Center(
+                    child: Container(
+                      margin: const EdgeInsets.all(20),
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(color: Colors.black.withValues(alpha: _borderTheme == 'glass' ? 0.32 : 0.55), borderRadius: BorderRadius.circular(14), border: Border.all(color: borderColor, width: _borderTheme == 'gold' ? 2 : 1)),
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                        if (_imageUrlController.text.trim().isNotEmpty) ...[
+                          ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.network(_imageUrlController.text.trim(), height: 120, fit: BoxFit.cover)),
+                          const SizedBox(height: 12),
+                        ],
+                        Text(_titleController.text.trim().isEmpty ? 'Noticeboard title' : _titleController.text.trim(), textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 10),
+                        Text(_bodyController.text.trim().isEmpty ? 'Noticeboard body text appears here.' : _bodyController.text.trim(), textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                        if (_learnMoreEnabled) ...[
+                          const SizedBox(height: 14),
+                          ElevatedButton(
+                            onPressed: _testLearnMore,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.amberAccent,
+                              foregroundColor: Colors.black87,
+                            ),
+                            child: Text(_learnMoreLabelController.text.trim().isEmpty ? 'Learn More' : _learnMoreLabelController.text.trim()),
+                          ),
+                        ],
+                        if (_remindMeEnabled) ...[
+                          const SizedBox(height: 8),
+                          OutlinedButton(onPressed: null, child: const Text('Remind Me')),
+                        ],
+                      ]),
+                    ),
+                  ),
               ]),
             ),
           ),
