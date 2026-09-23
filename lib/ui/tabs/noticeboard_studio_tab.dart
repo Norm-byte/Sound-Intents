@@ -311,7 +311,7 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
     if (isYoutube) {
       final id = _youtubeId(url);
       if (id != null) {
-        registerYoutubeViewFactory(viewId, 'https://www.youtube.com/embed/$id?autoplay=0&controls=1&playsinline=1&rel=0&modestbranding=1');
+        registerYoutubeViewFactory(viewId, 'https://www.youtube.com/embed/$id?autoplay=1&mute=1&controls=1&playsinline=1&rel=0&modestbranding=1');
       }
     } else if (isPdf) {
       registerPdfObjectViewFactory(viewId, '$url#toolbar=0&navpanes=0&scrollbar=0');
@@ -321,6 +321,14 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
 
     if (isImage) {
       return InteractiveViewer(child: Image.network(url, fit: BoxFit.contain));
+    }
+    if (isYoutube) {
+      return Center(
+        child: AspectRatio(
+          aspectRatio: 16 / 9,
+          child: HtmlElementView(viewType: viewId),
+        ),
+      );
     }
     if (isPdf) return HtmlElementView(viewType: viewId);
     if (isVideo) {
