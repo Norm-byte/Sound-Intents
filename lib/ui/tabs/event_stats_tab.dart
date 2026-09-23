@@ -16,6 +16,7 @@ class _EventStatsTabState extends State<EventStatsTab> {
   bool _isSavingInternationalJoined = false;
   bool _isSavingRegionalUsers = false;
   bool _isSavingEventViewers = false;
+  bool _isSavingThumbprints = false;
   bool _showLiveStats = false;
   bool _showCommunityLiveCounter = false;
   bool _overlayShowTimezoneFlags = false;
@@ -23,12 +24,14 @@ class _EventStatsTabState extends State<EventStatsTab> {
   int _worldwideUserTotal = 0;
   int _internationalJoinedTotal = 0;
   int _eventLiveViewerTotal = 0;
+  int _thumbprintTotal = 0;
   int _worldwideUserTotalAdjustment = 0;
   int _internationalJoinedAdjustment = 0;
   Map<String, int> _regionalUserTotals = const {};
   Map<String, int> _regionalUserCountAdjustments = const {};
   String _selectedRegion = 'BST';
   int _eventLiveViewerAdjustment = 0;
+  int _thumbprintAdjustment = 0;
 
   @override
   void initState() {
@@ -42,6 +45,7 @@ class _EventStatsTabState extends State<EventStatsTab> {
     final now = DateTime.now();
     var nearestInternationalJoined = 0;
     var liveViewers = 0;
+    var thumbprints = 0;
 
     try {
       final globalEvents = await FirebaseFirestore.instance
@@ -72,6 +76,7 @@ class _EventStatsTabState extends State<EventStatsTab> {
       final cutoff =
           Timestamp.fromDate(now.subtract(const Duration(seconds: 15)));
       for (final eventDoc in eventViewerRoots.docs) {
+        thumbprints += (eventDoc.data()['thumbprintCount'] as num?)?.toInt() ?? 0;
         final sessions = await eventDoc.reference
             .collection('sessions')
             .where('lastSeenAt', isGreaterThan: cutoff)
@@ -89,6 +94,7 @@ class _EventStatsTabState extends State<EventStatsTab> {
     setState(() {
       _internationalJoinedTotal = nearestInternationalJoined;
       _eventLiveViewerTotal = liveViewers;
+      _thumbprintTotal = thumbprints;
     });
   }
 
@@ -131,6 +137,8 @@ class _EventStatsTabState extends State<EventStatsTab> {
         }
         _eventLiveViewerAdjustment =
           (homeData['eventLiveViewerAdjustment'] as num?)?.toInt() ?? 0;
+        _thumbprintAdjustment =
+          (homeData['thumbprintCountAdjustment'] as num?)?.toInt() ?? 0;
 
         if (communityData.containsKey('showCommunityLiveCounter')) {
           _showCommunityLiveCounter = communityData['showCommunityLiveCounter'] == true;
@@ -473,6 +481,21 @@ class _EventStatsTabState extends State<EventStatsTab> {
                         'eventLiveViewerAdjustment',
                         _eventLiveViewerAdjustment,
                         (saving) => setState(() => _isSavingEventViewers = saving),
+                      ),
+                    ),
+                    _CounterAdditionRow(
+                      label: 'Thumbprints',
+                      trueCount: _thumbprintTotal,
+                      trueLabel: 'thumbprint taps',
+                      value: _thumbprintAdjustment,
+                      saving: _isSavingThumbprints,
+                      onChanged: (value) => setState(
+                        () => _thumbprintAdjustment = value,
+                      ),
+                      onPublish: () => _saveDisplayAddition(
+                        'thumbprintCountAdjustment',
+                        _thumbprintAdjustment,
+                        (saving) => setState(() => _isSavingThumbprints = saving),
                       ),
                     ),
                   ],
