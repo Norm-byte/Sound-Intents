@@ -331,13 +331,13 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
         ),
       );
     }
-    if (isPdf) return HtmlElementView(viewType: viewId);
+    if (isPdf) return SizedBox.expand(child: HtmlElementView(viewType: viewId));
     if (isVideo) {
       if (isYoutube) return HtmlElementView(viewType: viewId);
       registerVideoViewFactory(viewId, url);
       return HtmlElementView(viewType: viewId);
     }
-    return HtmlElementView(viewType: viewId);
+    return SizedBox.expand(child: HtmlElementView(viewType: viewId));
   }
 
   String? _youtubeId(String url) {

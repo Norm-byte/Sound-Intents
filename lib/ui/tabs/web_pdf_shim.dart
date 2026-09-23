@@ -77,9 +77,9 @@ void registerPdfCanvasViewFactory(String viewType, String url) {
     Timer.periodic(const Duration(milliseconds: 100), (timer) async {
       try {
         if (host.clientWidth <= 0 || host.clientHeight <= 0) return;
-        timer.cancel();
         final pdfjs = globalContext['pdfjsLib'];
         if (pdfjs == null) return;
+        timer.cancel();
         final loadingTask = (pdfjs as JSObject).callMethod<JSAny?>('getDocument'.toJS, url.toJS) as JSObject;
         final document = await (loadingTask['promise'] as JSPromise).toDart;
         final pagePromise = (document as JSObject).callMethod<JSAny?>('getPage'.toJS, 1.toJS) as JSPromise;
