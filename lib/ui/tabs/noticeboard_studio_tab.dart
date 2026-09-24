@@ -162,9 +162,14 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
         field: value,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+      final saved = await FirebaseFirestore.instance
+          .collection('app_config')
+          .doc('noticeboard_studio')
+          .get(const GetOptions(source: Source.server));
+      final persistedValue = saved.data()?[field] == true;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(value ? '$field enabled' : '$field disabled')),
+          SnackBar(content: Text('$field ${persistedValue ? 'enabled' : 'disabled'} on server')),
         );
       }
     } finally {
