@@ -44,6 +44,32 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   Map<String, Map<String, dynamic>> _drafts = const {};
   Map<String, Map<String, dynamic>> _published = const {};
 
+  static const Set<String> _slotComparisonFields = {
+    'slotId',
+    'canvasScope',
+    'dateKey',
+    'weekKey',
+    'startTimeUTC',
+    'originTimeZone',
+    'originTimeZoneOffset',
+    'originLocalDateTime',
+    'hour',
+    'laneMinute',
+    'durationSeconds',
+    'title',
+    'mediaUrl',
+    'backgroundImageUrl',
+    'audioMode',
+    'chimeAudioUrl',
+    'customAudioUrl',
+    'thumbprintGlowColor',
+    'showPinCard',
+    'pinCardText',
+    'thankYouTitle',
+    'thankYouBody',
+    'showGoodometerGraph',
+  };
+
   final List<Map<String, dynamic>> _timeZones = const [
     {'label': 'UTC', 'offset': 0},
     {'label': 'London (Auto DST)', 'offset': 0},
@@ -243,6 +269,37 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
       .get();
     _drafts = {for (final d in drafts.docs) d.id: d.data()};
     _published = {for (final d in published.docs) d.id: d.data()};
+    await _removeStaleDrafts();
+  }
+
+  Future<void> _removeStaleDrafts() async {
+    final staleDraftIds = _drafts.entries
+        .where((entry) {
+          final published = _published[entry.key];
+          if (published == null) return false;
+          return _slotComparisonFields.every(
+            (field) => entry.value[field] == published[field],
+          );
+        })
+        .map((entry) => entry.key)
+        .toList();
+    if (staleDraftIds.isEmpty) return;
+
+    try {
+      final batch = FirebaseFirestore.instance.batch();
+      for (final id in staleDraftIds) {
+        batch.delete(
+          FirebaseFirestore.instance
+              .collection('draft_living_canvas_slots')
+              .doc(id),
+        );
+      }
+      await batch.commit();
+      _drafts = Map<String, Map<String, dynamic>>.from(_drafts)
+        ..removeWhere((id, _) => staleDraftIds.contains(id));
+    } catch (e) {
+      debugPrint('Could not remove stale Living Canvas drafts: $e');
+    }
   }
 
   void _loadSelectedSlot() {
