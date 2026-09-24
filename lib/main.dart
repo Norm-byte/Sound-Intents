@@ -27,6 +27,7 @@ import 'ui/tabs/documentation_tab.dart'; // Added for Operators Manual
 import 'ui/tabs/chat_management_tab.dart';
 import 'ui/tabs/community_tab.dart';
 import 'ui/tabs/community_support_tab.dart';
+import 'ui/tabs/customer_support_tab.dart';
 import 'ui/tabs/living_canvas_studio_tab.dart';
 import 'ui/tabs/noticeboard_studio_tab.dart';
 import 'ui/tabs/monetization_tab.dart';
@@ -255,6 +256,7 @@ class _AdminHomePageState extends State<AdminHomePage>
       Tab(icon: Icon(Icons.lightbulb), text: 'Topics'),
       Tab(icon: Icon(Icons.forum), text: 'Community'),
       Tab(icon: Icon(Icons.volunteer_activism), text: 'Community Support'),
+      Tab(icon: Icon(Icons.support_agent), text: 'Customer Support'),
       Tab(icon: Icon(Icons.fingerprint), text: 'Thumbprints'),
       Tab(icon: Icon(Icons.chrome_reader_mode), text: 'Noticeboard Studio'),
       Tab(icon: Icon(Icons.monetization_on), text: 'Deals/Offers'),
@@ -381,7 +383,7 @@ class _AdminHomePageState extends State<AdminHomePage>
               _initialModerationUserId = userId;
             });
             if (_hasAccess('system')) {
-              _tabController.animateTo(14);
+              _tabController.animateTo(15);
             } else {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('Access Denied')),
@@ -396,6 +398,12 @@ class _AdminHomePageState extends State<AdminHomePage>
         'community_support',
         'Community Support',
         const CommunitySupportTab(),
+      ),
+
+      buildTab(
+        'customer_support',
+        'Customer Support',
+        CustomerSupportTab(adminUser: widget.adminUser),
       ),
 
       // 12. Living Canvas Studio (v69 additive system; does not replace legacy events)

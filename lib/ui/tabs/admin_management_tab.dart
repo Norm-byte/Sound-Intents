@@ -64,6 +64,7 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
     'topics': false,
     'community': false,           // Community
     'community_support': false,   // Community Support
+    'customer_support': false,    // Customer Support
     'living_canvas_studio': false,// Living Canvas Studio
     'noticeboard_studio': false,  // Noticeboard Studio
     'monetization': false,        // Deals/Offers
@@ -88,6 +89,7 @@ class _AdminManagementTabState extends State<AdminManagementTab> with SingleTick
     'topics':          'Topics',
     'community':       'Community',
     'community_support': 'Community Support',
+    'customer_support': 'Customer Support',
     'living_canvas_studio': 'Living Canvas Studio',
     'noticeboard_studio': 'Noticeboard Studio',
     'monetization':    'Deals / Offers',
