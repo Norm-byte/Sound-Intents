@@ -20,6 +20,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
 
   bool _loading = true;
   bool _saving = false;
+  bool _clearing = false;
   bool _publishing = false;
   bool _audioPreviewPlaying = false;
   bool _globalThumbprintModeActive = false;
@@ -375,6 +376,94 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
       }
     } finally {
       if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _clearSelectedSlot() async {
+    final slotLabel = '${DateFormat('MMM d').format(_date)} '
+        '${_hour.toString().padLeft(2, '0')}:${_lane.toString().padLeft(2, '0')}';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Clear Thumbprint slot?'),
+        content: Text(
+          'This removes the $slotLabel draft and published slot, plus its repeating default. '
+          'It will no longer play for this week or future dates.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
+            child: const Text('Clear slot'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _clearing = true);
+    try {
+      final matchesSelectedSlot = (MapEntry<String, Map<String, dynamic>> entry) =>
+          (entry.value['hour'] as num?)?.toInt() == _hour &&
+          (entry.value['laneMinute'] as num?)?.toInt() == _lane;
+      final draftIds = _drafts.entries
+          .where(matchesSelectedSlot)
+          .map((entry) => entry.key);
+      final publishedIds = _published.entries
+          .where(matchesSelectedSlot)
+          .map((entry) => entry.key);
+      final configRef = FirebaseFirestore.instance
+          .collection('app_config')
+          .doc('living_canvas');
+      final config = await configRef.get();
+      final repeatingDefaults = Map<String, dynamic>.from(
+        (config.data()?['repeatingDefaults'] as Map?) ??
+            const <String, dynamic>{},
+      );
+      final defaultKey = '${_canvasScope}_${_hour.toString().padLeft(2, '0')}${_lane.toString().padLeft(2, '0')}';
+      final removedDefault = repeatingDefaults.remove(defaultKey) != null;
+
+      final batch = FirebaseFirestore.instance.batch();
+      for (final id in draftIds) {
+        batch.delete(
+          FirebaseFirestore.instance
+              .collection('draft_living_canvas_slots')
+              .doc(id),
+        );
+      }
+      for (final id in publishedIds) {
+        batch.delete(
+          FirebaseFirestore.instance
+              .collection('living_canvas_slots')
+              .doc(id),
+        );
+      }
+      if (removedDefault) {
+        batch.set(configRef, {
+          'repeatingDefaults': repeatingDefaults,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+      await batch.commit();
+      await _loadSlots();
+      _loadSelectedSlot();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Cleared Thumbprint slot for $slotLabel')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not clear Thumbprint slot: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _clearing = false);
     }
   }
 
@@ -902,6 +991,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
             const SizedBox(height: 12),
             Wrap(spacing: 8, runSpacing: 8, children: [
               ElevatedButton.icon(onPressed: _saving ? null : _saveDraft, icon: _saving ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.save), label: Text(_saving ? 'Saving...' : 'Save slot draft')),
+              OutlinedButton.icon(onPressed: _clearing ? null : _clearSelectedSlot, icon: _clearing ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.delete_outline), label: Text(_clearing ? 'Clearing...' : 'Clear slot')),
               OutlinedButton.icon(onPressed: () => _saveDefaults(), icon: const Icon(Icons.copy_all), label: const Text('Save as repeating default')),
             ]),
           ]),
