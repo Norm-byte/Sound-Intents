@@ -317,7 +317,17 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
       ..remove('hour')
       ..remove('laneMinute')
       ..remove('published');
-    await FirebaseFirestore.instance.collection('app_config').doc('living_canvas').set(data, SetOptions(merge: true));
+    final configRef = FirebaseFirestore.instance.collection('app_config').doc('living_canvas');
+    final existing = await configRef.get();
+    final repeatingDefaults = Map<String, dynamic>.from(
+      (existing.data()?['repeatingDefaults'] as Map?) ?? const <String, dynamic>{},
+    );
+    final defaultKey = '${_canvasScope}_${_hour.toString().padLeft(2, '0')}${_lane.toString().padLeft(2, '0')}';
+    repeatingDefaults[defaultKey] = data;
+    await configRef.set({
+      ...data,
+      'repeatingDefaults': repeatingDefaults,
+    }, SetOptions(merge: true));
     if (showSnack && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved as repeating default')));
     }
