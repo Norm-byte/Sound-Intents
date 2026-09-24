@@ -16,6 +16,7 @@ class LivingCanvasStudioTab extends StatefulWidget {
 
 class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   final MediaLibraryService _mediaLibrary = MediaLibraryService();
+  final ScrollController _hourStripController = ScrollController();
   VideoPlayerController? _audioPreviewController;
 
   bool _loading = true;
@@ -194,11 +195,40 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
 
   @override
   void dispose() {
+    _hourStripController.dispose();
     _audioPreviewController?.dispose();
     for (final c in [_title, _durationSeconds, _mediaUrl, _audioUrl, _glow, _pinText, _thanksTitle, _thanksBody]) {
       c.dispose();
     }
     super.dispose();
+  }
+
+  void _scrollHours(int direction) {
+    if (!_hourStripController.hasClients) return;
+    final position = _hourStripController.position;
+    final target = (_hourStripController.offset + (direction * 280))
+        .clamp(position.minScrollExtent, position.maxScrollExtent)
+        .toDouble();
+    _hourStripController.animateTo(
+      target,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOut,
+    );
+  }
+
+  void _scrollToHour(int hour) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_hourStripController.hasClients) return;
+      final position = _hourStripController.position;
+      final target = (hour * 66.0 - 132)
+          .clamp(position.minScrollExtent, position.maxScrollExtent)
+          .toDouble();
+      _hourStripController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+      );
+    });
   }
 
   Future<void> _toggleAudioPreview() async {
@@ -881,13 +911,22 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
               },
             ),
             const SizedBox(height: 12),
-            SizedBox(
-              height: 46,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                itemCount: 24,
-                separatorBuilder: (_, __) => const SizedBox(width: 6),
-                itemBuilder: (context, hour) {
+            Row(
+              children: [
+                IconButton(
+                  tooltip: 'Earlier hours',
+                  onPressed: () => _scrollHours(-1),
+                  icon: const Icon(Icons.chevron_left),
+                ),
+                Expanded(
+                  child: SizedBox(
+                    height: 46,
+                    child: ListView.separated(
+                      controller: _hourStripController,
+                      scrollDirection: Axis.horizontal,
+                      itemCount: 24,
+                      separatorBuilder: (_, __) => const SizedBox(width: 6),
+                      itemBuilder: (context, hour) {
                     final matchingIds = {..._drafts, ..._published}.entries.where((entry) =>
                       (entry.value['hour'] as num?)?.toInt() == hour &&
                       (entry.value['laneMinute'] as num?)?.toInt() == _lane);
@@ -903,11 +942,20 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
                     onSelected: (_) {
                       setState(() => _hour = hour);
                       _loadSelectedSlot();
+                      _scrollToHour(hour);
                     },
                   );
                 },
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Later hours',
+                  onPressed: () => _scrollHours(1),
+                  icon: const Icon(Icons.chevron_right),
+                ),
+              ],
               ),
-            ),
             const SizedBox(height: 8),
             const Wrap(spacing: 12, children: [_LegendDot(color: Colors.green, label: 'Published'), _LegendDot(color: Colors.amber, label: 'Draft'), _LegendDot(color: Colors.grey, label: 'Empty')]),
           ]),
