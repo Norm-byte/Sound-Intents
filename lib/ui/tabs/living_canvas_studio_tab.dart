@@ -222,12 +222,12 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   Future<void> _loadSlots() async {
     final drafts = await FirebaseFirestore.instance
       .collection('draft_living_canvas_slots')
-      .where('dateKey', isEqualTo: _dateKey)
+      .where('weekKey', isEqualTo: _weekKey)
       .where('canvasScope', isEqualTo: _canvasScope)
       .get();
     final published = await FirebaseFirestore.instance
       .collection('living_canvas_slots')
-      .where('dateKey', isEqualTo: _dateKey)
+      .where('weekKey', isEqualTo: _weekKey)
       .where('canvasScope', isEqualTo: _canvasScope)
       .get();
     _drafts = {for (final d in drafts.docs) d.id: d.data()};
