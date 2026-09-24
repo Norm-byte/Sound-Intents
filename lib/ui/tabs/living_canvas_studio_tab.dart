@@ -61,6 +61,17 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   String _slotId(int hour, int lane) => 'lc_${_canvasScope}_${hour.toString().padLeft(2, '0')}${lane.toString().padLeft(2, '0')}_$_dateKey';
   String get _selectedSlotId => _slotId(_hour, _lane);
 
+  String? get _existingSelectedSlotId {
+    for (final entry in {..._drafts, ..._published}.entries) {
+      final data = entry.value;
+      if ((data['hour'] as num?)?.toInt() == _hour &&
+          (data['laneMinute'] as num?)?.toInt() == _lane) {
+        return entry.key;
+      }
+    }
+    return null;
+  }
+
   String _normalizeTimeZoneLabel(String? rawLabel) {
     final label = (rawLabel ?? 'UTC').trim();
     switch (label) {
@@ -235,7 +246,10 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   }
 
   void _loadSelectedSlot() {
-    final data = _drafts[_selectedSlotId] ?? _published[_selectedSlotId];
+    final existingId = _existingSelectedSlotId;
+    final data = existingId == null
+        ? null
+        : (_drafts[existingId] ?? _published[existingId]);
     _apply(data ?? const <String, dynamic>{});
   }
 
@@ -292,7 +306,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   Future<void> _saveDraft() async {
     setState(() => _saving = true);
     try {
-      await FirebaseFirestore.instance.collection('draft_living_canvas_slots').doc(_selectedSlotId).set(_data(published: false), SetOptions(merge: true));
+      await FirebaseFirestore.instance.collection('draft_living_canvas_slots').doc(_existingSelectedSlotId ?? _selectedSlotId).set(_data(published: false), SetOptions(merge: true));
       await _saveDefaults(showSnack: false);
       await _loadSlots();
       if (mounted) {
@@ -726,9 +740,11 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
                 itemCount: 24,
                 separatorBuilder: (_, __) => const SizedBox(width: 6),
                 itemBuilder: (context, hour) {
-                  final id = _slotId(hour, _lane);
-                  final hasDraft = _drafts.containsKey(id);
-                  final hasPublished = _published.containsKey(id);
+                    final matchingIds = {..._drafts, ..._published}.entries.where((entry) =>
+                      (entry.value['hour'] as num?)?.toInt() == hour &&
+                      (entry.value['laneMinute'] as num?)?.toInt() == _lane);
+                    final hasDraft = matchingIds.any((entry) => _drafts.containsKey(entry.key));
+                    final hasPublished = matchingIds.any((entry) => _published.containsKey(entry.key));
                   final color = hasDraft ? Colors.amber.shade700 : (hasPublished ? Colors.green.shade600 : Colors.grey.shade400);
                   return ChoiceChip(
                     selected: hour == _hour,
