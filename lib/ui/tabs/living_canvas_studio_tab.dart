@@ -908,9 +908,26 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
         ),
       );
 
-  Widget _preview() {
+  Widget _preview() => AnimatedBuilder(
+    animation: Listenable.merge([
+      _title,
+      _mediaUrl,
+      _glow,
+      _pinText,
+      _thanksTitle,
+      _thanksBody,
+    ]),
+    builder: (context, _) => _previewContent(),
+  );
+
+  Widget _previewContent() {
     final glow = _hex(_glow.text) ?? Colors.amber;
     final mediaUrl = _mediaUrl.text.trim();
+    final popupBody = _pinText.text.trim().isNotEmpty
+        ? _pinText.text.trim()
+        : _thanksBody.text.trim().isNotEmpty
+        ? _thanksBody.text.trim()
+        : 'Your intent has joined this shared moment.';
     final mediaPath = Uri.tryParse(mediaUrl)?.path.toLowerCase() ?? mediaUrl.toLowerCase().split('?').first;
     final isVideo = mediaPath.endsWith('.mp4') || mediaPath.endsWith('.mov') || mediaPath.endsWith('.webm') || mediaPath.endsWith('.mpeg4');
     return Container(
@@ -942,10 +959,40 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
                 Positioned(top: 18, right: 16, child: _previewPill('Exit Event')),
                 if (_title.text.trim().isNotEmpty)
                   Positioned(top: 54, left: 18, right: 18, child: Column(children: [Text(_title.text.trim(), textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)), const SizedBox(height: 6), Text('${DateFormat('EEE MMM d').format(_date)} • ${_hour.toString().padLeft(2, '0')}:${_lane.toString().padLeft(2, '0')}', style: const TextStyle(color: Colors.white70, fontSize: 12))])),
-                if (_showPin && _pinText.text.trim().isNotEmpty) Positioned(left: 18, right: 18, top: 96, child: Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.45), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.white24)), child: Text(_pinText.text.trim(), style: const TextStyle(color: Colors.white70, fontSize: 12)))),
+                if (_showPin)
+                  Positioned(
+                    left: 18,
+                    right: 18,
+                    top: 142,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.62),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: glow.withValues(alpha: 0.75)),
+                        boxShadow: [
+                          BoxShadow(color: glow.withValues(alpha: 0.28), blurRadius: 18, spreadRadius: 2),
+                        ],
+                      ),
+                      child: Column(
+                        children: [
+                          Text(
+                            _thanksTitle.text.trim().isEmpty ? 'Thank you' : _thanksTitle.text.trim(),
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            popupBody,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Colors.white70, fontSize: 13),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 Center(child: Container(width: 150, height: 150, decoration: BoxDecoration(shape: BoxShape.circle, boxShadow: [BoxShadow(color: glow.withValues(alpha: 0.55), blurRadius: 32, spreadRadius: 12)], border: Border.all(color: glow, width: 2), color: Colors.black.withValues(alpha: 0.24)), child: Icon(Icons.fingerprint, size: 92, color: glow))),
                 if (_showGoodometer) Positioned(left: 18, right: 18, bottom: 118, child: Row(children: [Expanded(child: _bar('National', 0.62, Colors.amberAccent)), const SizedBox(width: 8), Expanded(child: _bar('Last high', 0.52, Colors.lightBlueAccent))])),
-                Positioned(left: 18, right: 18, bottom: 24, child: Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.45), borderRadius: BorderRadius.circular(14)), child: Column(children: [Text(_thanksTitle.text.trim().isEmpty ? 'Thank you' : _thanksTitle.text.trim(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)), const SizedBox(height: 4), Text(_thanksBody.text.trim(), textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70, fontSize: 11))]))),
               ]),
             ),
           ),
