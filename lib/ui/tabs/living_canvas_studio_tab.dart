@@ -62,7 +62,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   String get _selectedSlotId => _slotId(_hour, _lane);
 
   String? get _existingSelectedSlotId {
-    for (final entry in {..._drafts, ..._published}.entries) {
+    for (final entry in {..._published, ..._drafts}.entries) {
       final data = entry.value;
       if ((data['hour'] as num?)?.toInt() == _hour &&
           (data['laneMinute'] as num?)?.toInt() == _lane) {
@@ -249,7 +249,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
     final existingId = _existingSelectedSlotId;
     final data = existingId == null
       ? null
-      : (_published[existingId] ?? _drafts[existingId]);
+      : (_drafts[existingId] ?? _published[existingId]);
     _apply(data ?? const <String, dynamic>{});
   }
 
@@ -359,9 +359,11 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
       for (final doc in snap.docs) {
         final data = Map<String, dynamic>.from(doc.data())..['published'] = true;
         batch.set(FirebaseFirestore.instance.collection('living_canvas_slots').doc(doc.id), data, SetOptions(merge: true));
+        batch.delete(doc.reference);
       }
       await batch.commit();
       await _loadSlots();
+      _loadSelectedSlot();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Published ${snap.docs.length} ${_canvasScope == 'international' ? 'International' : 'National'} slot${snap.docs.length == 1 ? '' : 's'} for week of ${DateFormat('MMM d').format(_weekStart)}')));
       }
@@ -745,7 +747,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
                       (entry.value['laneMinute'] as num?)?.toInt() == _lane);
                     final hasDraft = matchingIds.any((entry) => _drafts.containsKey(entry.key));
                     final hasPublished = matchingIds.any((entry) => _published.containsKey(entry.key));
-                  final color = hasPublished ? Colors.green.shade600 : (hasDraft ? Colors.amber.shade700 : Colors.grey.shade400);
+                  final color = hasDraft ? Colors.amber.shade700 : (hasPublished ? Colors.green.shade600 : Colors.grey.shade400);
                   return ChoiceChip(
                     selected: hour == _hour,
                     selectedColor: Colors.indigo.shade100,
