@@ -248,8 +248,8 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   void _loadSelectedSlot() {
     final existingId = _existingSelectedSlotId;
     final data = existingId == null
-        ? null
-        : (_drafts[existingId] ?? _published[existingId]);
+      ? null
+      : (_published[existingId] ?? _drafts[existingId]);
     _apply(data ?? const <String, dynamic>{});
   }
 
@@ -745,7 +745,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
                       (entry.value['laneMinute'] as num?)?.toInt() == _lane);
                     final hasDraft = matchingIds.any((entry) => _drafts.containsKey(entry.key));
                     final hasPublished = matchingIds.any((entry) => _published.containsKey(entry.key));
-                  final color = hasDraft ? Colors.amber.shade700 : (hasPublished ? Colors.green.shade600 : Colors.grey.shade400);
+                  final color = hasPublished ? Colors.green.shade600 : (hasDraft ? Colors.amber.shade700 : Colors.grey.shade400);
                   return ChoiceChip(
                     selected: hour == _hour,
                     selectedColor: Colors.indigo.shade100,
