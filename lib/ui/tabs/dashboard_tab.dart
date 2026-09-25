@@ -1705,9 +1705,25 @@ class _AdminAlertsCardState extends State<_AdminAlertsCard> {
       final supportSnapshot = await FirebaseFirestore.instance
           .collection('support_inbox')
           .where('read', isEqualTo: false)
-          .count()
           .get()
           .timeout(const Duration(seconds: 12));
+
+      // Some tickets were resolved before 'read' was reliably cleared on
+      // resolve; treat resolved tickets as not alerting and self-heal them.
+      final staleResolvedDocs = <DocumentReference>[];
+      final unresolvedUnreadCount = supportSnapshot.docs.where((doc) {
+        final isResolved = (doc.data()['status'] as String?) == 'resolved';
+        if (isResolved) staleResolvedDocs.add(doc.reference);
+        return !isResolved;
+      }).length;
+
+      if (staleResolvedDocs.isNotEmpty) {
+        final batch = FirebaseFirestore.instance.batch();
+        for (final ref in staleResolvedDocs) {
+          batch.update(ref, {'read': true});
+        }
+        unawaited(batch.commit());
+      }
       
       // 2. Check Pending Moderation Items
       final modSnapshot = await FirebaseFirestore.instance
@@ -1730,7 +1746,7 @@ class _AdminAlertsCardState extends State<_AdminAlertsCard> {
 
       if (mounted) {
         setState(() {
-          _supportMessages = supportSnapshot.count ?? 0;
+          _supportMessages = unresolvedUnreadCount;
           _moderationQueue = actionableModeration;
           _quotaAlerts = quotaSnapshot.docs.length;
           _isLoading = false;
