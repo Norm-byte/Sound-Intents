@@ -1354,10 +1354,15 @@ class _UnmutedVideoPreviewState extends State<_UnmutedVideoPreview> {
     try {
       await controller.initialize();
       await controller.setLooping(true);
-      await controller.setVolume(1.0);
+      // Browsers block autoplay-with-sound unless triggered by a user gesture,
+      // so start muted (always allowed) and restore audio once playback begins.
+      await controller.setVolume(0);
       await controller.play();
-      widget.onPlaybackChanged?.call(true);
       if (mounted) setState(() {});
+      try {
+        await controller.setVolume(1.0);
+      } catch (_) {}
+      widget.onPlaybackChanged?.call(true);
     } catch (e) {
       debugPrint('Error initializing Thumbprint background preview: $e');
     }
@@ -1370,6 +1375,8 @@ class _UnmutedVideoPreviewState extends State<_UnmutedVideoPreview> {
       await controller.pause();
       widget.onPlaybackChanged?.call(false);
     } else {
+      // A tap is a real user gesture, so audio is guaranteed to be allowed here.
+      await controller.setVolume(1.0);
       await controller.play();
       widget.onPlaybackChanged?.call(true);
     }
