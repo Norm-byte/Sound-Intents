@@ -24,6 +24,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   bool _saving = false;
   bool _clearing = false;
   bool _clearingLane = false;
+  bool _diagnosing = false;
   bool _publishing = false;
   bool _audioPreviewPlaying = false;
   bool _mutingVideoAudio = false;
@@ -442,6 +443,76 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
     }
   }
 
+  Future<void> _diagnoseLane() async {
+    setState(() => _diagnosing = true);
+    try {
+      final configRef = FirebaseFirestore.instance.collection('app_config').doc('living_canvas');
+      final config = await configRef.get();
+      final liveDefaults = Map<String, dynamic>.from(
+        (config.data()?['repeatingDefaults'] as Map?) ?? const <String, dynamic>{},
+      );
+      final draftDefaults = Map<String, dynamic>.from(
+        (config.data()?['repeatingDraftDefaults'] as Map?) ?? const <String, dynamic>{},
+      );
+      final lanePrefix = '${_canvasScope}_';
+      final laneSuffix = _lane.toString().padLeft(2, '0');
+      final matchingLive = liveDefaults.keys.where((key) => key.startsWith(lanePrefix) && key.endsWith(laneSuffix)).toList();
+      final matchingDraft = draftDefaults.keys.where((key) => key.startsWith(lanePrefix) && key.endsWith(laneSuffix)).toList();
+
+      final legacyDrafts = await FirebaseFirestore.instance
+          .collection('draft_living_canvas_slots')
+          .where('canvasScope', isEqualTo: _canvasScope)
+          .where('laneMinute', isEqualTo: _lane)
+          .get();
+      final legacyPublished = await FirebaseFirestore.instance
+          .collection('living_canvas_slots')
+          .where('canvasScope', isEqualTo: _canvasScope)
+          .where('laneMinute', isEqualTo: _lane)
+          .get();
+
+      final buffer = StringBuffer()
+        ..writeln('Scope: $_canvasScope   Lane: :${_lane.toString().padLeft(2, '0')}')
+        ..writeln()
+        ..writeln('repeatingDefaults keys matching this lane (${matchingLive.length}):')
+        ..writeln(matchingLive.isEmpty ? '  (none)' : matchingLive.map((k) => '  $k').join('\n'))
+        ..writeln()
+        ..writeln('repeatingDraftDefaults keys matching this lane (${matchingDraft.length}):')
+        ..writeln(matchingDraft.isEmpty ? '  (none)' : matchingDraft.map((k) => '  $k').join('\n'))
+        ..writeln()
+        ..writeln('living_canvas_slots docs matching canvasScope+laneMinute (${legacyPublished.docs.length}):')
+        ..writeln(legacyPublished.docs.isEmpty
+            ? '  (none)'
+            : legacyPublished.docs.map((d) => '  id=${d.id} hour=${d.data()['hour']} laneMinute=${d.data()['laneMinute']} (${d.data()['hour'].runtimeType})').join('\n'))
+        ..writeln()
+        ..writeln('draft_living_canvas_slots docs matching canvasScope+laneMinute (${legacyDrafts.docs.length}):')
+        ..writeln(legacyDrafts.docs.isEmpty
+            ? '  (none)'
+            : legacyDrafts.docs.map((d) => '  id=${d.id} hour=${d.data()['hour']} laneMinute=${d.data()['laneMinute']} (${d.data()['hour'].runtimeType})').join('\n'));
+
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Lane diagnostic'),
+            content: SizedBox(
+              width: 560,
+              child: SingleChildScrollView(child: SelectableText(buffer.toString())),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
+            ],
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Diagnostic failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _diagnosing = false);
+    }
+  }
+
   Future<void> _clearLane() async {
     final laneLabel = ':${_lane.toString().padLeft(2, '0')}';
     final scopeLabel = _canvasScope == 'international' ? 'International' : 'National';
@@ -834,6 +905,14 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
                         : Colors.indigo.shade800,
                   ),
                 ),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: _diagnosing ? null : _diagnoseLane,
+                icon: _diagnosing
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.search),
+                label: Text(_diagnosing ? 'Checking...' : 'Diagnose lane'),
               ),
               const SizedBox(width: 8),
               OutlinedButton.icon(
