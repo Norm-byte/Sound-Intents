@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:video_player/video_player.dart';
@@ -24,6 +25,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   bool _clearing = false;
   bool _publishing = false;
   bool _audioPreviewPlaying = false;
+  bool _mutingVideoAudio = false;
   bool _globalThumbprintModeActive = false;
   int _lane = 0;
   int _hour = 12;
@@ -221,6 +223,41 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Could not preview audio: $e')),
       );
+    }
+  }
+
+  Future<void> _muteBackgroundVideoAudio() async {
+    final url = _mediaUrl.text.trim();
+    if (url.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Choose a background video first')),
+      );
+      return;
+    }
+
+    setState(() => _mutingVideoAudio = true);
+    try {
+      final result = await FirebaseFunctions.instance
+          .httpsCallable('stripThumbprintVideoAudio')
+          .call({'mediaUrl': url});
+      final mutedUrl = (result.data as Map)['mutedUrl'] as String?;
+      if (mutedUrl == null || mutedUrl.isEmpty) {
+        throw Exception('No muted video URL returned');
+      }
+      setState(() => _mediaUrl.text = mutedUrl);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Background video audio removed. A silent copy is now set.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not mute background video audio: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _mutingVideoAudio = false);
     }
   }
 
@@ -871,6 +908,14 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
                 onPressed: () => _pickMediaUrl(allowedTypes: {'image', 'video', 'youtube'}, target: _mediaUrl),
                 icon: const Icon(Icons.perm_media),
                 label: const Text('Media Library'),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: _mutingVideoAudio ? null : _muteBackgroundVideoAudio,
+                icon: _mutingVideoAudio
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.volume_off),
+                label: Text(_mutingVideoAudio ? 'Muting...' : 'Mute video audio'),
               ),
               IconButton(
                 tooltip: 'Remove background media',
