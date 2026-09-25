@@ -48,6 +48,8 @@ class _CustomerSupportTabState extends State<CustomerSupportTab> {
 
   Future<void> _selectTicket(DocumentSnapshot<Map<String, dynamic>> ticket) async {
     await _ensureTicket(ticket);
+    // Opening a ticket clears its dashboard alert; resolving does the same below.
+    await ticket.reference.set({'read': true}, SetOptions(merge: true));
     if (!mounted) return;
     setState(() => _selectedUserId = ticket.id);
   }
@@ -58,6 +60,7 @@ class _CustomerSupportTabState extends State<CustomerSupportTab> {
     try {
       await FirebaseFirestore.instance.collection('support_inbox').doc(_selectedUserId).set({
         ...fields,
+        if (fields['status'] == 'resolved') 'read': true,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     } finally {

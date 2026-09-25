@@ -25,12 +25,12 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   bool _publishing = false;
   bool _audioPreviewPlaying = false;
   bool _globalThumbprintModeActive = false;
-  DateTime _date = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
   int _lane = 0;
   int _hour = 12;
 
   bool _showPin = false;
   bool _showGoodometer = false;
+  bool _showDateTime = false;
   String _canvasScope = 'national';
   String _selectedTimeZoneLabel = 'UTC';
   int _selectedTimeZoneOffset = 0;
@@ -43,34 +43,9 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   final _thanksTitle = TextEditingController(text: 'Thank you');
   final _thanksBody = TextEditingController(text: 'Your intent has joined this shared moment.');
 
-  Map<String, Map<String, dynamic>> _drafts = const {};
-  Map<String, Map<String, dynamic>> _published = const {};
-
-  static const Set<String> _slotComparisonFields = {
-    'slotId',
-    'canvasScope',
-    'dateKey',
-    'weekKey',
-    'startTimeUTC',
-    'originTimeZone',
-    'originTimeZoneOffset',
-    'originLocalDateTime',
-    'hour',
-    'laneMinute',
-    'durationSeconds',
-    'title',
-    'mediaUrl',
-    'backgroundImageUrl',
-    'audioMode',
-    'chimeAudioUrl',
-    'customAudioUrl',
-    'thumbprintGlowColor',
-    'showPinCard',
-    'pinCardText',
-    'thankYouTitle',
-    'thankYouBody',
-    'showGoodometerGraph',
-  };
+  // Repeating slot records, keyed by '${scope}_${HH}${MM}'. Draft-only until published.
+  Map<String, Map<String, dynamic>> _draftDefaults = const {};
+  Map<String, Map<String, dynamic>> _liveDefaults = const {};
 
   final List<Map<String, dynamic>> _timeZones = const [
     {'label': 'UTC', 'offset': 0},
@@ -82,23 +57,8 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
     {'label': 'Sydney (Auto DST)', 'offset': 10},
   ];
 
-  String get _dateKey => DateFormat('yyyyMMdd').format(_date);
-  DateTime get _weekStart => _date.subtract(Duration(days: _date.weekday - DateTime.monday));
-  DateTime get _weekEndExclusive => _weekStart.add(const Duration(days: 7));
-  String get _weekKey => DateFormat('yyyyMMdd').format(_weekStart);
-  String _slotId(int hour, int lane) => 'lc_${_canvasScope}_${hour.toString().padLeft(2, '0')}${lane.toString().padLeft(2, '0')}_$_dateKey';
-  String get _selectedSlotId => _slotId(_hour, _lane);
-
-  String? get _existingSelectedSlotId {
-    for (final entry in {..._published, ..._drafts}.entries) {
-      final data = entry.value;
-      if ((data['hour'] as num?)?.toInt() == _hour &&
-          (data['laneMinute'] as num?)?.toInt() == _lane) {
-        return entry.key;
-      }
-    }
-    return null;
-  }
+  String get _selectedDefaultKey =>
+      '${_canvasScope}_${_hour.toString().padLeft(2, '0')}${_lane.toString().padLeft(2, '0')}';
 
   String _normalizeTimeZoneLabel(String? rawLabel) {
     final label = (rawLabel ?? 'UTC').trim();
@@ -178,11 +138,12 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   }
 
   DateTime _slotStartUtc() {
+    final now = DateTime.now();
     if (_canvasScope == 'international') {
-      final originDateTime = DateTime.utc(_date.year, _date.month, _date.day, _hour, _lane);
+      final originDateTime = DateTime.utc(now.year, now.month, now.day, _hour, _lane);
       return originDateTime.subtract(Duration(hours: _selectedTimeZoneOffset));
     }
-    return DateTime(_date.year, _date.month, _date.day, _hour, _lane).toUtc();
+    return DateTime(now.year, now.month, now.day, _hour, _lane).toUtc();
   }
 
   String _formatUtcPreview(DateTime dt) => DateFormat('yyyy-MM-dd HH:mm').format(dt);
@@ -267,7 +228,6 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
     setState(() => _loading = true);
     try {
       await _loadDefaults();
-      await _loadSlots();
       _loadSelectedSlot();
     } catch (e) {
       if (mounted) {
@@ -284,69 +244,27 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
     final doc = await FirebaseFirestore.instance.collection('app_config').doc('living_canvas').get();
     final data = doc.data() ?? const <String, dynamic>{};
     _globalThumbprintModeActive = data['isThumbprintModeActive'] == true;
-    _apply(data);
-  }
-
-  Future<void> _loadSlots() async {
-    final drafts = await FirebaseFirestore.instance
-      .collection('draft_living_canvas_slots')
-      .where('weekKey', isEqualTo: _weekKey)
-      .where('canvasScope', isEqualTo: _canvasScope)
-      .get();
-    final published = await FirebaseFirestore.instance
-      .collection('living_canvas_slots')
-      .where('weekKey', isEqualTo: _weekKey)
-      .where('canvasScope', isEqualTo: _canvasScope)
-      .get();
-    _drafts = {for (final d in drafts.docs) d.id: d.data()};
-    _published = {for (final d in published.docs) d.id: d.data()};
-    await _removeStaleDrafts();
-  }
-
-  Future<void> _removeStaleDrafts() async {
-    final staleDraftIds = _drafts.entries
-        .where((entry) {
-          final published = _published[entry.key];
-          if (published == null) return false;
-          return _slotComparisonFields.every(
-            (field) => entry.value[field] == published[field],
-          );
-        })
-        .map((entry) => entry.key)
-        .toList();
-    if (staleDraftIds.isEmpty) return;
-
-    try {
-      final batch = FirebaseFirestore.instance.batch();
-      for (final id in staleDraftIds) {
-        batch.delete(
-          FirebaseFirestore.instance
-              .collection('draft_living_canvas_slots')
-              .doc(id),
-        );
-      }
-      await batch.commit();
-      _drafts = Map<String, Map<String, dynamic>>.from(_drafts)
-        ..removeWhere((id, _) => staleDraftIds.contains(id));
-    } catch (e) {
-      debugPrint('Could not remove stale Living Canvas drafts: $e');
-    }
+    _liveDefaults = (data['repeatingDefaults'] as Map? ?? const {}).map(
+      (key, value) => MapEntry(key as String, Map<String, dynamic>.from(value as Map)),
+    );
+    _draftDefaults = (data['repeatingDraftDefaults'] as Map? ?? const {}).map(
+      (key, value) => MapEntry(key as String, Map<String, dynamic>.from(value as Map)),
+    );
   }
 
   void _loadSelectedSlot() {
-    final existingId = _existingSelectedSlotId;
-    final data = existingId == null
-      ? null
-      : (_drafts[existingId] ?? _published[existingId]);
+    final key = _selectedDefaultKey;
+    final data = _draftDefaults[key] ?? _liveDefaults[key];
     _apply(data ?? const <String, dynamic>{});
   }
 
   void _apply(Map<String, dynamic> data) {
     _showPin = data['showPinCard'] == true;
     _showGoodometer = data['showGoodometerGraph'] == true;
+    _showDateTime = data['showDateTime'] == true;
     _canvasScope = (data['canvasScope'] as String?) ?? _canvasScope;
     _selectedTimeZoneLabel = _normalizeTimeZoneLabel(data['originTimeZone'] as String?);
-    _selectedTimeZoneOffset = _offsetForZone(_selectedTimeZoneLabel, _date);
+    _selectedTimeZoneOffset = _offsetForZone(_selectedTimeZoneLabel, DateTime.now());
     _title.text = (data['title'] as String?) ?? '';
     _durationSeconds.text = ((data['durationSeconds'] as num?)?.toInt() ?? (data['durationMinutes'] as num?)?.toInt() ?? 30).toString();
     _mediaUrl.text = (data['mediaUrl'] as String?) ?? (data['backgroundImageUrl'] as String?) ?? (data['backgroundVideoUrl'] as String?) ?? '';
@@ -358,21 +276,13 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
     _thanksBody.text = (data['thankYouBody'] as String?) ?? 'Your intent has joined this shared moment.';
   }
 
-  Map<String, dynamic> _data({required bool published}) {
-    final start = _slotStartUtc();
+  Map<String, dynamic> _defaultsPayload() {
     return {
-      'slotId': _selectedSlotId,
       'canvasScope': _canvasScope,
-      'dateKey': _dateKey,
-      'weekKey': _weekKey,
-      'startTimeUTC': start.toIso8601String(),
-        'originTimeZone': _canvasScope == 'international' ? _selectedTimeZoneLabel : null,
-        'originTimeZoneOffset': _canvasScope == 'international' ? _selectedTimeZoneOffset : null,
-        'originLocalDateTime': _canvasScope == 'international'
-          ? DateTime.utc(_date.year, _date.month, _date.day, _hour, _lane).toIso8601String()
-          : null,
       'hour': _hour,
       'laneMinute': _lane,
+      'originTimeZone': _canvasScope == 'international' ? _selectedTimeZoneLabel : null,
+      'originTimeZoneOffset': _canvasScope == 'international' ? _selectedTimeZoneOffset : null,
       'durationSeconds': (int.tryParse(_durationSeconds.text.trim()) ?? 30).clamp(1, 3600),
       'title': _title.text.trim(),
       'mediaUrl': _mediaUrl.text.trim(),
@@ -386,23 +296,31 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
       'thankYouTitle': _thanksTitle.text.trim(),
       'thankYouBody': _thanksBody.text.trim(),
       'showGoodometerGraph': _showGoodometer,
-      'published': published,
-      'updatedAt': FieldValue.serverTimestamp(),
+      'showDateTime': _showDateTime,
+      'updatedAt': DateTime.now().toIso8601String(),
     };
   }
 
-  Future<void> _saveDraft() async {
+  Future<void> _saveAndRepeat() async {
     setState(() => _saving = true);
     try {
-      await FirebaseFirestore.instance.collection('draft_living_canvas_slots').doc(_existingSelectedSlotId ?? _selectedSlotId).set(_data(published: false), SetOptions(merge: true));
-      await _saveDefaults(showSnack: false);
-      await _loadSlots();
+      final configRef = FirebaseFirestore.instance.collection('app_config').doc('living_canvas');
+      final existing = await configRef.get();
+      final draftDefaults = Map<String, dynamic>.from(
+        (existing.data()?['repeatingDraftDefaults'] as Map?) ?? const <String, dynamic>{},
+      );
+      draftDefaults[_selectedDefaultKey] = _defaultsPayload();
+      await configRef.set({
+        'repeatingDraftDefaults': draftDefaults,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      await _loadDefaults();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Living Canvas draft saved')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved. Publish to make it repeat daily.')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not save Living Canvas draft: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not save Thumbprint slot: $e')));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -410,15 +328,14 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   }
 
   Future<void> _clearSelectedSlot() async {
-    final slotLabel = '${DateFormat('MMM d').format(_date)} '
-        '${_hour.toString().padLeft(2, '0')}:${_lane.toString().padLeft(2, '0')}';
+    final slotLabel = '${_hour.toString().padLeft(2, '0')}:${_lane.toString().padLeft(2, '0')}';
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Clear Thumbprint slot?'),
         content: Text(
-          'This removes the $slotLabel draft and published slot, plus its repeating default. '
-          'It will no longer play for this week or future dates.',
+          'This removes the $slotLabel repeating draft and published slot. '
+          'It will stop repeating until you set it up again.',
         ),
         actions: [
           TextButton(
@@ -437,49 +354,48 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
 
     setState(() => _clearing = true);
     try {
-      final matchesSelectedSlot = (MapEntry<String, Map<String, dynamic>> entry) =>
-          (entry.value['hour'] as num?)?.toInt() == _hour &&
-          (entry.value['laneMinute'] as num?)?.toInt() == _lane;
-      final draftIds = _drafts.entries
-          .where(matchesSelectedSlot)
-          .map((entry) => entry.key);
-      final publishedIds = _published.entries
-          .where(matchesSelectedSlot)
-          .map((entry) => entry.key);
-      final configRef = FirebaseFirestore.instance
-          .collection('app_config')
-          .doc('living_canvas');
+      final key = _selectedDefaultKey;
+      final configRef = FirebaseFirestore.instance.collection('app_config').doc('living_canvas');
       final config = await configRef.get();
-      final repeatingDefaults = Map<String, dynamic>.from(
-        (config.data()?['repeatingDefaults'] as Map?) ??
-            const <String, dynamic>{},
+      final liveDefaults = Map<String, dynamic>.from(
+        (config.data()?['repeatingDefaults'] as Map?) ?? const <String, dynamic>{},
       );
-      final defaultKey = '${_canvasScope}_${_hour.toString().padLeft(2, '0')}${_lane.toString().padLeft(2, '0')}';
-      final removedDefault = repeatingDefaults.remove(defaultKey) != null;
+      final draftDefaults = Map<String, dynamic>.from(
+        (config.data()?['repeatingDraftDefaults'] as Map?) ?? const <String, dynamic>{},
+      );
+      liveDefaults.remove(key);
+      draftDefaults.remove(key);
+      await configRef.set({
+        'repeatingDefaults': liveDefaults,
+        'repeatingDraftDefaults': draftDefaults,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
 
-      final batch = FirebaseFirestore.instance.batch();
-      for (final id in draftIds) {
-        batch.delete(
-          FirebaseFirestore.instance
-              .collection('draft_living_canvas_slots')
-              .doc(id),
-        );
+      // Retire any legacy one-off documents so nothing lingers for this hour/lane.
+      final legacyDrafts = await FirebaseFirestore.instance
+          .collection('draft_living_canvas_slots')
+          .where('canvasScope', isEqualTo: _canvasScope)
+          .where('hour', isEqualTo: _hour)
+          .where('laneMinute', isEqualTo: _lane)
+          .get();
+      final legacyPublished = await FirebaseFirestore.instance
+          .collection('living_canvas_slots')
+          .where('canvasScope', isEqualTo: _canvasScope)
+          .where('hour', isEqualTo: _hour)
+          .where('laneMinute', isEqualTo: _lane)
+          .get();
+      if (legacyDrafts.docs.isNotEmpty || legacyPublished.docs.isNotEmpty) {
+        final batch = FirebaseFirestore.instance.batch();
+        for (final doc in legacyDrafts.docs) {
+          batch.delete(doc.reference);
+        }
+        for (final doc in legacyPublished.docs) {
+          batch.delete(doc.reference);
+        }
+        await batch.commit();
       }
-      for (final id in publishedIds) {
-        batch.delete(
-          FirebaseFirestore.instance
-              .collection('living_canvas_slots')
-              .doc(id),
-        );
-      }
-      if (removedDefault) {
-        batch.set(configRef, {
-          'repeatingDefaults': repeatingDefaults,
-          'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-      }
-      await batch.commit();
-      await _loadSlots();
+
+      await _loadDefaults();
       _loadSelectedSlot();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -497,73 +413,50 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
     }
   }
 
-  Future<void> _saveDefaults({bool showSnack = true}) async {
-    final data = Map<String, dynamic>.from(_data(published: false))
-      ..remove('slotId')
-      ..remove('canvasScope')
-      ..remove('dateKey')
-      ..remove('weekKey')
-      ..remove('startTimeUTC')
-      ..remove('hour')
-      ..remove('laneMinute')
-      ..remove('published');
-    final configRef = FirebaseFirestore.instance.collection('app_config').doc('living_canvas');
-    final existing = await configRef.get();
-    final repeatingDefaults = Map<String, dynamic>.from(
-      (existing.data()?['repeatingDefaults'] as Map?) ?? const <String, dynamic>{},
-    );
-    final defaultKey = '${_canvasScope}_${_hour.toString().padLeft(2, '0')}${_lane.toString().padLeft(2, '0')}';
-    repeatingDefaults[defaultKey] = data;
-    await configRef.set({
-      ...data,
-      'repeatingDefaults': repeatingDefaults,
-    }, SetOptions(merge: true));
-    if (showSnack && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved as repeating default')));
-    }
-  }
-
-  Future<void> _publishWeek() async {
+  Future<void> _publishAll() async {
     setState(() => _publishing = true);
     try {
-      final snap = await FirebaseFirestore.instance
-          .collection('draft_living_canvas_slots')
-          .where('weekKey', isEqualTo: _weekKey)
-          .where('canvasScope', isEqualTo: _canvasScope)
-          .get();
-      final batch = FirebaseFirestore.instance.batch();
-      for (final doc in snap.docs) {
-        final data = Map<String, dynamic>.from(doc.data())..['published'] = true;
-        batch.set(FirebaseFirestore.instance.collection('living_canvas_slots').doc(doc.id), data, SetOptions(merge: true));
-        batch.delete(doc.reference);
+      final configRef = FirebaseFirestore.instance.collection('app_config').doc('living_canvas');
+      final existing = await configRef.get();
+      final liveDefaults = Map<String, dynamic>.from(
+        (existing.data()?['repeatingDefaults'] as Map?) ?? const <String, dynamic>{},
+      );
+      final draftDefaults = Map<String, dynamic>.from(
+        (existing.data()?['repeatingDraftDefaults'] as Map?) ?? const <String, dynamic>{},
+      );
+      final scopedKeys = draftDefaults.keys
+          .where((key) => key.startsWith('${_canvasScope}_'))
+          .toList();
+      if (scopedKeys.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('No ${_canvasScope == 'international' ? 'International' : 'National'} draft slots to publish.')),
+          );
+        }
+        return;
       }
-      await batch.commit();
-      await _loadSlots();
+      for (final key in scopedKeys) {
+        liveDefaults[key] = draftDefaults.remove(key);
+      }
+      await configRef.set({
+        'repeatingDefaults': liveDefaults,
+        'repeatingDraftDefaults': draftDefaults,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      await _loadDefaults();
       _loadSelectedSlot();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Published ${snap.docs.length} ${_canvasScope == 'international' ? 'International' : 'National'} slot${snap.docs.length == 1 ? '' : 's'} for week of ${DateFormat('MMM d').format(_weekStart)}')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Published ${scopedKeys.length} ${_canvasScope == 'international' ? 'International' : 'National'} slot${scopedKeys.length == 1 ? '' : 's'} (repeats daily)')),
+        );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not publish Living Canvas week: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not publish Thumbprint slots: $e')));
       }
     } finally {
       if (mounted) setState(() => _publishing = false);
     }
-  }
-
-  Future<void> _pickDate() async {
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: _date,
-      firstDate: DateTime.now().subtract(const Duration(days: 30)),
-      lastDate: DateTime.now().add(const Duration(days: 730)),
-    );
-    if (picked == null) return;
-    setState(() => _date = DateTime(picked.year, picked.month, picked.day));
-    await _loadSlots();
-    _loadSelectedSlot();
-    if (mounted) setState(() {});
   }
 
   Future<void> _pickMediaUrl({required Set<String> allowedTypes, required TextEditingController target}) async {
@@ -803,7 +696,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
               ),
             ),
             Row(children: [
-              Expanded(child: Text('Living Canvas ${_canvasScope == 'international' ? 'International' : 'National'} week: ${DateFormat('MMM d').format(_weekStart)} - ${DateFormat('MMM d').format(_weekEndExclusive.subtract(const Duration(days: 1)))}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
+              const Expanded(child: Text('Thumbprint Slots — repeats daily until cleared', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 decoration: BoxDecoration(
@@ -824,9 +717,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
                 ),
               ),
               const SizedBox(width: 8),
-              OutlinedButton.icon(onPressed: _pickDate, icon: const Icon(Icons.calendar_month), label: const Text('Pick date')),
-              const SizedBox(width: 8),
-              ElevatedButton.icon(onPressed: _publishing ? null : _publishWeek, icon: _publishing ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.publish), label: Text(_publishing ? 'Publishing...' : 'Publish week')),
+              ElevatedButton.icon(onPressed: _publishing ? null : _publishAll, icon: _publishing ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.publish), label: Text(_publishing ? 'Publishing...' : 'Publish')),
             ]),
             const SizedBox(height: 10),
             Row(
@@ -840,14 +731,12 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
                     ButtonSegment(value: 'international', label: Text('International')),
                   ],
                   selected: {_canvasScope},
-                  onSelectionChanged: (v) async {
+                  onSelectionChanged: (v) {
                     setState(() {
                       _canvasScope = v.first;
-                      _selectedTimeZoneOffset = _offsetForZone(_selectedTimeZoneLabel, _date);
+                      _selectedTimeZoneOffset = _offsetForZone(_selectedTimeZoneLabel, DateTime.now());
                     });
-                    await _loadSlots();
                     _loadSelectedSlot();
-                    if (mounted) setState(() {});
                   },
                 ),
                 if (_canvasScope == 'international') ...[
@@ -872,7 +761,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
                         if (value == null) return;
                         setState(() {
                           _selectedTimeZoneLabel = _normalizeTimeZoneLabel(value);
-                          _selectedTimeZoneOffset = _offsetForZone(_selectedTimeZoneLabel, _date);
+                          _selectedTimeZoneOffset = _offsetForZone(_selectedTimeZoneLabel, DateTime.now());
                         });
                       },
                     ),
@@ -884,8 +773,8 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
               const SizedBox(height: 8),
               Builder(builder: (context) {
                 final utcDateTime = _slotStartUtc();
-                final londonLocal = utcDateTime.add(Duration(hours: _offsetForZone('London (Auto DST)', _date)));
-                final parisLocal = utcDateTime.add(Duration(hours: _offsetForZone('Paris (Auto DST)', _date)));
+                final londonLocal = utcDateTime.add(Duration(hours: _offsetForZone('London (Auto DST)', DateTime.now())));
+                final parisLocal = utcDateTime.add(Duration(hours: _offsetForZone('Paris (Auto DST)', DateTime.now())));
                 return Container(
                   width: double.infinity,
                   padding: const EdgeInsets.all(10),
@@ -927,11 +816,9 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
                       itemCount: 24,
                       separatorBuilder: (_, __) => const SizedBox(width: 6),
                       itemBuilder: (context, hour) {
-                    final matchingIds = {..._drafts, ..._published}.entries.where((entry) =>
-                      (entry.value['hour'] as num?)?.toInt() == hour &&
-                      (entry.value['laneMinute'] as num?)?.toInt() == _lane);
-                    final hasDraft = matchingIds.any((entry) => _drafts.containsKey(entry.key));
-                    final hasPublished = matchingIds.any((entry) => _published.containsKey(entry.key));
+                    final key = '${_canvasScope}_${hour.toString().padLeft(2, '0')}${_lane.toString().padLeft(2, '0')}';
+                    final hasDraft = _draftDefaults.containsKey(key);
+                    final hasPublished = _liveDefaults.containsKey(key);
                   final color = hasDraft ? Colors.amber.shade700 : (hasPublished ? Colors.green.shade600 : Colors.grey.shade400);
                   return ChoiceChip(
                     selected: hour == _hour,
@@ -966,9 +853,16 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Editing ${_canvasScope == 'international' ? 'International' : 'National'} ${DateFormat('MMM d').format(_date)} ${_hour.toString().padLeft(2, '0')}:${_lane.toString().padLeft(2, '0')}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            Text('Editing ${_canvasScope == 'international' ? 'International' : 'National'} ${_hour.toString().padLeft(2, '0')}:${_lane.toString().padLeft(2, '0')} (repeats daily)', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
             const SizedBox(height: 8),
             TextField(controller: _title, decoration: const InputDecoration(labelText: 'Canvas title')),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Show date & time on screen'),
+              subtitle: const Text('Independent of the title; can be shown with or without one.'),
+              value: _showDateTime,
+              onChanged: (v) => setState(() => _showDateTime = v),
+            ),
             TextField(controller: _durationSeconds, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Duration (Seconds)', helperText: 'Enter exact seconds (e.g. 10), matching the current event editors')),
             Row(children: [
               Expanded(child: TextField(controller: _mediaUrl, decoration: const InputDecoration(labelText: 'Background image/video URL'))),
@@ -1038,9 +932,8 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
             SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('Show Goodometer graph'), subtitle: const Text('National view shows National; World view will include World + National when built.'), value: _showGoodometer, onChanged: (v) => setState(() => _showGoodometer = v)),
             const SizedBox(height: 12),
             Wrap(spacing: 8, runSpacing: 8, children: [
-              ElevatedButton.icon(onPressed: _saving ? null : _saveDraft, icon: _saving ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.save), label: Text(_saving ? 'Saving...' : 'Save slot draft')),
+              ElevatedButton.icon(onPressed: _saving ? null : _saveAndRepeat, icon: _saving ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.save), label: Text(_saving ? 'Saving...' : 'Save & Repeat Daily')),
               OutlinedButton.icon(onPressed: _clearing ? null : _clearSelectedSlot, icon: _clearing ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.delete_outline), label: Text(_clearing ? 'Clearing...' : 'Clear slot')),
-              OutlinedButton.icon(onPressed: () => _saveDefaults(), icon: const Icon(Icons.copy_all), label: const Text('Save as repeating default')),
             ]),
           ]),
         ),
@@ -1095,8 +988,16 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
                   ),
                 Positioned(top: 18, left: 16, child: _previewPill('${_canvasScope == 'international' ? 'World' : 'National'} • 128 live')),
                 Positioned(top: 18, right: 16, child: _previewPill('Exit Event')),
-                if (_title.text.trim().isNotEmpty)
-                  Positioned(top: 54, left: 18, right: 18, child: Column(children: [Text(_title.text.trim(), textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)), const SizedBox(height: 6), Text('${DateFormat('EEE MMM d').format(_date)} • ${_hour.toString().padLeft(2, '0')}:${_lane.toString().padLeft(2, '0')}', style: const TextStyle(color: Colors.white70, fontSize: 12))])),
+                if (_title.text.trim().isNotEmpty || _showDateTime)
+                  Positioned(top: 54, left: 18, right: 18, child: Column(children: [
+                    if (_title.text.trim().isNotEmpty)
+                      Text(_title.text.trim(), textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                    if (_showDateTime)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Text('Repeats daily • ${_hour.toString().padLeft(2, '0')}:${_lane.toString().padLeft(2, '0')}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                      ),
+                  ])),
                 if (_showPin)
                   Positioned(
                     left: 18,
