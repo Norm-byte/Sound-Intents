@@ -28,6 +28,8 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   bool _publishing = false;
   bool _audioPreviewPlaying = false;
   bool _mutingVideoAudio = false;
+  bool _backgroundPreviewPlaying = true;
+  final GlobalKey<_UnmutedVideoPreviewState> _backgroundPreviewKey = GlobalKey();
   bool _globalThumbprintModeActive = false;
   int _lane = 0;
   int _hour = 12;
@@ -1075,17 +1077,26 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
               Expanded(child: TextField(controller: _mediaUrl, decoration: const InputDecoration(labelText: 'Background image/video URL'))),
               const SizedBox(width: 8),
               OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
                 onPressed: () => _pickMediaUrl(allowedTypes: {'image', 'video', 'youtube'}, target: _mediaUrl),
-                icon: const Icon(Icons.perm_media),
-                label: const Text('Media Library'),
+                icon: const Icon(Icons.perm_media, size: 18),
+                label: const Text('Media'),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
                 onPressed: _mutingVideoAudio ? null : _muteBackgroundVideoAudio,
                 icon: _mutingVideoAudio
                     ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.volume_off),
-                label: Text(_mutingVideoAudio ? 'Muting...' : 'Mute video audio'),
+                    : const Icon(Icons.volume_off, size: 18),
+                label: Text(_mutingVideoAudio ? 'Muting...' : 'Mute audio'),
+              ),
+              const SizedBox(width: 6),
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
+                onPressed: () => _backgroundPreviewKey.currentState?.togglePlayback(),
+                icon: Icon(_backgroundPreviewPlaying ? Icons.pause : Icons.play_arrow, size: 18),
+                label: Text(_backgroundPreviewPlaying ? 'Pause' : 'Play'),
               ),
               IconButton(
                 tooltip: 'Remove background media',
@@ -1214,7 +1225,13 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
                   )
                 else if (isVideo)
                   Positioned.fill(
-                    child: _UnmutedVideoPreview(url: mediaUrl),
+                    child: _UnmutedVideoPreview(
+                      key: _backgroundPreviewKey,
+                      url: mediaUrl,
+                      onPlaybackChanged: (playing) {
+                        if (mounted) setState(() => _backgroundPreviewPlaying = playing);
+                      },
+                    ),
                   ),
                 Positioned(top: 18, left: 16, child: _previewPill('${_canvasScope == 'international' ? 'World' : 'National'} • 128 live')),
                 Positioned(top: 18, right: 16, child: _previewPill('Exit Event')),
@@ -1307,8 +1324,9 @@ class _LegendDot extends StatelessWidget {
 // this plays audio so admins can hear whether a raw upload needs muting.
 class _UnmutedVideoPreview extends StatefulWidget {
   final String url;
+  final ValueChanged<bool>? onPlaybackChanged;
 
-  const _UnmutedVideoPreview({required this.url});
+  const _UnmutedVideoPreview({super.key, required this.url, this.onPlaybackChanged});
 
   @override
   State<_UnmutedVideoPreview> createState() => _UnmutedVideoPreviewState();
@@ -1338,10 +1356,24 @@ class _UnmutedVideoPreviewState extends State<_UnmutedVideoPreview> {
       await controller.setLooping(true);
       await controller.setVolume(1.0);
       await controller.play();
+      widget.onPlaybackChanged?.call(true);
       if (mounted) setState(() {});
     } catch (e) {
       debugPrint('Error initializing Thumbprint background preview: $e');
     }
+  }
+
+  Future<void> togglePlayback() async {
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) return;
+    if (controller.value.isPlaying) {
+      await controller.pause();
+      widget.onPlaybackChanged?.call(false);
+    } else {
+      await controller.play();
+      widget.onPlaybackChanged?.call(true);
+    }
+    if (mounted) setState(() {});
   }
 
   @override
