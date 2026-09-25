@@ -395,11 +395,11 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
     try {
       final key = _selectedDefaultKey;
       final configRef = FirebaseFirestore.instance.collection('app_config').doc('living_canvas');
-      await configRef.set({
+      await configRef.update({
         'repeatingDefaults.$key': FieldValue.delete(),
         'repeatingDraftDefaults.$key': FieldValue.delete(),
         'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      });
 
       // Retire any legacy one-off documents so nothing lingers for this hour/lane.
       final legacyDrafts = await FirebaseFirestore.instance
@@ -560,7 +560,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
           for (final key in keysInLane) 'repeatingDraftDefaults.$key': FieldValue.delete(),
           'updatedAt': FieldValue.serverTimestamp(),
         };
-        await configRef.set(updates, SetOptions(merge: true));
+        await configRef.update(updates);
       }
 
       // Retire any legacy one-off documents spanning every hour in this lane.
