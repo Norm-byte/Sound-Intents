@@ -1175,7 +1175,18 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
         ? _thanksBody.text.trim()
         : 'Your intent has joined this shared moment.';
     final mediaPath = Uri.tryParse(mediaUrl)?.path.toLowerCase() ?? mediaUrl.toLowerCase().split('?').first;
-    final isVideo = mediaPath.endsWith('.mp4') || mediaPath.endsWith('.mov') || mediaPath.endsWith('.webm') || mediaPath.endsWith('.mpeg4');
+    final lowerUrl = mediaUrl.toLowerCase();
+    final isYoutube = lowerUrl.contains('youtube.com') || lowerUrl.contains('youtu.be');
+    final isVideo = !isYoutube && (
+      mediaPath.endsWith('.mp4') ||
+      mediaPath.endsWith('.mov') ||
+      mediaPath.endsWith('.webm') ||
+      mediaPath.endsWith('.m4v') ||
+      mediaPath.endsWith('.mpeg') ||
+      mediaPath.endsWith('.mpg') ||
+      mediaPath.endsWith('.avi') ||
+      mediaPath.endsWith('.mkv')
+    );
     return Container(
       color: Colors.grey.shade100,
       padding: const EdgeInsets.all(18),
@@ -1187,19 +1198,23 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
               borderRadius: BorderRadius.circular(28),
               border: Border.all(color: Colors.black87, width: 8),
               color: const Color(0xFF111827),
-              image: mediaUrl.isNotEmpty && !isVideo ? DecorationImage(image: NetworkImage(mediaUrl), fit: BoxFit.cover, colorFilter: ColorFilter.mode(Colors.black.withValues(alpha: 0.28), BlendMode.darken)) : null,
+              image: mediaUrl.isNotEmpty && !isVideo && !isYoutube ? DecorationImage(image: NetworkImage(mediaUrl), fit: BoxFit.cover, colorFilter: ColorFilter.mode(Colors.black.withValues(alpha: 0.28), BlendMode.darken)) : null,
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(20),
               child: Stack(children: [
-                if (isVideo)
+                if (isYoutube)
                   Positioned.fill(
                     child: VideoGridItem(
                       url: mediaUrl,
-                      type: 'upload',
+                      type: 'youtube',
                       enablePreview: false,
                       autoPlay: true,
                     ),
+                  )
+                else if (isVideo)
+                  Positioned.fill(
+                    child: _UnmutedVideoPreview(url: mediaUrl),
                   ),
                 Positioned(top: 18, left: 16, child: _previewPill('${_canvasScope == 'international' ? 'World' : 'National'} • 128 live')),
                 Positioned(top: 18, right: 16, child: _previewPill('Exit Event')),
@@ -1285,4 +1300,69 @@ class _LegendDot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.circle, size: 10, color: color), const SizedBox(width: 4), Text(label, style: const TextStyle(fontSize: 12))]);
+}
+
+// Dedicated Thumbprint background preview: unlike VideoGridItem (shared with
+// the Media Library grid, which intentionally mutes for thumbnail previews),
+// this plays audio so admins can hear whether a raw upload needs muting.
+class _UnmutedVideoPreview extends StatefulWidget {
+  final String url;
+
+  const _UnmutedVideoPreview({required this.url});
+
+  @override
+  State<_UnmutedVideoPreview> createState() => _UnmutedVideoPreviewState();
+}
+
+class _UnmutedVideoPreviewState extends State<_UnmutedVideoPreview> {
+  VideoPlayerController? _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _init();
+  }
+
+  @override
+  void didUpdateWidget(covariant _UnmutedVideoPreview oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.url != widget.url) _init();
+  }
+
+  Future<void> _init() async {
+    await _controller?.dispose();
+    final controller = VideoPlayerController.networkUrl(Uri.parse(widget.url));
+    _controller = controller;
+    try {
+      await controller.initialize();
+      await controller.setLooping(true);
+      await controller.setVolume(1.0);
+      await controller.play();
+      if (mounted) setState(() {});
+    } catch (e) {
+      debugPrint('Error initializing Thumbprint background preview: $e');
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    return FittedBox(
+      fit: BoxFit.cover,
+      child: SizedBox(
+        width: controller.value.size.width,
+        height: controller.value.size.height,
+        child: VideoPlayer(controller),
+      ),
+    );
+  }
 }
