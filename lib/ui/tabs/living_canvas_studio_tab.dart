@@ -394,18 +394,9 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
     try {
       final key = _selectedDefaultKey;
       final configRef = FirebaseFirestore.instance.collection('app_config').doc('living_canvas');
-      final config = await configRef.get();
-      final liveDefaults = Map<String, dynamic>.from(
-        (config.data()?['repeatingDefaults'] as Map?) ?? const <String, dynamic>{},
-      );
-      final draftDefaults = Map<String, dynamic>.from(
-        (config.data()?['repeatingDraftDefaults'] as Map?) ?? const <String, dynamic>{},
-      );
-      liveDefaults.remove(key);
-      draftDefaults.remove(key);
       await configRef.set({
-        'repeatingDefaults': liveDefaults,
-        'repeatingDraftDefaults': draftDefaults,
+        'repeatingDefaults.$key': FieldValue.delete(),
+        'repeatingDraftDefaults.$key': FieldValue.delete(),
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
@@ -492,15 +483,14 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
       final keysInLane = {...liveDefaults.keys, ...draftDefaults.keys}.where(
         (key) => key.startsWith(lanePrefix) && key.endsWith(laneSuffix),
       ).toList();
-      for (final key in keysInLane) {
-        liveDefaults.remove(key);
-        draftDefaults.remove(key);
+      if (keysInLane.isNotEmpty) {
+        final updates = <String, dynamic>{
+          for (final key in keysInLane) 'repeatingDefaults.$key': FieldValue.delete(),
+          for (final key in keysInLane) 'repeatingDraftDefaults.$key': FieldValue.delete(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        };
+        await configRef.set(updates, SetOptions(merge: true));
       }
-      await configRef.set({
-        'repeatingDefaults': liveDefaults,
-        'repeatingDraftDefaults': draftDefaults,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
 
       // Retire any legacy one-off documents spanning every hour in this lane.
       final legacyDrafts = await FirebaseFirestore.instance
