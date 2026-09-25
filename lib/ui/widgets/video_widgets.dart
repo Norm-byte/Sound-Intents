@@ -220,7 +220,7 @@ class YouTubePlayerWidget extends StatelessWidget {
     // ignore: undefined_prefixed_name
     ui_web.platformViewRegistry.registerViewFactory(viewId, (int viewId) {
       final iframe = html.IFrameElement()
-        ..src = 'https://www.youtube.com/embed/$videoId?autoplay=1&mute=1&loop=1&playlist=$videoId&modestbranding=1&rel=0&showinfo=0'
+        ..src = 'https://www.youtube.com/embed/$videoId?autoplay=1&loop=1&playlist=$videoId&modestbranding=1&rel=0&showinfo=0'
         ..style.border = 'none'
         ..allow = 'autoplay; encrypted-media; picture-in-picture';
       return iframe;
