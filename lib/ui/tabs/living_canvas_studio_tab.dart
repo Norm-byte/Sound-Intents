@@ -1188,6 +1188,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
     final mediaPath = Uri.tryParse(mediaUrl)?.path.toLowerCase() ?? mediaUrl.toLowerCase().split('?').first;
     final lowerUrl = mediaUrl.toLowerCase();
     final isYoutube = lowerUrl.contains('youtube.com') || lowerUrl.contains('youtu.be');
+    final youtubeId = isYoutube ? _youtubeVideoId(mediaUrl) : null;
     final isVideo = !isYoutube && (
       mediaPath.endsWith('.mp4') ||
       mediaPath.endsWith('.mov') ||
@@ -1216,12 +1217,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
               child: Stack(children: [
                 if (isYoutube)
                   Positioned.fill(
-                    child: VideoGridItem(
-                      url: mediaUrl,
-                      type: 'youtube',
-                      enablePreview: false,
-                      autoPlay: true,
-                    ),
+                    child: YouTubePlayerWidget(videoId: youtubeId ?? ''),
                   )
                 else if (isVideo)
                   Positioned.fill(
@@ -1289,6 +1285,23 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
 
   Widget _bar(String label, double value, Color color) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(label, style: const TextStyle(color: Colors.white70, fontSize: 10)), const SizedBox(height: 4), ClipRRect(borderRadius: BorderRadius.circular(999), child: LinearProgressIndicator(value: value, minHeight: 8, color: color, backgroundColor: Colors.white24))]);
 
+  String? _youtubeVideoId(String url) {
+    final uri = Uri.tryParse(url.trim());
+    if (uri == null) return null;
+    final queryId = uri.queryParameters['v'];
+    if (queryId != null && queryId.isNotEmpty) return queryId;
+    if (uri.host.contains('youtu.be') && uri.pathSegments.isNotEmpty) {
+      return uri.pathSegments.first;
+    }
+    for (final marker in ['shorts', 'embed', 'v']) {
+      final index = uri.pathSegments.indexOf(marker);
+      if (index >= 0 && index + 1 < uri.pathSegments.length) {
+        return uri.pathSegments[index + 1];
+      }
+    }
+    return null;
+  }
+
   Widget _previewPill(String text) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -1354,14 +1367,16 @@ class _UnmutedVideoPreviewState extends State<_UnmutedVideoPreview> {
     try {
       await controller.initialize();
       await controller.setLooping(true);
-      // Browsers block autoplay-with-sound unless triggered by a user gesture,
-      // so start muted (always allowed) and restore audio once playback begins.
-      await controller.setVolume(0);
-      await controller.play();
-      if (mounted) setState(() {});
       try {
         await controller.setVolume(1.0);
-      } catch (_) {}
+        await controller.play();
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+        if (!controller.value.isPlaying) throw StateError('Unmuted autoplay blocked');
+      } catch (_) {
+        await controller.setVolume(0);
+        await controller.play();
+      }
+      if (mounted) setState(() {});
       widget.onPlaybackChanged?.call(true);
     } catch (e) {
       debugPrint('Error initializing Thumbprint background preview: $e');
