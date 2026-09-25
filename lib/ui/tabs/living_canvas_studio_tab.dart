@@ -23,6 +23,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   bool _loading = true;
   bool _saving = false;
   bool _clearing = false;
+  bool _clearingLane = false;
   bool _publishing = false;
   bool _audioPreviewPlaying = false;
   bool _mutingVideoAudio = false;
@@ -450,6 +451,97 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
     }
   }
 
+  Future<void> _clearLane() async {
+    final laneLabel = ':${_lane.toString().padLeft(2, '0')}';
+    final scopeLabel = _canvasScope == 'international' ? 'International' : 'National';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Clear all timeslots in this lane?'),
+        content: Text(
+          'This removes every $scopeLabel hour (00:00-23:00) at the $laneLabel lane, '
+          'draft and published, plus their repeating defaults. This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
+            child: const Text('Clear all in lane'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _clearingLane = true);
+    try {
+      final configRef = FirebaseFirestore.instance.collection('app_config').doc('living_canvas');
+      final config = await configRef.get();
+      final liveDefaults = Map<String, dynamic>.from(
+        (config.data()?['repeatingDefaults'] as Map?) ?? const <String, dynamic>{},
+      );
+      final draftDefaults = Map<String, dynamic>.from(
+        (config.data()?['repeatingDraftDefaults'] as Map?) ?? const <String, dynamic>{},
+      );
+      final lanePrefix = '${_canvasScope}_';
+      final laneSuffix = _lane.toString().padLeft(2, '0');
+      final keysInLane = {...liveDefaults.keys, ...draftDefaults.keys}.where(
+        (key) => key.startsWith(lanePrefix) && key.endsWith(laneSuffix),
+      ).toList();
+      for (final key in keysInLane) {
+        liveDefaults.remove(key);
+        draftDefaults.remove(key);
+      }
+      await configRef.set({
+        'repeatingDefaults': liveDefaults,
+        'repeatingDraftDefaults': draftDefaults,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      // Retire any legacy one-off documents spanning every hour in this lane.
+      final legacyDrafts = await FirebaseFirestore.instance
+          .collection('draft_living_canvas_slots')
+          .where('canvasScope', isEqualTo: _canvasScope)
+          .where('laneMinute', isEqualTo: _lane)
+          .get();
+      final legacyPublished = await FirebaseFirestore.instance
+          .collection('living_canvas_slots')
+          .where('canvasScope', isEqualTo: _canvasScope)
+          .where('laneMinute', isEqualTo: _lane)
+          .get();
+      if (legacyDrafts.docs.isNotEmpty || legacyPublished.docs.isNotEmpty) {
+        final batch = FirebaseFirestore.instance.batch();
+        for (final doc in legacyDrafts.docs) {
+          batch.delete(doc.reference);
+        }
+        for (final doc in legacyPublished.docs) {
+          batch.delete(doc.reference);
+        }
+        await batch.commit();
+      }
+
+      await _loadDefaults();
+      _loadSelectedSlot();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Cleared $scopeLabel $laneLabel lane (${keysInLane.length} hour${keysInLane.length == 1 ? '' : 's'})')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not clear the lane: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _clearingLane = false);
+    }
+  }
+
   Future<void> _publishAll() async {
     setState(() => _publishing = true);
     try {
@@ -752,6 +844,15 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
                         : Colors.indigo.shade800,
                   ),
                 ),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: _clearingLane ? null : _clearLane,
+                icon: _clearingLane
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.playlist_remove),
+                label: Text(_clearingLane ? 'Clearing lane...' : 'Clear all in lane'),
+                style: OutlinedButton.styleFrom(foregroundColor: Colors.red.shade700),
               ),
               const SizedBox(width: 8),
               ElevatedButton.icon(onPressed: _publishing ? null : _publishAll, icon: _publishing ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.publish), label: Text(_publishing ? 'Publishing...' : 'Publish')),
