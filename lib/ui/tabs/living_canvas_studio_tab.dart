@@ -25,6 +25,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   bool _clearing = false;
   bool _clearingLane = false;
   bool _diagnosing = false;
+  bool _auditing = false;
   bool _publishing = false;
   bool _audioPreviewPlaying = false;
   bool _mutingVideoAudio = false;
@@ -48,6 +49,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   final _pinText = TextEditingController();
   final _thanksTitle = TextEditingController(text: 'Thank you');
   final _thanksBody = TextEditingController(text: 'Your intent has joined this shared moment.');
+  final _thankYouDisplaySeconds = TextEditingController(text: '3');
 
   // Repeating slot records, keyed by '${scope}_${HH}${MM}'. Draft-only until published.
   Map<String, Map<String, dynamic>> _draftDefaults = const {};
@@ -164,7 +166,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
   void dispose() {
     _hourStripController.dispose();
     _audioPreviewController?.dispose();
-    for (final c in [_title, _durationSeconds, _mediaUrl, _audioUrl, _glow, _pinText, _thanksTitle, _thanksBody]) {
+    for (final c in [_title, _durationSeconds, _mediaUrl, _audioUrl, _glow, _pinText, _thanksTitle, _thanksBody, _thankYouDisplaySeconds]) {
       c.dispose();
     }
     super.dispose();
@@ -315,6 +317,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
     _pinText.text = (data['pinCardText'] as String?) ?? '';
     _thanksTitle.text = (data['thankYouTitle'] as String?) ?? 'Thank you';
     _thanksBody.text = (data['thankYouBody'] as String?) ?? 'Your intent has joined this shared moment.';
+    _thankYouDisplaySeconds.text = ((data['thankYouDisplaySeconds'] as num?)?.toInt() ?? 3).toString();
   }
 
   Map<String, dynamic> _defaultsPayload() {
@@ -336,13 +339,37 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
       'pinCardText': _pinText.text.trim(),
       'thankYouTitle': _thanksTitle.text.trim(),
       'thankYouBody': _thanksBody.text.trim(),
+      'thankYouDisplaySeconds': (int.tryParse(_thankYouDisplaySeconds.text.trim()) ?? 3).clamp(1, 60),
       'showGoodometerGraph': _showGoodometer,
       'showDateTime': _showDateTime,
       'updatedAt': DateTime.now().toIso8601String(),
     };
   }
 
+  String? _payloadValidationIssue(Map<String, dynamic> data) {
+    final mediaUrl = (data['mediaUrl'] as String? ?? '').trim().toLowerCase();
+    final standaloneAudio = (data['chimeAudioUrl'] as String? ?? '').trim();
+    final isYoutube = mediaUrl.contains('youtube.com') || mediaUrl.contains('youtu.be');
+    final eventSeconds = (data['durationSeconds'] as num?)?.toInt() ?? 30;
+    final thankYouSeconds = (data['thankYouDisplaySeconds'] as num?)?.toInt() ?? 3;
+    if (isYoutube && standaloneAudio.isNotEmpty) {
+      return 'YouTube backgrounds cannot be combined with standalone event audio.';
+    }
+    if (thankYouSeconds > eventSeconds) {
+      return 'Thumbprint + thank-you display time cannot exceed the event duration.';
+    }
+    return null;
+  }
+
   Future<void> _saveAndRepeat() async {
+    final payload = _defaultsPayload();
+    final validationIssue = _payloadValidationIssue(payload);
+    if (validationIssue != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(validationIssue)),
+      );
+      return;
+    }
     setState(() => _saving = true);
     try {
       final configRef = FirebaseFirestore.instance.collection('app_config').doc('living_canvas');
@@ -350,7 +377,7 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
       final draftDefaults = Map<String, dynamic>.from(
         (existing.data()?['repeatingDraftDefaults'] as Map?) ?? const <String, dynamic>{},
       );
-      draftDefaults[_selectedDefaultKey] = _defaultsPayload();
+      draftDefaults[_selectedDefaultKey] = payload;
       await configRef.set({
         'repeatingDraftDefaults': draftDefaults,
         'updatedAt': FieldValue.serverTimestamp(),
@@ -515,6 +542,72 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
     }
   }
 
+  Future<void> _auditSlots() async {
+    setState(() => _auditing = true);
+    try {
+      await _loadDefaults();
+      final rows = <String>[];
+      var issueCount = 0;
+
+      void addRows(String status, Map<String, Map<String, dynamic>> source) {
+        final keys = source.keys
+            .where((key) => key.startsWith('${_canvasScope}_'))
+            .toList()
+          ..sort();
+        for (final key in keys) {
+          final data = source[key]!;
+          final mediaUrl = (data['mediaUrl'] as String? ?? '').trim().toLowerCase();
+          final audioUrl = (data['chimeAudioUrl'] as String? ?? '').trim();
+          final customAudioUrl = (data['customAudioUrl'] as String? ?? '').trim();
+          final mediaType = mediaUrl.isEmpty
+              ? 'none'
+              : mediaUrl.contains('youtube.com') || mediaUrl.contains('youtu.be')
+                  ? 'YouTube'
+                  : RegExp(r'\.(mp4|mov|webm|m4v|mpeg|mpg|avi|mkv)(?:\?|$)').hasMatch(mediaUrl)
+                      ? 'video'
+                      : 'image';
+          final issues = <String>[
+            if (_payloadValidationIssue(data) case final issue?) issue,
+            if (audioUrl != customAudioUrl) 'audio URL fields do not match',
+            if ((data['audioMode'] == 'silent') && audioUrl.isNotEmpty) 'audioMode is silent but audio URL is set',
+            if ((data['audioMode'] == 'custom') && audioUrl.isEmpty) 'audioMode is custom but audio URL is blank',
+          ];
+          issueCount += issues.length;
+          rows.add(
+            '$key  $status  media=$mediaType  audio=${audioUrl.isEmpty ? 'embedded/none' : 'standalone'}  '
+            'event=${data['durationSeconds'] ?? 30}s  thankYou=${data['thankYouDisplaySeconds'] ?? 3}s'
+            '${issues.isEmpty ? '' : '  ISSUE: ${issues.join('; ')}'}',
+          );
+        }
+      }
+
+      addRows('PUBLISHED', _liveDefaults);
+      addRows('DRAFT', _draftDefaults);
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Thumbprint slot audit — $issueCount issue${issueCount == 1 ? '' : 's'}'),
+          content: SizedBox(
+            width: 820,
+            child: SingleChildScrollView(
+              child: SelectableText(rows.isEmpty ? 'No slots found for this scope.' : rows.join('\n')),
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Slot audit failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _auditing = false);
+    }
+  }
+
   Future<void> _clearLane() async {
     final laneLabel = ':${_lane.toString().padLeft(2, '0')}';
     final scopeLabel = _canvasScope == 'international' ? 'International' : 'National';
@@ -626,6 +719,18 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
           );
         }
         return;
+      }
+      for (final key in scopedKeys) {
+        final data = Map<String, dynamic>.from(draftDefaults[key] as Map);
+        final validationIssue = _payloadValidationIssue(data);
+        if (validationIssue != null) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('$key: $validationIssue')),
+            );
+          }
+          return;
+        }
       }
       for (final key in scopedKeys) {
         liveDefaults[key] = draftDefaults.remove(key);
@@ -918,6 +1023,14 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
               ),
               const SizedBox(width: 8),
               OutlinedButton.icon(
+                onPressed: _auditing ? null : _auditSlots,
+                icon: _auditing
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.fact_check_outlined),
+                label: Text(_auditing ? 'Auditing...' : 'Audit slots'),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
                 onPressed: _clearingLane ? null : _clearLane,
                 icon: _clearingLane
                     ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
@@ -1155,6 +1268,14 @@ class _LivingCanvasStudioTabState extends State<LivingCanvasStudioTab> {
             TextField(controller: _pinText, maxLines: 3, decoration: const InputDecoration(labelText: 'Tap popup text')),
             TextField(controller: _thanksTitle, decoration: const InputDecoration(labelText: 'Thank-you title')),
             TextField(controller: _thanksBody, maxLines: 3, decoration: const InputDecoration(labelText: 'Thank-you body')),
+            TextField(
+              controller: _thankYouDisplaySeconds,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Thumbprint + thank-you display (seconds)',
+                helperText: 'After a tap, both disappear together; background media continues.',
+              ),
+            ),
             SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('Show Goodometer graph'), subtitle: const Text('National view shows National; World view will include World + National when built.'), value: _showGoodometer, onChanged: (v) => setState(() => _showGoodometer = v)),
             const SizedBox(height: 12),
             Wrap(spacing: 8, runSpacing: 8, children: [
