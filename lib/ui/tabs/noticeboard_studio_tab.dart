@@ -36,6 +36,8 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
   final _linkedSlotIdController = TextEditingController();
   final _showBeforeHoursController = TextEditingController(text: '24');
   final _hideAfterHoursController = TextEditingController(text: '0');
+  DateTime? _eventDate;
+  DateTime? _removeDate;
 
   @override
   void initState() {
@@ -126,6 +128,14 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
     _linkedSlotIdController.text = (card['linkedSlotId'] as String?) ?? '';
     _showBeforeHoursController.text = ((card['showBeforeHours'] as num?)?.toInt() ?? 24).toString();
     _hideAfterHoursController.text = ((card['hideAfterHours'] as num?)?.toInt() ?? 0).toString();
+    _eventDate = _asDateTime(card['eventDate']);
+    _removeDate = _asDateTime(card['removeDate']);
+  }
+
+  DateTime? _asDateTime(dynamic value) {
+    if (value is Timestamp) return value.toDate();
+    if (value is String) return DateTime.tryParse(value);
+    return null;
   }
 
   Map<String, dynamic> _cardData({required bool published}) {
@@ -143,6 +153,8 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
       'remindMeEnabled': _remindMeEnabled,
       'showBeforeHours': _selectedHours(_showBeforeHoursController, fallback: 24).clamp(0, 8760),
       'hideAfterHours': _selectedHours(_hideAfterHoursController, fallback: 0).clamp(0, 8760),
+      if (_eventDate != null) 'eventDate': Timestamp.fromDate(_eventDate!),
+      if (_removeDate != null) 'removeDate': Timestamp.fromDate(_removeDate!),
       'published': published,
       'updatedAt': FieldValue.serverTimestamp(),
       if (published) 'publishedAt': FieldValue.serverTimestamp(),
@@ -188,9 +200,30 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
     }
   }
 
+  Future<void> _pickNoticeboardDate({required bool removal}) async {
+    final initial = (removal ? _removeDate : _eventDate) ?? DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+      initialDate: initial,
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      if (removal) {
+        _removeDate = DateTime(picked.year, picked.month, picked.day, 23, 59, 59);
+      } else {
+        _eventDate = DateTime(picked.year, picked.month, picked.day);
+      }
+    });
+  }
+
   Future<void> _save({required bool published}) async {
     setState(() => _isSaving = true);
     try {
+      if (_selectedCardId == 'draft_main') {
+        _selectedCardId = 'draft_${DateTime.now().millisecondsSinceEpoch}';
+      }
       await FirebaseFirestore.instance.collection('app_config').doc('noticeboard_studio').set({
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
@@ -202,9 +235,14 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
       if (!savedCard.exists || savedCard.data()?['published'] != published) {
         throw Exception('Server verification failed for $_selectedCardId');
       }
+      await _loadCard(_selectedCardId);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(published ? 'Noticeboard published' : 'Noticeboard draft saved')),
+        SnackBar(content: Text(
+          published
+              ? 'Noticeboard published and added to the list'
+              : 'Draft saved as $_selectedCardId',
+        )),
       );
     } catch (e) {
       if (mounted) {
@@ -269,6 +307,8 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
     _phonePreviewRemindMeRequested = false;
     _showBeforeHoursController.text = '24';
     _hideAfterHoursController.text = '0';
+    _eventDate = null;
+    _removeDate = null;
     setState(() {});
   }
 
@@ -503,6 +543,29 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
               const Expanded(child: Text('Noticeboards', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
               OutlinedButton.icon(onPressed: _createNewDraft, icon: const Icon(Icons.add), label: const Text('New draft')),
             ]),
+            const SizedBox(height: 12),
+            Row(children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => _pickNoticeboardDate(removal: false),
+                  icon: const Icon(Icons.event),
+                  label: Text(_eventDate == null
+                      ? 'Set event date (optional)'
+                      : 'Event date: ${_eventDate!.year}-${_eventDate!.month.toString().padLeft(2, '0')}-${_eventDate!.day.toString().padLeft(2, '0')}'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => _pickNoticeboardDate(removal: true),
+                  icon: const Icon(Icons.event_busy),
+                  label: Text(_removeDate == null
+                      ? 'Set remove date (optional)'
+                      : 'Remove on: ${_removeDate!.year}-${_removeDate!.month.toString().padLeft(2, '0')}-${_removeDate!.day.toString().padLeft(2, '0')}'),
+                ),
+              ),
+            ]),
+            const Text('If an event date is set, “Display timing” is counted back from it. Remove date ends visibility explicitly.', style: TextStyle(fontSize: 12, color: Colors.grey)),
             const SizedBox(height: 8),
             StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
               stream: FirebaseFirestore.instance
