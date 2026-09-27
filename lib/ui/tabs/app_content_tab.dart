@@ -10,6 +10,7 @@ import '../../services/media_library_service.dart';
 import '../../services/youtube_embed_check_service.dart';
 import '../../models/media_item.dart';
 import '../widgets/video_widgets.dart';
+import 'community_support_tab.dart' show kSupportBuiltInIcons;
 
 const int kMaxActiveReels = 30;
 
@@ -31,6 +32,8 @@ class _AppContentTabState extends State<AppContentTab> {
   final _featuredUrlController = TextEditingController();
   final _featuredTitleController = TextEditingController();
   final _featuredBodyController = TextEditingController();
+  final _supportButtonTextController =
+      TextEditingController(text: 'Community Support');
 
   // State Variables
   bool _isLoading = false;
@@ -48,6 +51,8 @@ class _AppContentTabState extends State<AppContentTab> {
   bool _showReelCarousel = false;
   int _reelAutoRotateSeconds = 8;
   List<Map<String, dynamic>> _reelItems = [];
+  bool _isSupportFeatureEnabled = false;
+  Map<String, dynamic> _supportConfig = const {};
 
   int get _activeReelCount =>
       _reelItems.where((item) => item['enabled'] != false).length;
@@ -64,16 +69,27 @@ class _AppContentTabState extends State<AppContentTab> {
   @override
   void dispose() {
     _backgroundVideoController?.dispose();
+    _supportButtonTextController.dispose();
     super.dispose();
   }
 
   Future<void> _loadContent() async {
     setState(() => _isLoading = true);
     try {
-      final doc = await FirebaseFirestore.instance
-          .collection('app_config')
-          .doc('home_screen')
-          .get();
+      final docs = await Future.wait([
+        FirebaseFirestore.instance.collection('app_config').doc('home_screen').get(),
+        FirebaseFirestore.instance.collection('app_config').doc('community_support').get(),
+      ]);
+      final doc = docs[0];
+      final supportDoc = docs[1];
+
+      final supportData = supportDoc.data() ?? const <String, dynamic>{};
+      _supportConfig = Map<String, dynamic>.from(supportData);
+      _isSupportFeatureEnabled = supportData['isSupportFeatureEnabled'] == true;
+      _supportButtonTextController.text =
+          (supportData['supportButtonText'] as String?)?.trim().isNotEmpty == true
+              ? supportData['supportButtonText']
+              : 'Community Support';
 
       if (doc.exists && mounted) {
         final data = doc.data()!;
@@ -210,12 +226,26 @@ class _AppContentTabState extends State<AppContentTab> {
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true)).timeout(const Duration(seconds: 60));
 
+      await FirebaseFirestore.instance
+          .collection('app_config')
+          .doc('community_support')
+          .set({
+        'supportButtonText': _supportButtonTextController.text.trim(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true)).timeout(const Duration(seconds: 60));
+
       // Confirm publish reached the backend (not only local cache).
       final serverDoc = await FirebaseFirestore.instance
           .collection('app_config')
           .doc('home_screen')
           .get(const GetOptions(source: Source.server));
       final serverData = serverDoc.data() ?? <String, dynamic>{};
+        final supportServerDoc = await FirebaseFirestore.instance
+          .collection('app_config')
+          .doc('community_support')
+          .get(const GetOptions(source: Source.server));
+        final publishedSupportButtonText =
+          (supportServerDoc.data()?['supportButtonText'] as String? ?? '').trim();
       final publishedShowBulletin =
           serverData['appContentShowBulletin'] == true;
         final publishedShowBackground = serverData['showBackground'] == true;
@@ -248,7 +278,9 @@ class _AppContentTabState extends State<AppContentTab> {
           publishedLogoUrl != expectedLogoUrl ||
           (publishedLogoSize - _logoSize).abs() > 0.01 ||
           publishedReelAutoRotateSeconds != _reelAutoRotateSeconds ||
-          publishedReelItems.length != _reelItems.length) {
+            publishedReelItems.length != _reelItems.length ||
+            publishedSupportButtonText !=
+              _supportButtonTextController.text.trim()) {
         throw Exception(
           'Publish verification failed: server home_screen values do not match the latest save.',
         );
@@ -288,6 +320,37 @@ class _AppContentTabState extends State<AppContentTab> {
         setState(() => _isSaving = false);
       }
     }
+  }
+
+  Widget _buildSupportPreviewIcon() {
+    final mode = (_supportConfig['supportIconMode'] as String?) ?? 'builtin';
+    if (mode == 'text') {
+      final label = (_supportConfig['supportTextLabel'] as String?)?.trim();
+      return Text(
+        label?.isNotEmpty == true ? label! : 'Community Served',
+        style: const TextStyle(
+          color: Colors.amberAccent,
+          fontWeight: FontWeight.bold,
+          fontSize: 11,
+        ),
+      );
+    }
+    if (mode == 'custom') {
+      final url = (_supportConfig['supportIconCustomUrl'] as String?)?.trim();
+      if (url?.isNotEmpty == true) {
+        return Image.network(
+          url!,
+          width: 18,
+          height: 18,
+          fit: BoxFit.contain,
+          errorBuilder: (_, __, ___) =>
+              const Icon(Icons.front_hand, size: 18),
+        );
+      }
+    }
+    final key =
+        (_supportConfig['supportIconBuiltInKey'] as String?) ?? 'front_hand';
+    return Icon(kSupportBuiltInIcons[key] ?? Icons.front_hand, size: 18);
   }
 
   Future<void> _pickFromMediaLibrary({
@@ -1073,6 +1136,17 @@ class _AppContentTabState extends State<AppContentTab> {
                     border: OutlineInputBorder(),
                   ),
                   maxLines: 2,
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _supportButtonTextController,
+                  decoration: const InputDecoration(
+                    labelText: 'Community Support home button text',
+                    helperText:
+                        'Shared with the Community Support tab; changes the user-facing Home button only.',
+                    border: OutlineInputBorder(),
+                  ),
                   onChanged: (_) => setState(() {}),
                 ),
 
@@ -1869,6 +1943,48 @@ class _AppContentTabState extends State<AppContentTab> {
                                         textAlign: TextAlign.center,
                                       ),
 
+                                      if (_showReelCarousel &&
+                                          _reelItems.isNotEmpty) ...[
+                                        const SizedBox(height: 16),
+                                        OutlinedButton.icon(
+                                          onPressed:
+                                              _openReelsFullscreenPreview,
+                                          icon: const Icon(
+                                              Icons.play_circle_outline),
+                                          label: const Text('Reels'),
+                                          style: OutlinedButton.styleFrom(
+                                            foregroundColor: Colors.white,
+                                            side: const BorderSide(
+                                                color: Colors.white54),
+                                          ),
+                                        ),
+                                      ],
+
+                                      if (_isSupportFeatureEnabled)
+                                        Padding(
+                                          padding:
+                                              const EdgeInsets.only(top: 16),
+                                          child: OutlinedButton.icon(
+                                            onPressed: () {},
+                                            icon: _buildSupportPreviewIcon(),
+                                            label: Text(
+                                              _supportButtonTextController
+                                                      .text
+                                                      .trim()
+                                                      .isEmpty
+                                                  ? 'Community Support'
+                                                  : _supportButtonTextController
+                                                      .text
+                                                      .trim(),
+                                            ),
+                                            style: OutlinedButton.styleFrom(
+                                              foregroundColor: Colors.white,
+                                              side: const BorderSide(
+                                                  color: Colors.white54),
+                                            ),
+                                          ),
+                                        ),
+
                                       const SizedBox(height: 32),
 
                                       // Bulletin Board
@@ -1923,15 +2039,6 @@ class _AppContentTabState extends State<AppContentTab> {
                                               _featuredTitleController.text.trim();
                                           final featuredBody =
                                               _featuredBodyController.text.trim();
-                                          final enabledReels = _reelItems
-                                              .where((item) =>
-                                                  item['enabled'] != false &&
-                                                  ((item['url'] as String?)
-                                                              ?.trim()
-                                                              .isNotEmpty ??
-                                                          false))
-                                              .toList();
-
                                           Widget featuredCard() {
                                             return Container(
                                               width: double.infinity,
@@ -1996,102 +2103,13 @@ class _AppContentTabState extends State<AppContentTab> {
                                                       _buildFeaturedPreview(),
                                                     ],
                                                   ),
-                                                  if (_showReelCarousel &&
-                                                      enabledReels.isNotEmpty)
-                                                    Positioned(
-                                                      top: 0,
-                                                      right: 0,
-                                                      child: Tooltip(
-                                                        message: 'Open Reels',
-                                                        child: GestureDetector(
-                                                          onTap:
-                                                              _openReelsFullscreenPreview,
-                                                          child: const Row(
-                                                            mainAxisSize:
-                                                                MainAxisSize
-                                                                    .min,
-                                                            children: [
-                                                              Icon(
-                                                                Icons
-                                                                    .play_circle_fill_rounded,
-                                                                color: Colors
-                                                                    .white70,
-                                                                size: 26,
-                                                              ),
-                                                              SizedBox(
-                                                                  width: 4),
-                                                              Text(
-                                                                'Reels',
-                                                                style:
-                                                                    TextStyle(
-                                                                  color: Colors
-                                                                      .white70,
-                                                                  fontSize: 13,
-                                                                  fontWeight:
-                                                                      FontWeight
-                                                                          .w600,
-                                                                ),
-                                                              ),
-                                                            ],
-                                                          ),
-                                                        ),
-                                                      ),
-                                                    ),
                                                 ],
                                               ),
                                             );
                                           }
 
                                           return featuredCard();
-                                        })
-                                      else if (_showReelCarousel)
-                                        Container(
-                                          width: double.infinity,
-                                          padding: const EdgeInsets.all(10),
-                                          decoration: BoxDecoration(
-                                            color:
-                                                Colors.white.withOpacity(0.08),
-                                            borderRadius:
-                                                BorderRadius.circular(16),
-                                            border: Border.all(
-                                                color: Colors.white24),
-                                          ),
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              const Row(
-                                                children: [
-                                                  Icon(Icons.slideshow,
-                                                      color: Colors.amber,
-                                                      size: 16),
-                                                  SizedBox(width: 8),
-                                                  Text(
-                                                    'Reel Carousel',
-                                                    style: TextStyle(
-                                                      color: Colors.white,
-                                                      fontWeight:
-                                                          FontWeight.w600,
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                              const SizedBox(height: 10),
-                                              SizedBox(
-                                                width: double.infinity,
-                                                child: ElevatedButton.icon(
-                                                  onPressed:
-                                                      _openReelsFullscreenPreview,
-                                                  icon: const Icon(Icons
-                                                      .play_circle_fill_rounded),
-                                                  label: const Text(
-                                                      'Open Reels Full Screen'),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-
+                                        }),
                                       const SizedBox(height: 32),
                                       const SizedBox(height: 20),
                                     ],
