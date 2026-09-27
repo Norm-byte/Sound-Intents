@@ -257,7 +257,9 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
                             stream: _mediaLibrary.getMediaStream(section: selectedSection == 'All' ? null : selectedSection),
                             builder: (context, snapshot) {
                               if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-                              final items = snapshot.data!.where((item) => allowedTypes.contains(item.type)).toList();
+                                final items = snapshot.data!
+                                  .where((item) => _isAllowedNoticeboardMedia(item, allowedTypes))
+                                  .toList();
                               if (items.isEmpty) return const Center(child: Text('No matching media found.'));
                               return GridView.builder(
                                 gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -303,6 +305,13 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
     );
     if (selected == null) return;
     setState(() => target.text = selected.url);
+  }
+
+  bool _isAllowedNoticeboardMedia(MediaItem item, Set<String> allowedTypes) {
+    if (allowedTypes.contains(item.type)) return true;
+    if (!allowedTypes.contains('image') || item.type != 'other') return false;
+    final path = Uri.tryParse(item.url)?.path.toLowerCase() ?? item.url.toLowerCase();
+    return RegExp(r'\.(png|jpe?g|gif|webp|bmp|svg|heic|heif|tiff?)(?:$|\?)').hasMatch(path);
   }
 
   Future<void> _testLearnMore() async {
