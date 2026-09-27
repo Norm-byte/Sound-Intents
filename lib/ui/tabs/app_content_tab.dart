@@ -1138,7 +1138,21 @@ class _AppContentTabState extends State<AppContentTab> {
                   maxLines: 2,
                   onChanged: (_) => setState(() {}),
                 ),
-                const SizedBox(height: 16),
+
+                const SizedBox(height: 24),
+                _buildSectionHeader('Community Focus'),
+                Text(
+                  _isSupportFeatureEnabled
+                      ? 'Community Support is enabled on the user Home screen.'
+                      : 'Community Support is currently disabled on the user Home screen.',
+                  style: TextStyle(
+                    color: _isSupportFeatureEnabled
+                        ? Colors.green.shade700
+                        : Colors.grey.shade700,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 12),
                 TextField(
                   controller: _supportButtonTextController,
                   decoration: const InputDecoration(
