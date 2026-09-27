@@ -169,13 +169,13 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
       case 0:
         return 'Show immediately';
       case 24:
-        return 'Show 1 day before';
+        return 'Show 1 day before event date';
       case 168:
-        return 'Show 1 week before';
+        return 'Show 1 week before event date';
       case 720:
-        return 'Show 1 month before';
+        return 'Show 1 month before event date';
       case 2160:
-        return 'Show 3 months before';
+        return 'Show 3 months before event date';
       default:
         return 'Show $hours hours before';
     }
@@ -544,29 +544,6 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
               OutlinedButton.icon(onPressed: _createNewDraft, icon: const Icon(Icons.add), label: const Text('New draft')),
             ]),
             const SizedBox(height: 12),
-            Row(children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () => _pickNoticeboardDate(removal: false),
-                  icon: const Icon(Icons.event),
-                  label: Text(_eventDate == null
-                      ? 'Set event date (optional)'
-                      : 'Event date: ${_eventDate!.year}-${_eventDate!.month.toString().padLeft(2, '0')}-${_eventDate!.day.toString().padLeft(2, '0')}'),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () => _pickNoticeboardDate(removal: true),
-                  icon: const Icon(Icons.event_busy),
-                  label: Text(_removeDate == null
-                      ? 'Set remove date (optional)'
-                      : 'Remove on: ${_removeDate!.year}-${_removeDate!.month.toString().padLeft(2, '0')}-${_removeDate!.day.toString().padLeft(2, '0')}'),
-                ),
-              ),
-            ]),
-            const Text('If an event date is set, “Display timing” is counted back from it. Remove date ends visibility explicitly.', style: TextStyle(fontSize: 12, color: Colors.grey)),
-            const SizedBox(height: 8),
             StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
               stream: FirebaseFirestore.instance
                   .collection('noticeboard_studio_cards')
@@ -685,6 +662,29 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
                 ),
               ),
             ]),
+            const SizedBox(height: 10),
+            Row(children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => _pickNoticeboardDate(removal: false),
+                  icon: const Icon(Icons.event),
+                  label: Text(_eventDate == null
+                      ? 'Set event date'
+                      : 'Event date: ${_eventDate!.year}-${_eventDate!.month.toString().padLeft(2, '0')}-${_eventDate!.day.toString().padLeft(2, '0')}'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => _pickNoticeboardDate(removal: true),
+                  icon: const Icon(Icons.event_busy),
+                  label: Text(_removeDate == null
+                      ? 'Set remove date'
+                      : 'Remove on: ${_removeDate!.year}-${_removeDate!.month.toString().padLeft(2, '0')}-${_removeDate!.day.toString().padLeft(2, '0')}'),
+                ),
+              ),
+            ]),
+            const Text('Display timing counts back from the event date. Remove date ends visibility explicitly.', style: TextStyle(fontSize: 12, color: Colors.grey)),
             SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('Enable Remind Me module'), value: _remindMeEnabled, onChanged: (v) => setState(() => _remindMeEnabled = v)),
             const SizedBox(height: 12),
             Wrap(spacing: 8, runSpacing: 8, children: [
