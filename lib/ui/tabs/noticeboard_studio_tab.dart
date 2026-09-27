@@ -88,7 +88,20 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
       final settings = settingsDoc.data() ?? const <String, dynamic>{};
       _hideLegacyEventsTab = settings['hideLegacyEventsTab'] == true;
       _enableNoticeboardStudioFeed = settings['enableNoticeboardStudioFeed'] != false;
-      await _loadCard(_selectedCardId);
+      final latestCard = await FirebaseFirestore.instance
+          .collection('noticeboard_studio_cards')
+          .orderBy('updatedAt', descending: true)
+          .limit(1)
+          .get();
+      await _loadCard(
+        latestCard.docs.isEmpty ? _selectedCardId : latestCard.docs.first.id,
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not load Noticeboard Studio: $e')),
+        );
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -181,14 +194,24 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
       await FirebaseFirestore.instance.collection('app_config').doc('noticeboard_studio').set({
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
-      await FirebaseFirestore.instance
+      final cardRef = FirebaseFirestore.instance
           .collection('noticeboard_studio_cards')
-          .doc(_selectedCardId)
-          .set(_cardData(published: published), SetOptions(merge: true));
+          .doc(_selectedCardId);
+      await cardRef.set(_cardData(published: published), SetOptions(merge: true));
+      final savedCard = await cardRef.get(const GetOptions(source: Source.server));
+      if (!savedCard.exists || savedCard.data()?['published'] != published) {
+        throw Exception('Server verification failed for $_selectedCardId');
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(published ? 'Noticeboard published' : 'Noticeboard draft saved')),
       );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not ${published ? 'publish' : 'save'} Noticeboard: $e')),
+        );
+      }
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
