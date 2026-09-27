@@ -128,12 +128,51 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
       'learnMoreContentUrl': _learnMoreContentUrlController.text.trim(),
       'linkedSlotId': _linkedSlotIdController.text.trim(),
       'remindMeEnabled': _remindMeEnabled,
-      'showBeforeHours': (int.tryParse(_showBeforeHoursController.text.trim()) ?? 24).clamp(0, 720),
-      'hideAfterHours': (int.tryParse(_hideAfterHoursController.text.trim()) ?? 0).clamp(0, 720),
+      'showBeforeHours': _selectedHours(_showBeforeHoursController, fallback: 24).clamp(0, 8760),
+      'hideAfterHours': _selectedHours(_hideAfterHoursController, fallback: 0).clamp(0, 8760),
       'published': published,
       'updatedAt': FieldValue.serverTimestamp(),
       if (published) 'publishedAt': FieldValue.serverTimestamp(),
     };
+  }
+
+  int _selectedHours(TextEditingController controller, {required int fallback}) =>
+      int.tryParse(controller.text.trim()) ?? fallback;
+
+  String _showBeforeLabel(int hours) {
+    switch (hours) {
+      case 0:
+        return 'Show immediately';
+      case 24:
+        return 'Show 1 day before';
+      case 168:
+        return 'Show 1 week before';
+      case 720:
+        return 'Show 1 month before';
+      case 2160:
+        return 'Show 3 months before';
+      default:
+        return 'Show $hours hours before';
+    }
+  }
+
+  String _hideAfterLabel(int hours) {
+    switch (hours) {
+      case 0:
+        return 'Remove immediately after display window';
+      case 24:
+        return 'Remove after 1 day';
+      case 168:
+        return 'Remove after 1 week';
+      case 720:
+        return 'Remove after 1 month';
+      case 2160:
+        return 'Remove after 3 months';
+      case 8760:
+        return 'Remove after 1 year';
+      default:
+        return 'Remove after $hours hours';
+    }
   }
 
   Future<void> _save({required bool published}) async {
@@ -443,10 +482,25 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
             ]),
             const SizedBox(height: 8),
             StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: FirebaseFirestore.instance.collection('noticeboard_studio_cards').orderBy('updatedAt', descending: true).limit(25).snapshots(),
+              stream: FirebaseFirestore.instance
+                  .collection('noticeboard_studio_cards')
+                  .snapshots(),
               builder: (context, snapshot) {
+                if (snapshot.hasError) {
+                  return Text('Could not load noticeboards: ${snapshot.error}');
+                }
                 if (!snapshot.hasData) return const LinearProgressIndicator();
-                final docs = snapshot.data!.docs;
+                final docs = [...snapshot.data!.docs]
+                  ..sort((a, b) {
+                    final aUpdated = a.data()['updatedAt'];
+                    final bUpdated = b.data()['updatedAt'];
+                    if (aUpdated is Timestamp && bUpdated is Timestamp) {
+                      return bUpdated.compareTo(aUpdated);
+                    }
+                    if (aUpdated is Timestamp) return -1;
+                    if (bUpdated is Timestamp) return 1;
+                    return a.id.compareTo(b.id);
+                  });
                 if (docs.isEmpty) return const Text('No Studio noticeboards yet.');
                 return Wrap(
                   spacing: 8,
@@ -511,9 +565,39 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
             ],
             TextField(controller: _linkedSlotIdController, decoration: const InputDecoration(labelText: 'Linked slot id for Remind Me')),
             Row(children: [
-              Expanded(child: TextField(controller: _showBeforeHoursController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Show before hours'))),
+              Expanded(
+                child: DropdownButtonFormField<int>(
+                  initialValue: _selectedHours(_showBeforeHoursController, fallback: 24),
+                  decoration: const InputDecoration(labelText: 'Display timing', border: OutlineInputBorder()),
+                  items: const [0, 24, 168, 720, 2160]
+                      .map((hours) => DropdownMenuItem<int>(
+                            value: hours,
+                            child: Text(_showBeforeLabel(hours)),
+                          ))
+                      .toList(),
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setState(() => _showBeforeHoursController.text = value.toString());
+                  },
+                ),
+              ),
               const SizedBox(width: 12),
-              Expanded(child: TextField(controller: _hideAfterHoursController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Hide after hours'))),
+              Expanded(
+                child: DropdownButtonFormField<int>(
+                  initialValue: _selectedHours(_hideAfterHoursController, fallback: 0),
+                  decoration: const InputDecoration(labelText: 'Retention', border: OutlineInputBorder()),
+                  items: const [0, 24, 168, 720, 2160, 8760]
+                      .map((hours) => DropdownMenuItem<int>(
+                            value: hours,
+                            child: Text(_hideAfterLabel(hours)),
+                          ))
+                      .toList(),
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setState(() => _hideAfterHoursController.text = value.toString());
+                  },
+                ),
+              ),
             ]),
             SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('Enable Remind Me module'), value: _remindMeEnabled, onChanged: (v) => setState(() => _remindMeEnabled = v)),
             const SizedBox(height: 12),
