@@ -63,6 +63,9 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
     final _supportRequestsNoMatchController = TextEditingController(
       text: 'No Community Focus requests match this filter.',
     );
+    final _communityFocusEmptyController = TextEditingController(
+      text: 'No Community Focus posts yet. Check back soon, or add one from the Common Room.',
+    );
 
   String? _backgroundImageUrl;
 
@@ -101,6 +104,7 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
     _supportRequestsDescriptionController.dispose();
     _supportRequestsEmptyController.dispose();
     _supportRequestsNoMatchController.dispose();
+    _communityFocusEmptyController.dispose();
     _textLabelController.dispose();
     _textColorController.dispose();
     _popupTitleController.dispose();
@@ -157,6 +161,10 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
               (data['supportRequestsNoMatchText'] as String?)?.trim().isNotEmpty == true
                 ? data['supportRequestsNoMatchText']
                 : 'No Community Focus requests match this filter.';
+            _communityFocusEmptyController.text =
+              (data['communityFocusEmptyText'] as String?)?.trim().isNotEmpty == true
+                ? data['communityFocusEmptyText']
+                : _communityFocusEmptyController.text;
         _iconMode = (data['supportIconMode'] as String?) ?? 'builtin';
         _iconBuiltInKey = kSupportBuiltInIcons.containsKey(data['supportIconBuiltInKey'])
             ? data['supportIconBuiltInKey']
@@ -282,6 +290,7 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
         'supportRequestsDescription': _supportRequestsDescriptionController.text.trim(),
         'supportRequestsEmptyText': _supportRequestsEmptyController.text.trim(),
         'supportRequestsNoMatchText': _supportRequestsNoMatchController.text.trim(),
+        'communityFocusEmptyText': _communityFocusEmptyController.text.trim(),
         'supportIconMode': _iconMode,
         'supportIconBuiltInKey': _iconBuiltInKey,
         'supportIconCustomUrl': _iconCustomUrl,
@@ -447,6 +456,16 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
                       controller: _supportRequestsNoMatchController,
                       maxLines: 2,
                       decoration: const InputDecoration(labelText: 'Filtered no-match text', border: OutlineInputBorder()),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _communityFocusEmptyController,
+                      maxLines: 3,
+                      decoration: const InputDecoration(
+                        labelText: 'Community Focus screen empty-state text',
+                        helperText: 'Shown when no Community Focus posts are available.',
+                        border: OutlineInputBorder(),
+                      ),
                     ),
                   ],
                 ),
