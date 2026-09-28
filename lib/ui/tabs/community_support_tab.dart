@@ -74,10 +74,10 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
   final _savedPoemsTitleController =
       TextEditingController(text: 'My Favourite Poems');
   final _savedPoemsDescriptionController = TextEditingController(
-    text: 'Poems saved from other members. Tap a poem to read it in full.',
+    text: 'Poems you choose to keep. Tap a poem to read it in full.',
   );
   final _savedPoemsEmptyController = TextEditingController(
-    text: 'Poems you save from other members will appear here.',
+    text: 'Poems you save will appear here.',
   );
   final _savePoemLabelController = TextEditingController(text: 'Save poem');
   final _removeSavedPoemLabelController =
