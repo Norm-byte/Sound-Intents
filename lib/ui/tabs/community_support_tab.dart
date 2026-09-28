@@ -49,6 +49,9 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
   final _buttonTextController = TextEditingController(text: 'Community Support');
   final _supportRequestCheckboxTextController =
       TextEditingController(text: 'Add to Community Focus');
+    final _supportReceivedLabelController =
+      TextEditingController(text: 'Support Recv.');
+    String _supportReceivedIconBuiltInKey = 'front_hand';
 
   String? _backgroundImageUrl;
 
@@ -82,6 +85,7 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
   void dispose() {
     _buttonTextController.dispose();
     _supportRequestCheckboxTextController.dispose();
+    _supportReceivedLabelController.dispose();
     _textLabelController.dispose();
     _textColorController.dispose();
     _popupTitleController.dispose();
@@ -114,6 +118,14 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
               (data['supportRequestCheckboxText'] as String?)?.trim().isNotEmpty == true
                 ? data['supportRequestCheckboxText']
                 : 'Add to Community Focus';
+            _supportReceivedLabelController.text =
+              (data['supportReceivedLabel'] as String?)?.trim().isNotEmpty == true
+                ? data['supportReceivedLabel']
+                : 'Support Recv.';
+            _supportReceivedIconBuiltInKey =
+              kSupportBuiltInIcons.containsKey(data['supportReceivedIconBuiltInKey'])
+                ? data['supportReceivedIconBuiltInKey']
+                : 'front_hand';
         _iconMode = (data['supportIconMode'] as String?) ?? 'builtin';
         _iconBuiltInKey = kSupportBuiltInIcons.containsKey(data['supportIconBuiltInKey'])
             ? data['supportIconBuiltInKey']
@@ -233,6 +245,8 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
         'supportButtonText': _buttonTextController.text.trim(),
         'supportRequestCheckboxText':
           _supportRequestCheckboxTextController.text.trim(),
+        'supportReceivedLabel': _supportReceivedLabelController.text.trim(),
+        'supportReceivedIconBuiltInKey': _supportReceivedIconBuiltInKey,
         'supportIconMode': _iconMode,
         'supportIconBuiltInKey': _iconBuiltInKey,
         'supportIconCustomUrl': _iconCustomUrl,
@@ -342,6 +356,37 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
                         labelText: 'Community Focus checkbox text',
                         border: OutlineInputBorder(),
                       ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _supportReceivedLabelController,
+                      decoration: const InputDecoration(
+                        labelText: 'My Impact Support Received text',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<String>(
+                      value: _supportReceivedIconBuiltInKey,
+                      decoration: const InputDecoration(
+                        labelText: 'My Impact Support Received icon',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: kSupportBuiltInIcons.keys
+                          .map((key) => DropdownMenuItem(
+                                value: key,
+                                child: Row(
+                                  children: [
+                                    Icon(kSupportBuiltInIcons[key]),
+                                    const SizedBox(width: 8),
+                                    Text(kSupportBuiltInIconLabels[key] ?? key),
+                                  ],
+                                ),
+                              ))
+                          .toList(),
+                      onChanged: (value) => setState(() {
+                        _supportReceivedIconBuiltInKey = value ?? 'front_hand';
+                      }),
                     ),
                   ],
                 ),
