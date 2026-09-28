@@ -494,7 +494,8 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
                     TextField(
                       controller: _mostSupportedTitleController,
                       decoration: const InputDecoration(
-                        labelText: 'Most Supported Request title',
+                        labelText: 'My Harmony – Most Supported Request card title',
+                        helperText: 'Changes the card title shown in My Harmony.',
                         border: OutlineInputBorder(),
                       ),
                     ),
