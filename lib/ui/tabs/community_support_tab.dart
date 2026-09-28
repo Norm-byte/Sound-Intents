@@ -45,7 +45,10 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
   bool _isUploadingBackground = false;
 
   bool _isSupportFeatureEnabled = false;
+  bool _showSupportRequestCheckbox = true;
   final _buttonTextController = TextEditingController(text: 'Community Support');
+  final _supportRequestCheckboxTextController =
+      TextEditingController(text: 'Add to Community Focus');
 
   String? _backgroundImageUrl;
 
@@ -78,6 +81,7 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
   @override
   void dispose() {
     _buttonTextController.dispose();
+    _supportRequestCheckboxTextController.dispose();
     _textLabelController.dispose();
     _textColorController.dispose();
     _popupTitleController.dispose();
@@ -101,10 +105,15 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
       if (supportDoc.exists) {
         final data = supportDoc.data()!;
         _isSupportFeatureEnabled = data['isSupportFeatureEnabled'] == true;
+        _showSupportRequestCheckbox = data['showSupportRequestCheckbox'] != false;
         _buttonTextController.text =
             (data['supportButtonText'] as String?)?.trim().isNotEmpty == true
                 ? data['supportButtonText']
                 : 'Community Support';
+            _supportRequestCheckboxTextController.text =
+              (data['supportRequestCheckboxText'] as String?)?.trim().isNotEmpty == true
+                ? data['supportRequestCheckboxText']
+                : 'Add to Community Focus';
         _iconMode = (data['supportIconMode'] as String?) ?? 'builtin';
         _iconBuiltInKey = kSupportBuiltInIcons.containsKey(data['supportIconBuiltInKey'])
             ? data['supportIconBuiltInKey']
@@ -220,7 +229,10 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
           .doc('community_support')
           .set({
         'isSupportFeatureEnabled': _isSupportFeatureEnabled,
+        'showSupportRequestCheckbox': _showSupportRequestCheckbox,
         'supportButtonText': _buttonTextController.text.trim(),
+        'supportRequestCheckboxText':
+          _supportRequestCheckboxTextController.text.trim(),
         'supportIconMode': _iconMode,
         'supportIconBuiltInKey': _iconBuiltInKey,
         'supportIconCustomUrl': _iconCustomUrl,
@@ -313,6 +325,21 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
                       controller: _buttonTextController,
                       decoration: const InputDecoration(
                         labelText: 'Home Screen button text',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Show Community Focus checkbox'),
+                      subtitle: const Text('Controls whether users can add a post to Community Focus.'),
+                      value: _showSupportRequestCheckbox,
+                      onChanged: (v) => setState(() => _showSupportRequestCheckbox = v),
+                    ),
+                    TextField(
+                      controller: _supportRequestCheckboxTextController,
+                      decoration: const InputDecoration(
+                        labelText: 'Community Focus checkbox text',
                         border: OutlineInputBorder(),
                       ),
                     ),

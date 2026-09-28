@@ -26,6 +26,7 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
   bool _phonePreviewShowingLearnMore = false;
   bool _phonePreviewRemindMeRequested = false;
   String _borderTheme = 'standard';
+  String _imageFit = 'contain';
   String _selectedCardId = 'draft_main';
 
   final _titleController = TextEditingController();
@@ -117,6 +118,7 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
     final card = cardDoc.data() ?? const <String, dynamic>{};
     _selectedCardId = cardId;
     _borderTheme = (card['borderTheme'] as String?) ?? 'standard';
+    _imageFit = (card['imageFit'] as String?) ?? 'contain';
     _remindMeEnabled = card['remindMeEnabled'] == true;
     _phonePreviewRemindMeRequested = false;
     _learnMoreEnabled = card['learnMoreEnabled'] == true;
@@ -144,6 +146,7 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
       'body': _bodyController.text.trim(),
       'imageUrl': _imageUrlController.text.trim(),
       'borderTheme': _borderTheme,
+      'imageFit': _imageFit,
       'learnMoreEnabled': _learnMoreEnabled,
       'learnMoreLabel': _learnMoreLabelController.text.trim().isEmpty
           ? 'Learn More'
@@ -601,6 +604,15 @@ class _NoticeboardStudioTabState extends State<NoticeboardStudioTab> {
                 DropdownMenuItem(value: 'glass', child: Text('Glass')),
               ],
               onChanged: (v) => setState(() => _borderTheme = v ?? 'standard'),
+            ),
+            DropdownButtonFormField<String>(
+              initialValue: _imageFit,
+              decoration: const InputDecoration(labelText: 'Image display mode'),
+              items: const [
+                DropdownMenuItem(value: 'contain', child: Text('Fit image (no crop)')),
+                DropdownMenuItem(value: 'cover', child: Text('Fill card (crop)')),
+              ],
+              onChanged: (v) => setState(() => _imageFit = v ?? 'contain'),
             ),
             TextField(controller: _titleController, decoration: const InputDecoration(labelText: 'Title')),
             TextField(controller: _bodyController, maxLines: 4, decoration: const InputDecoration(labelText: 'Body')),
