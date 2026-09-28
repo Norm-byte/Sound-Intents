@@ -65,6 +65,9 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
     );
     final _mostSupportedTitleController =
         TextEditingController(text: 'My Most Supported Request');
+    final _mostSupportedEmptyController = TextEditingController(
+      text: 'Add to Community Focus to start your activity.',
+    );
     final _communityFocusEmptyController = TextEditingController(
       text: 'No Community Focus posts yet. Check back soon, or add one from the Common Room.',
     );
@@ -107,6 +110,7 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
     _supportRequestsEmptyController.dispose();
     _supportRequestsNoMatchController.dispose();
     _mostSupportedTitleController.dispose();
+    _mostSupportedEmptyController.dispose();
     _communityFocusEmptyController.dispose();
     _textLabelController.dispose();
     _textColorController.dispose();
@@ -168,6 +172,10 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
               (data['mostSupportedRequestTitle'] as String?)?.trim().isNotEmpty == true
                 ? data['mostSupportedRequestTitle']
                 : 'My Most Supported Request';
+            _mostSupportedEmptyController.text =
+              (data['mostSupportedRequestEmptyText'] as String?)?.trim().isNotEmpty == true
+                ? data['mostSupportedRequestEmptyText']
+                : 'Add to Community Focus to start your activity.';
             _communityFocusEmptyController.text =
               (data['communityFocusEmptyText'] as String?)?.trim().isNotEmpty == true
                 ? data['communityFocusEmptyText']
@@ -298,6 +306,7 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
         'supportRequestsEmptyText': _supportRequestsEmptyController.text.trim(),
         'supportRequestsNoMatchText': _supportRequestsNoMatchController.text.trim(),
         'mostSupportedRequestTitle': _mostSupportedTitleController.text.trim(),
+        'mostSupportedRequestEmptyText': _mostSupportedEmptyController.text.trim(),
         'communityFocusEmptyText': _communityFocusEmptyController.text.trim(),
         'supportIconMode': _iconMode,
         'supportIconBuiltInKey': _iconBuiltInKey,
@@ -496,6 +505,16 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
                       decoration: const InputDecoration(
                         labelText: 'My Harmony – Most Supported Request card title',
                         helperText: 'Changes the card title shown in My Harmony.',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _mostSupportedEmptyController,
+                      maxLines: 2,
+                      decoration: const InputDecoration(
+                        labelText: 'My Most Supported Request empty text',
+                        helperText: 'Shown when the user has not posted a Community Focus request yet.',
                         border: OutlineInputBorder(),
                       ),
                     ),
