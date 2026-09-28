@@ -71,6 +71,27 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
     final _communityFocusEmptyController = TextEditingController(
       text: 'No Community Focus posts yet. Check back soon, or add one from the Common Room.',
     );
+  final _savedPoemsTitleController =
+      TextEditingController(text: 'My Favourite Poems');
+  final _savedPoemsDescriptionController = TextEditingController(
+    text: 'Poems saved from other members. Tap a poem to read it in full.',
+  );
+  final _savedPoemsEmptyController = TextEditingController(
+    text: 'Poems you save from other members will appear here.',
+  );
+  final _savePoemLabelController = TextEditingController(text: 'Save poem');
+  final _removeSavedPoemLabelController =
+      TextEditingController(text: 'Remove from saved poems');
+  final _myMostLikedPoemTitleController =
+      TextEditingController(text: 'My Most Liked Poem');
+  final _myMostLikedPoemOptionController =
+      TextEditingController(text: 'My most-liked poem');
+  final _overallMostLikedPoemTitleController =
+      TextEditingController(text: 'Overall Most Liked Poem');
+  final _overallMostLikedPoemOptionController =
+      TextEditingController(text: 'Overall most-liked poem');
+  final _overallPoemLikesLabelController =
+      TextEditingController(text: 'likes');
 
   String? _backgroundImageUrl;
 
@@ -112,6 +133,16 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
     _mostSupportedTitleController.dispose();
     _mostSupportedEmptyController.dispose();
     _communityFocusEmptyController.dispose();
+    _savedPoemsTitleController.dispose();
+    _savedPoemsDescriptionController.dispose();
+    _savedPoemsEmptyController.dispose();
+    _savePoemLabelController.dispose();
+    _removeSavedPoemLabelController.dispose();
+    _myMostLikedPoemTitleController.dispose();
+    _myMostLikedPoemOptionController.dispose();
+    _overallMostLikedPoemTitleController.dispose();
+    _overallMostLikedPoemOptionController.dispose();
+    _overallPoemLikesLabelController.dispose();
     _textLabelController.dispose();
     _textColorController.dispose();
     _popupTitleController.dispose();
@@ -180,6 +211,46 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
               (data['communityFocusEmptyText'] as String?)?.trim().isNotEmpty == true
                 ? data['communityFocusEmptyText']
                 : _communityFocusEmptyController.text;
+            _savedPoemsTitleController.text =
+              (data['savedSupportPostsTitle'] as String?)?.trim().isNotEmpty == true
+                ? data['savedSupportPostsTitle']
+                : _savedPoemsTitleController.text;
+            _savedPoemsDescriptionController.text =
+              (data['savedSupportPostsDescription'] as String?)?.trim().isNotEmpty == true
+                ? data['savedSupportPostsDescription']
+                : _savedPoemsDescriptionController.text;
+            _savedPoemsEmptyController.text =
+              (data['savedSupportPostsEmptyText'] as String?)?.trim().isNotEmpty == true
+                ? data['savedSupportPostsEmptyText']
+                : _savedPoemsEmptyController.text;
+            _savePoemLabelController.text =
+              (data['saveSupportPostLabel'] as String?)?.trim().isNotEmpty == true
+                ? data['saveSupportPostLabel']
+                : _savePoemLabelController.text;
+            _removeSavedPoemLabelController.text =
+              (data['removeSavedSupportPostLabel'] as String?)?.trim().isNotEmpty == true
+                ? data['removeSavedSupportPostLabel']
+                : _removeSavedPoemLabelController.text;
+            _myMostLikedPoemTitleController.text =
+              (data['myMostLikedPoemTitle'] as String?)?.trim().isNotEmpty == true
+                ? data['myMostLikedPoemTitle']
+                : _myMostLikedPoemTitleController.text;
+            _myMostLikedPoemOptionController.text =
+              (data['myMostLikedPoemOptionText'] as String?)?.trim().isNotEmpty == true
+                ? data['myMostLikedPoemOptionText']
+                : _myMostLikedPoemOptionController.text;
+            _overallMostLikedPoemTitleController.text =
+              (data['overallMostLikedPoemTitle'] as String?)?.trim().isNotEmpty == true
+                ? data['overallMostLikedPoemTitle']
+                : _overallMostLikedPoemTitleController.text;
+            _overallMostLikedPoemOptionController.text =
+              (data['overallMostLikedPoemOptionText'] as String?)?.trim().isNotEmpty == true
+                ? data['overallMostLikedPoemOptionText']
+                : _overallMostLikedPoemOptionController.text;
+            _overallPoemLikesLabelController.text =
+              (data['overallPoemLikesLabel'] as String?)?.trim().isNotEmpty == true
+                ? data['overallPoemLikesLabel']
+                : _overallPoemLikesLabelController.text;
         _iconMode = (data['supportIconMode'] as String?) ?? 'builtin';
         _iconBuiltInKey = kSupportBuiltInIcons.containsKey(data['supportIconBuiltInKey'])
             ? data['supportIconBuiltInKey']
@@ -308,6 +379,16 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
         'mostSupportedRequestTitle': _mostSupportedTitleController.text.trim(),
         'mostSupportedRequestEmptyText': _mostSupportedEmptyController.text.trim(),
         'communityFocusEmptyText': _communityFocusEmptyController.text.trim(),
+        'savedSupportPostsTitle': _savedPoemsTitleController.text.trim(),
+        'savedSupportPostsDescription': _savedPoemsDescriptionController.text.trim(),
+        'savedSupportPostsEmptyText': _savedPoemsEmptyController.text.trim(),
+        'saveSupportPostLabel': _savePoemLabelController.text.trim(),
+        'removeSavedSupportPostLabel': _removeSavedPoemLabelController.text.trim(),
+        'myMostLikedPoemTitle': _myMostLikedPoemTitleController.text.trim(),
+        'myMostLikedPoemOptionText': _myMostLikedPoemOptionController.text.trim(),
+        'overallMostLikedPoemTitle': _overallMostLikedPoemTitleController.text.trim(),
+        'overallMostLikedPoemOptionText': _overallMostLikedPoemOptionController.text.trim(),
+        'overallPoemLikesLabel': _overallPoemLikesLabelController.text.trim(),
         'supportIconMode': _iconMode,
         'supportIconBuiltInKey': _iconBuiltInKey,
         'supportIconCustomUrl': _iconCustomUrl,
@@ -498,6 +579,61 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
                       controller: _supportRequestsNoMatchController,
                       maxLines: 2,
                       decoration: const InputDecoration(labelText: 'Filtered no-match text', border: OutlineInputBorder()),
+                    ),
+                    const SizedBox(height: 12),
+                    const Text('Saved Poems', style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _savedPoemsTitleController,
+                      decoration: const InputDecoration(labelText: 'Saved Poems section title', border: OutlineInputBorder()),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _savedPoemsDescriptionController,
+                      decoration: const InputDecoration(labelText: 'Saved Poems description', border: OutlineInputBorder()),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _savedPoemsEmptyController,
+                      maxLines: 2,
+                      decoration: const InputDecoration(labelText: 'Saved Poems empty-state text', border: OutlineInputBorder()),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _savePoemLabelController,
+                      decoration: const InputDecoration(labelText: 'Save-poem action label', border: OutlineInputBorder()),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _removeSavedPoemLabelController,
+                      decoration: const InputDecoration(labelText: 'Remove-saved-poem action label', border: OutlineInputBorder()),
+                    ),
+                    const SizedBox(height: 12),
+                    const Text('My Impact – Most Liked Poem', style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _myMostLikedPoemTitleController,
+                      decoration: const InputDecoration(labelText: 'My Most Liked Poem card title', border: OutlineInputBorder()),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _myMostLikedPoemOptionController,
+                      decoration: const InputDecoration(labelText: 'Personal poem dropdown option', border: OutlineInputBorder()),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _overallMostLikedPoemTitleController,
+                      decoration: const InputDecoration(labelText: 'Overall Most Liked Poem expanded title', border: OutlineInputBorder()),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _overallMostLikedPoemOptionController,
+                      decoration: const InputDecoration(labelText: 'Overall poem dropdown option', border: OutlineInputBorder()),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _overallPoemLikesLabelController,
+                      decoration: const InputDecoration(labelText: 'Overall poem like-count label', border: OutlineInputBorder()),
                     ),
                     const SizedBox(height: 8),
                     TextField(

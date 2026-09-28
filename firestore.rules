@@ -388,6 +388,32 @@ service cloud.firestore {
         allow read, write: if true;
       }
 
+      // Saved Community Focus poems are private to the signed-in owner.
+      // They are references/snapshots only; this path never grants source-post access.
+      match /saved_support_posts/{postId} {
+        allow read: if isSignedIn() && request.auth.uid == userId;
+        allow create: if isSignedIn() &&
+                         request.auth.uid == userId &&
+                         request.resource.data.postId == postId &&
+                         request.resource.data.userName is string &&
+                         request.resource.data.content is string &&
+                         request.resource.data.sourceUserId is string &&
+                         request.resource.data.sourceAuthorUid is string &&
+                         request.resource.data.savedAt == request.time &&
+                         request.resource.data.keys().hasOnly([
+                           'postId',
+                           'sourceUserId',
+                           'sourceAuthorUid',
+                           'userName',
+                           'content',
+                           'imageUrl',
+                           'sourceTimestamp',
+                           'savedAt'
+                         ]);
+        allow update: if false;
+        allow delete: if isSignedIn() && request.auth.uid == userId;
+      }
+
       match /joined_groups/{groupId} {
         allow read, write: if true;
       }
