@@ -52,6 +52,14 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
     final _supportReceivedLabelController =
       TextEditingController(text: 'Support Recv.');
     String _supportReceivedIconBuiltInKey = 'front_hand';
+    final _supportRequestsTitleController =
+        TextEditingController(text: 'My Support Requests');
+    final _supportRequestsDescriptionController = TextEditingController(
+      text: 'A permanent record of requests you have posted, even after they leave the public feed.',
+    );
+    final _supportRequestsEmptyController = TextEditingController(
+      text: 'Requests you post with "Add to Community Focus" will appear here.',
+    );
 
   String? _backgroundImageUrl;
 
@@ -86,6 +94,9 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
     _buttonTextController.dispose();
     _supportRequestCheckboxTextController.dispose();
     _supportReceivedLabelController.dispose();
+    _supportRequestsTitleController.dispose();
+    _supportRequestsDescriptionController.dispose();
+    _supportRequestsEmptyController.dispose();
     _textLabelController.dispose();
     _textColorController.dispose();
     _popupTitleController.dispose();
@@ -126,6 +137,18 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
               kSupportBuiltInIcons.containsKey(data['supportReceivedIconBuiltInKey'])
                 ? data['supportReceivedIconBuiltInKey']
                 : 'front_hand';
+            _supportRequestsTitleController.text =
+              (data['supportRequestsTitle'] as String?)?.trim().isNotEmpty == true
+                ? data['supportRequestsTitle']
+                : 'My Support Requests';
+            _supportRequestsDescriptionController.text =
+              (data['supportRequestsDescription'] as String?)?.trim().isNotEmpty == true
+                ? data['supportRequestsDescription']
+                : _supportRequestsDescriptionController.text;
+            _supportRequestsEmptyController.text =
+              (data['supportRequestsEmptyText'] as String?)?.trim().isNotEmpty == true
+                ? data['supportRequestsEmptyText']
+                : _supportRequestsEmptyController.text;
         _iconMode = (data['supportIconMode'] as String?) ?? 'builtin';
         _iconBuiltInKey = kSupportBuiltInIcons.containsKey(data['supportIconBuiltInKey'])
             ? data['supportIconBuiltInKey']
@@ -247,6 +270,9 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
           _supportRequestCheckboxTextController.text.trim(),
         'supportReceivedLabel': _supportReceivedLabelController.text.trim(),
         'supportReceivedIconBuiltInKey': _supportReceivedIconBuiltInKey,
+        'supportRequestsTitle': _supportRequestsTitleController.text.trim(),
+        'supportRequestsDescription': _supportRequestsDescriptionController.text.trim(),
+        'supportRequestsEmptyText': _supportRequestsEmptyController.text.trim(),
         'supportIconMode': _iconMode,
         'supportIconBuiltInKey': _iconBuiltInKey,
         'supportIconCustomUrl': _iconCustomUrl,
@@ -387,6 +413,25 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
                       onChanged: (value) => setState(() {
                         _supportReceivedIconBuiltInKey = value ?? 'front_hand';
                       }),
+                    ),
+                    const SizedBox(height: 8),
+                    const Divider(),
+                    const Text('My Support Requests', style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _supportRequestsTitleController,
+                      decoration: const InputDecoration(labelText: 'Section title', border: OutlineInputBorder()),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _supportRequestsDescriptionController,
+                      decoration: const InputDecoration(labelText: 'Section description', border: OutlineInputBorder()),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _supportRequestsEmptyController,
+                      maxLines: 2,
+                      decoration: const InputDecoration(labelText: 'Empty state text', border: OutlineInputBorder()),
                     ),
                   ],
                 ),
