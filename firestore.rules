@@ -436,6 +436,37 @@ service cloud.firestore {
       }
     }
 
+    // Build 81 account-scoped safety preferences. These documents are separate
+    // from public profile data and can only be accessed by their signed-in owner.
+    match /user_blocks/{userId} {
+      allow read: if isSignedIn() && request.auth.uid == userId;
+      allow create, update: if isSignedIn() &&
+                               request.auth.uid == userId &&
+                               request.resource.data.keys().hasOnly([
+                                 'blockedUserIds',
+                                 'updatedAt'
+                               ]) &&
+                               request.resource.data.blockedUserIds is list &&
+                               !(request.auth.uid in request.resource.data.blockedUserIds) &&
+                               request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    // Poetry-rule consent is versioned and stored independently of user profiles.
+    match /community_rules_acceptances/{userId} {
+      allow read: if isSignedIn() && request.auth.uid == userId;
+      allow create, update: if isSignedIn() &&
+                               request.auth.uid == userId &&
+                               request.resource.data.keys().hasOnly([
+                                 'rulesVersion',
+                                 'acceptedAt'
+                               ]) &&
+                               request.resource.data.rulesVersion is string &&
+                               request.resource.data.rulesVersion.size() > 0 &&
+                               request.resource.data.acceptedAt == request.time;
+      allow delete: if false;
+    }
+
     // Username reservations (race-proof uniqueness)
     match /usernames/{usernameId} {
       allow read: if true;

@@ -110,6 +110,10 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
         'and others can offer support in return.',
   );
   final _popupButtonTextController = TextEditingController(text: 'Enter');
+  final _communityRulesVersionController = TextEditingController(text: '1');
+  final _communityRulesTextController = TextEditingController(
+    text: 'Please be respectful and supportive. Do not post harmful, abusive, or identifying information about others.',
+  );
 
   int _postRetentionDays = 30;
   bool _isPostRetentionEnabled = false;
@@ -148,6 +152,8 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
     _popupTitleController.dispose();
     _popupBodyController.dispose();
     _popupButtonTextController.dispose();
+    _communityRulesVersionController.dispose();
+    _communityRulesTextController.dispose();
     super.dispose();
   }
 
@@ -278,6 +284,14 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
             (data['supportPopupButtonText'] as String?)?.trim().isNotEmpty == true
                 ? data['supportPopupButtonText']
                 : 'Enter';
+            _communityRulesVersionController.text =
+              (data['communityRulesVersion'] as String?)?.trim().isNotEmpty == true
+                ? data['communityRulesVersion'] as String
+                : '1';
+            _communityRulesTextController.text =
+              (data['communityRulesText'] as String?)?.trim().isNotEmpty == true
+                ? data['communityRulesText'] as String
+                : _communityRulesTextController.text;
       }
 
       if (settingsDoc.exists) {
@@ -399,6 +413,8 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
         'supportPopupTitle': _popupTitleController.text.trim(),
         'supportPopupBody': _popupBodyController.text.trim(),
         'supportPopupButtonText': _popupButtonTextController.text.trim(),
+        'communityRulesVersion': _communityRulesVersionController.text.trim(),
+        'communityRulesText': _communityRulesTextController.text.trim(),
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
@@ -909,6 +925,43 @@ class _CommunitySupportTabState extends State<CommunitySupportTab> {
                       controller: _popupButtonTextController,
                       decoration: const InputDecoration(
                         labelText: 'Pop-up button text',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Poetry Community Rules',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Increase the version whenever the rules change. Users must accept each version before entering Poetry or posting there.',
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _communityRulesVersionController,
+                      decoration: const InputDecoration(
+                        labelText: 'Rules version',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _communityRulesTextController,
+                      minLines: 4,
+                      maxLines: 8,
+                      decoration: const InputDecoration(
+                        labelText: 'Rules text',
                         border: OutlineInputBorder(),
                       ),
                     ),
