@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:intl/intl.dart';
 
 import '../../services/translation_service.dart';
@@ -19,6 +20,8 @@ class CommunityTab extends StatefulWidget {
 }
 
 class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderStateMixin {
+  static const List<int> _communityReportThresholdOptions = [2, 3, 4, 5, 7, 10];
+
   late TabController _tabController;
   final TextEditingController _messageController = TextEditingController(); // For Pinned Message
   final TextEditingController _adminChatController = TextEditingController(); // For Admin Chat
@@ -30,6 +33,9 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
   bool _isMessageLoaded = false;
   bool _featuredControlsHydrated = false;
   String _lastFeaturedKeywordsText = '';
+  bool _communityAutoHideEnabled = true;
+  int _communityAutoHideThreshold = 3;
+  bool _communityReportPolicyLoading = true;
   
   // Feed Selection State
   String _selectedFeedId = 'global'; // 'global' or groupId
@@ -46,6 +52,7 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
     _caseSearchController.addListener(() {
       if (mounted) setState(() {});
     });
+    _loadCommunityReportPolicy();
   }
 
   @override
@@ -74,6 +81,292 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
         SnackBar(content: Text('Failed to save settings: $e')),
       );
     }
+  }
+
+  Future<void> _loadCommunityReportPolicy() async {
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('system_settings')
+          .doc('moderation_policy')
+          .get();
+      final data = snapshot.data() ?? const <String, dynamic>{};
+      final threshold = (data['communityAutoHideThreshold'] as num?)?.toInt();
+      if (!mounted) return;
+      setState(() {
+        _communityAutoHideEnabled = data['communityAutoHideEnabled'] != false;
+        _communityAutoHideThreshold =
+            threshold != null && _communityReportThresholdOptions.contains(threshold)
+                ? threshold
+                : 3;
+        _communityReportPolicyLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _communityReportPolicyLoading = false);
+    }
+  }
+
+  Future<void> _saveCommunityReportPolicy() async {
+    try {
+      await FirebaseFirestore.instance
+          .collection('system_settings')
+          .doc('moderation_policy')
+          .set({
+        'communityAutoHideEnabled': _communityAutoHideEnabled,
+        'communityAutoHideThreshold': _communityAutoHideThreshold,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Community report threshold updated')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not save report threshold: $error')),
+      );
+    }
+  }
+
+  Future<void> _restoreExpiredPostImages(
+    DocumentReference postRef,
+    Map<String, dynamic> post,
+  ) async {
+    final existingUrls = (post['mediaUrls'] as List<dynamic>? ?? const [])
+        .map((value) => value.toString().trim())
+        .where((value) => value.isNotEmpty)
+        .toList();
+    final existingMetadata =
+        (post['mediaMetadata'] as List<dynamic>? ?? const [])
+            .whereType<Map>()
+            .map((entry) => Map<String, dynamic>.from(entry))
+            .toList();
+
+    if (existingUrls.isNotEmpty) {
+      await postRef.set({
+        'hasImage': true,
+        'imageUrl': existingUrls.first,
+        'imageStoragePath': existingMetadata.isNotEmpty
+            ? existingMetadata.first['storagePath']
+            : FieldValue.delete(),
+        'imageBytes': existingMetadata.isNotEmpty
+            ? existingMetadata.first['bytes']
+            : FieldValue.delete(),
+        'imageWidth': existingMetadata.isNotEmpty
+            ? existingMetadata.first['width']
+            : FieldValue.delete(),
+        'imageHeight': existingMetadata.isNotEmpty
+            ? existingMetadata.first['height']
+            : FieldValue.delete(),
+        'imageExpiredAt': FieldValue.delete(),
+        'imageExpiresAt': FieldValue.delete(),
+        'imageStatus': 'restored_admin',
+        'imageSource': existingMetadata.isNotEmpty
+            ? existingMetadata.first['source'] ?? 'restored'
+            : 'restored',
+      }, SetOptions(merge: true));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Retained Community image references restored.')),
+        );
+      }
+      return;
+    }
+
+    final ownerUid = _safeText(post['userId']).isNotEmpty
+      ? _safeText(post['userId'])
+      : _safeText(post['authorUid']);
+    final postTimestamp = (post['timestamp'] as Timestamp?)?.toDate();
+    if (ownerUid.isEmpty || postTimestamp == null) {
+      throw StateError('Post owner or timestamp is unavailable; image matching is unsafe.');
+    }
+
+    final folder = FirebaseStorage.instance.ref(
+      'chat_room_media/community_room/$ownerUid',
+    );
+    final list = await folder.listAll();
+    final candidates = <({
+      Reference reference,
+      String url,
+      DateTime uploadedAt,
+      int bytes,
+    })>[];
+    for (final reference in list.items) {
+      final match = RegExp(r'^img_(\d+)_\d+\.jpg$').firstMatch(reference.name);
+      if (match == null) continue;
+      final uploadedAt = DateTime.fromMillisecondsSinceEpoch(
+        int.parse(match.group(1)!),
+      );
+      final delta = postTimestamp.difference(uploadedAt);
+      if (delta.isNegative || delta > const Duration(minutes: 10)) continue;
+      final metadata = await reference.getMetadata();
+      candidates.add((
+        reference: reference,
+        url: await reference.getDownloadURL(),
+        uploadedAt: uploadedAt,
+        bytes: int.tryParse(metadata.size?.toString() ?? '') ?? 0,
+      ));
+    }
+    candidates.sort((a, b) => a.uploadedAt.compareTo(b.uploadedAt));
+    if (candidates.isEmpty) {
+      throw StateError('No matching image files were found for this post.');
+    }
+
+    final selectedPaths = <String>{};
+    final restoreConfirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            title: const Text('Choose image(s) to restore'),
+            content: SizedBox(
+              width: 420,
+              height: 420,
+              child: Column(
+                children: [
+                  const Text(
+                    'Preview each candidate and select only image(s) belonging to this post.',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: candidates.length,
+                      itemBuilder: (context, index) {
+                        final candidate = candidates[index];
+                        final path = candidate.reference.fullPath;
+                        final isSelected = selectedPaths.contains(path);
+                        return Card(
+                          child: CheckboxListTile(
+                            value: isSelected,
+                            controlAffinity: ListTileControlAffinity.leading,
+                            onChanged: (value) => setDialogState(() {
+                              if (value == true) {
+                                selectedPaths.add(path);
+                              } else {
+                                selectedPaths.remove(path);
+                              }
+                            }),
+                            title: Text(
+                              DateFormat('MMM d, h:mm:ss a').format(candidate.uploadedAt),
+                            ),
+                            subtitle: Image.network(
+                              candidate.url,
+                              height: 140,
+                              fit: BoxFit.contain,
+                              errorBuilder: (context, error, stackTrace) =>
+                                  const Text('Preview unavailable'),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: selectedPaths.isEmpty
+                    ? null
+                  : () => Navigator.of(dialogContext).pop(true),
+                child: const Text('Restore selected'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    if (restoreConfirmed != true || selectedPaths.isEmpty) return;
+
+    final restored = candidates
+      .where((candidate) => selectedPaths.contains(candidate.reference.fullPath))
+        .toList();
+    final urls = restored.map((candidate) => candidate.url).toList();
+    final metadata = restored
+        .map((candidate) => <String, dynamic>{
+              'url': candidate.url,
+              'storagePath': candidate.reference.fullPath,
+              'bytes': candidate.bytes,
+              'source': 'restored_admin',
+              'status': 'active',
+              'createdAt': Timestamp.fromDate(candidate.uploadedAt),
+            })
+        .toList();
+    await postRef.set({
+      'hasImage': true,
+      'imageUrl': urls.first,
+      'mediaUrls': urls,
+      'mediaMetadata': metadata,
+      'imageStoragePath': restored.first.reference.fullPath,
+      'imageBytes': restored.first.bytes,
+      'imageWidth': FieldValue.delete(),
+      'imageHeight': FieldValue.delete(),
+      'imageCreatedAt': Timestamp.fromDate(restored.first.uploadedAt),
+      'imageExpiredAt': FieldValue.delete(),
+      'imageExpiresAt': FieldValue.delete(),
+      'imageStatus': 'restored_admin',
+      'imageSource': 'restored_admin',
+    }, SetOptions(merge: true));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Restored ${restored.length} image(s) to the post.')),
+      );
+    }
+  }
+
+  Widget _buildCommunityReportPolicyCard() {
+    return Card(
+      margin: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        child: _communityReportPolicyLoading
+            ? const LinearProgressIndicator(minHeight: 2)
+            : Column(
+                children: [
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Temporarily hide posts after reports'),
+                    subtitle: const Text(
+                      'Counts distinct reporters, hides the post in user feeds at the threshold, and keeps it for moderator review.',
+                    ),
+                    value: _communityAutoHideEnabled,
+                    onChanged: (value) async {
+                      setState(() => _communityAutoHideEnabled = value);
+                      await _saveCommunityReportPolicy();
+                    },
+                  ),
+                  DropdownButtonFormField<int>(
+                    initialValue: _communityAutoHideThreshold,
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                      labelText: 'Distinct reporters before temporary hide',
+                    ),
+                    items: _communityReportThresholdOptions
+                        .map((value) => DropdownMenuItem(
+                              value: value,
+                              child: Text('$value different users'),
+                            ))
+                        .toList(),
+                    onChanged: _communityAutoHideEnabled
+                        ? (value) async {
+                            if (value == null) return;
+                            setState(() => _communityAutoHideThreshold = value);
+                            await _saveCommunityReportPolicy();
+                          }
+                        : null,
+                  ),
+                  const SizedBox(height: 8),
+                ],
+              ),
+      ),
+    );
   }
 
   bool _readBool(dynamic value, {required bool fallback}) {
@@ -138,20 +431,11 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'Auto-Scroller + Featured/Pinned',
-            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+            'Post Retention (Live Feed + Support)',
+            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
           ),
-          const SizedBox(height: 10),
           Row(
             children: [
-              const Icon(Icons.timer_outlined, size: 18, color: Colors.deepOrange),
-              const SizedBox(width: 8),
-              const Expanded(
-                child: Text(
-                  'Post Retention (Live Feed + Support)',
-                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-                ),
-              ),
               DropdownButton<int>(
                 value: kPostRetentionDayOptions.contains(postRetentionDays)
                     ? postRetentionDays
@@ -164,14 +448,7 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                   _saveCommunitySettings({'postRetentionDays': value});
                 },
               ),
-            ],
-          ),
-          Text(
-            'Posts older than this are deleted automatically (paused for anything under active moderation). Same value applies in the Community Support tab.',
-            style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
-          ),
-          Row(
-            children: [
+              const SizedBox(width: 12),
               Switch(
                 value: isPostRetentionEnabled,
                 onChanged: (value) =>
@@ -180,8 +457,8 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
               Expanded(
                 child: Text(
                   isPostRetentionEnabled
-                      ? 'Active — automatic deletion is running.'
-                      : 'Off — no posts are deleted automatically.',
+                      ? 'Active — whole-post deletion is running.'
+                      : 'Off — whole posts are kept, regardless of age.',
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
@@ -192,6 +469,10 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                 ),
               ),
             ],
+          ),
+          Text(
+            'Image display duration is configured separately per plan in Deals / Offers (Feed Image Expiry Days). Changing that limit does not change expiry dates on existing images.',
+            style: TextStyle(fontSize: 11, color: Colors.indigo.shade700),
           ),
           const SizedBox(height: 10),
           const Divider(height: 18),
@@ -457,11 +738,26 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                           );
                         }
                       }
+                    } else if (value == 'restore_image') {
+                      try {
+                        await _restoreExpiredPostImages(postDoc.reference, post);
+                      } catch (error) {
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Could not restore post image: $error')),
+                          );
+                        }
+                      }
                     }
                   },
                   itemBuilder: (context) => [
                     const PopupMenuItem(value: 'delete', child: Text('Delete Message')),
                     const PopupMenuItem(value: 'suspend', child: Text('Suspend User')),
+                    if (post['imageExpiredAt'] != null && post['hasImage'] != true)
+                      const PopupMenuItem(
+                        value: 'restore_image',
+                        child: Text('Restore expired image…'),
+                      ),
                   ],
                 ),
               ),
@@ -861,10 +1157,21 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
       }
 
       if (targetKind == 'community_post' && targetId.isNotEmpty) {
-        await FirebaseFirestore.instance
+        final postRef = FirebaseFirestore.instance
             .collection('community_posts')
-            .doc(targetId)
-            .delete();
+            .doc(targetId);
+        final postSnapshot = await postRef.get();
+        final alertId = _safeText(postSnapshot.data()?['autoHideAlertId']);
+        await postRef.delete();
+        if (alertId.isNotEmpty) {
+          await FirebaseFirestore.instance
+              .collection('community_auto_hide_alerts')
+              .doc(alertId)
+              .set({
+            'status': 'removed',
+            'resolvedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        }
         return 'Removed: Community post deleted';
       }
 
@@ -886,6 +1193,11 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
     }
 
     if (targetKind == 'community_post' && targetId.isNotEmpty) {
+      final postRef = FirebaseFirestore.instance
+          .collection('community_posts')
+          .doc(targetId);
+      final postSnapshot = await postRef.get();
+      final alertId = _safeText(postSnapshot.data()?['autoHideAlertId']);
       await FirebaseFirestore.instance
           .collection('community_posts')
           .doc(targetId)
@@ -893,8 +1205,23 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
         'isModerated': false,
         'moderationStatus': 'cleared',
         'moderatedAt': FieldValue.serverTimestamp(),
+        'isAutoHidden': false,
+        'autoHideReason': FieldValue.delete(),
+        'autoHideReportCount': FieldValue.delete(),
+        'autoHideThreshold': FieldValue.delete(),
+        'autoHideAlertId': FieldValue.delete(),
+        'autoHiddenAt': FieldValue.delete(),
         if (refreshRetention) 'retentionAnchorAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+      if (alertId.isNotEmpty) {
+        await FirebaseFirestore.instance
+            .collection('community_auto_hide_alerts')
+            .doc(alertId)
+            .set({
+          'status': 'restored',
+          'resolvedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
       return 'Left content active: Community post retained';
     }
 
@@ -1595,8 +1922,10 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
 
   String? _imageUrlForPost(Map<String, dynamic> post) {
     final metadata = post['metadata'];
+    final mediaUrls = post['mediaUrls'];
     final candidates = [
       post['imageUrl'],
+      if (mediaUrls is List && mediaUrls.isNotEmpty) mediaUrls.first,
       post['thumbnailUrl'],
       post['mediaUrl'],
       post['downloadUrl'],
@@ -1717,7 +2046,12 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
           child: TabBarView(
             controller: _tabController,
             children: [
-              _buildModerationQueue(),
+              Column(
+                children: [
+                  _buildCommunityReportPolicyCard(),
+                  Expanded(child: _buildModerationQueue()),
+                ],
+              ),
               _buildResolvedCases(),
               _buildLiveFeed(),
             ],
@@ -1816,6 +2150,9 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
             final reelUrl = metadata is Map ? _safeText(metadata['reelUrl']) : '';
             final reelType = metadata is Map ? _safeText(metadata['reelType']) : '';
             final reportExplanation = _reportExplanationForItem(item);
+            final autoHideTriggered = item['autoHideTriggered'] == true;
+            final distinctReportCount =
+              (item['distinctReportCount'] as num?)?.toInt() ?? 0;
             final safeSearch = item['safeSearch'];
             final severity = _severityForItem(
               content: content,
@@ -1876,6 +2213,16 @@ class _CommunityTabState extends State<CommunityTab> with SingleTickerProviderSt
                       'Report reason: $reason',
                       style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
+                    if (autoHideTriggered) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        'AUTO-HIDDEN: $distinctReportCount distinct reports reached the configured threshold.',
+                        style: const TextStyle(
+                          color: Colors.deepOrange,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 4),
                     Wrap(
                       spacing: 8,

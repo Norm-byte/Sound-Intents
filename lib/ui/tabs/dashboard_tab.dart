@@ -1534,6 +1534,7 @@ class _AdminAlertsCard extends StatefulWidget {
 }
 
 class _AdminAlertsCardState extends State<_AdminAlertsCard> {
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _autoHideAlertsSubscription;
   bool _isLoading = false;
   bool _notificationsEnabled = false;
   List<String> _notificationRecipients = const [];
@@ -1541,13 +1542,30 @@ class _AdminAlertsCardState extends State<_AdminAlertsCard> {
   // Real Data
   int _supportMessages = 0;
   int _moderationQueue = 0;
+  int _autoHiddenCommunityPosts = 0;
   int _quotaAlerts = 0;
 
   @override
   void initState() {
     super.initState();
     _checkAlerts();
+    _autoHideAlertsSubscription = FirebaseFirestore.instance
+        .collection('community_auto_hide_alerts')
+        .where('status', isEqualTo: 'open')
+        .snapshots()
+        .listen((snapshot) {
+          if (!mounted) return;
+          setState(() => _autoHiddenCommunityPosts = snapshot.docs.length);
+        }, onError: (Object error) {
+          debugPrint('Could not stream community auto-hide alerts: $error');
+        });
     _loadNotificationSettings();
+  }
+
+  @override
+  void dispose() {
+    _autoHideAlertsSubscription?.cancel();
+    super.dispose();
   }
 
   bool get _canManageNotifications =>
@@ -1730,11 +1748,17 @@ class _AdminAlertsCardState extends State<_AdminAlertsCard> {
           .where('status', isEqualTo: 'open')
           .get()
           .timeout(const Duration(seconds: 12));
+      final autoHideSnapshot = await FirebaseFirestore.instance
+          .collection('community_auto_hide_alerts')
+          .where('status', isEqualTo: 'open')
+          .get()
+          .timeout(const Duration(seconds: 12));
 
       if (mounted) {
         setState(() {
           _supportMessages = supportSnapshot.count ?? 0;
           _moderationQueue = actionableModeration;
+          _autoHiddenCommunityPosts = autoHideSnapshot.docs.length;
           _quotaAlerts = quotaSnapshot.docs.length;
           _isLoading = false;
         });
@@ -1748,7 +1772,10 @@ class _AdminAlertsCardState extends State<_AdminAlertsCard> {
   @override
   Widget build(BuildContext context) {
     // Basic severity check
-    final hasAlerts = _supportMessages > 0 || _moderationQueue > 0 || _quotaAlerts > 0;
+    final hasAlerts = _supportMessages > 0 ||
+      _moderationQueue > 0 ||
+      _autoHiddenCommunityPosts > 0 ||
+      _quotaAlerts > 0;
     final cardColor = hasAlerts ? Colors.orange.shade50 : Colors.white;
 
     return Card(
@@ -1799,6 +1826,18 @@ class _AdminAlertsCardState extends State<_AdminAlertsCard> {
                        _buildAlertRow(Icons.support_agent, 'Support', _supportMessages, 'New'),
                        const SizedBox(height: 6),
                        _buildAlertRow(Icons.gavel, 'Moderation', _moderationQueue, 'Pending'),
+                       const SizedBox(height: 6),
+                       InkWell(
+                         onTap: _autoHiddenCommunityPosts == 0
+                             ? null
+                             : _showCommunityAutoHideAlerts,
+                         child: _buildAlertRow(
+                           Icons.visibility_off_outlined,
+                           'Posts auto-hidden after reports',
+                           _autoHiddenCommunityPosts,
+                           'Review',
+                         ),
+                       ),
                        const SizedBox(height: 6),
                        InkWell(
                          onTap: _quotaAlerts == 0 ? null : _showQuotaAlerts,
@@ -1856,6 +1895,71 @@ class _AdminAlertsCardState extends State<_AdminAlertsCard> {
                       ),
                     );
                   }).toList(),
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showCommunityAutoHideAlerts() async {
+    final snapshot = await FirebaseFirestore.instance
+        .collection('community_auto_hide_alerts')
+        .where('status', isEqualTo: 'open')
+        .get();
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Posts temporarily hidden after reports'),
+        content: SizedBox(
+          width: 560,
+          child: snapshot.docs.isEmpty
+              ? const Text('No open auto-hide alerts.')
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Review these posts in the Community moderation queue. Choosing “Leave active” restores a post; choosing “Remove” deletes it.',
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 280,
+                      child: ListView(
+                        shrinkWrap: true,
+                        children: snapshot.docs.map((doc) {
+                          final data = doc.data();
+                          final postId = (data['postId'] ?? '').toString();
+                          final content = (data['content'] ?? '').toString();
+                          final reports =
+                              (data['distinctReportCount'] as num?)?.toInt() ?? 0;
+                          final threshold =
+                              (data['threshold'] as num?)?.toInt() ?? 3;
+                          return ListTile(
+                            leading: const Icon(
+                              Icons.visibility_off,
+                              color: Colors.deepOrange,
+                            ),
+                            title: Text(
+                              '$reports distinct reports (threshold $threshold)',
+                            ),
+                            subtitle: Text(
+                              'Post $postId\n${content.isEmpty ? 'Post content unavailable' : content}',
+                              maxLines: 4,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                  ],
                 ),
         ),
         actions: [
