@@ -401,6 +401,35 @@ service cloud.firestore {
         allow read, write: if true;
       }
 
+      match /personal_intents/{intentId} {
+        allow read: if isSignedIn() && request.auth.uid == userId;
+        allow create: if isSignedIn() &&
+                         request.auth.uid == userId &&
+                         request.resource.data.keys().hasOnly([
+                           'intent',
+                           'createdAt',
+                           'updatedAt'
+                         ]) &&
+                         request.resource.data.intent is string &&
+                         request.resource.data.intent.size() > 0 &&
+                         request.resource.data.intent.size() <= 120 &&
+                         request.resource.data.createdAt is timestamp &&
+                         request.resource.data.updatedAt == request.time;
+        allow update: if isSignedIn() &&
+                         request.auth.uid == userId &&
+                         request.resource.data.keys().hasOnly([
+                           'intent',
+                           'createdAt',
+                           'updatedAt'
+                         ]) &&
+                         request.resource.data.intent is string &&
+                         request.resource.data.intent.size() > 0 &&
+                         request.resource.data.intent.size() <= 120 &&
+                         request.resource.data.createdAt == resource.data.createdAt &&
+                         request.resource.data.updatedAt == request.time;
+        allow delete: if isSignedIn() && request.auth.uid == userId;
+      }
+
       match /support_intents/{intentId} {
         allow read, write: if true;
       }
