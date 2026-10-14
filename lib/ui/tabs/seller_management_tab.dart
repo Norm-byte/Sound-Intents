@@ -1,1580 +1,520 @@
-import 'dart:convert';
-import 'dart:math';
-import 'dart:async';
-
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 
+import '../../models/creator_partner_utils.dart';
+import '../../services/creator_partner_service.dart';
+
+/// Mounted through the existing seller_management admin permission gate.
 class SellerManagementTab extends StatefulWidget {
-  const SellerManagementTab({super.key});
-
+  final CreatorPartnerRepository? repository;
+  const SellerManagementTab({super.key, this.repository});
   @override
   State<SellerManagementTab> createState() => _SellerManagementTabState();
 }
 
-class _RateConfig {
-  final double globalDefaultRate;
-  final Map<String, double> countryRates;
-  final String payoutMode;
-  final double fixedStarterGbp;
-  final double fixedHarmony100Gbp;
-
-  const _RateConfig({
-    required this.globalDefaultRate,
-    required this.countryRates,
-    required this.payoutMode,
-    required this.fixedStarterGbp,
-    required this.fixedHarmony100Gbp,
-  });
-}
-
 class _SellerManagementTabState extends State<SellerManagementTab> {
-  final TextEditingController _searchController = TextEditingController();
-  final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _emailController = TextEditingController();
-  final TextEditingController _phoneController = TextEditingController();
-  final TextEditingController _countryController = TextEditingController();
-  final TextEditingController _payoutCurrencyController = TextEditingController(
-    text: 'GBP',
-  );
-  final TextEditingController _defaultRateController = TextEditingController(
-    text: '0.10',
-  );
-  final TextEditingController _notesController = TextEditingController();
-
-  final TextEditingController _codeController = TextEditingController();
-  final TextEditingController _codeSellerIdController = TextEditingController();
-
-  final TextEditingController _globalRateController = TextEditingController(
-    text: '0.10',
-  );
-  final TextEditingController _fixedStarterPayoutController =
-      TextEditingController(text: '0.50');
-  final TextEditingController _fixedHarmony100PayoutController =
-      TextEditingController(text: '0.80');
-  final TextEditingController _countryRateController = TextEditingController(
-    text: '0.10',
-  );
-  final TextEditingController _countryRateCodeController =
-      TextEditingController();
-
-  final ScrollController _sellerListScroll = ScrollController();
-  final ScrollController _metricsScroll = ScrollController();
-
-  DateTimeRange? _dateRange;
-  String _selectedCountryFilter = 'ALL';
-  String? _selectedSellerId;
-
-  bool _savingSeller = false;
-  bool _savingCode = false;
-  bool _savingRate = false;
-  bool _loadingRateSettings = false;
-  bool _refreshingFx = false;
-  bool _lockingFx = false;
-  bool _isSellerActive = true;
-  String _payoutMode = 'percentage';
-  late Future<_RateConfig> _rateConfigFuture;
-  late Future<List<Map<String, dynamic>>> _usersForMetricsFuture;
-
-  static const Map<String, String> _countryToCurrency = {
-    'GB': 'GBP',
-    'US': 'USD',
-    'AU': 'AUD',
-    'CA': 'CAD',
-    'NZ': 'NZD',
-    'IE': 'EUR',
-    'NL': 'EUR',
-    'DE': 'EUR',
-    'FR': 'EUR',
-    'ES': 'EUR',
-    'IT': 'EUR',
-    'ZA': 'ZAR',
-    'NG': 'NGN',
-    'IN': 'INR',
-  };
+  late final CreatorPartnerRepository _service;
+  late Future<CreatorPartnerData> _data;
+  String? _sellerId;
+  String _sellerSearch = '';
+  String _sellerStatus = 'all';
+  String _subscriberSearch = '';
+  String _plan = 'all';
+  String _subscriptionStatus = 'all';
+  String _autoRenew = 'all';
+  String _dateField = 'assignedSellerAt';
+  DateTimeRange? _subscriberRange;
+  String _eventSearch = '';
+  String _environment = 'production';
+  String _eventType = 'all';
+  DateTimeRange? _eventRange;
+  bool _busy = false;
+  final _pageScroll = ScrollController();
 
   @override
   void initState() {
     super.initState();
-    _rateConfigFuture = _loadRateConfig();
-    _usersForMetricsFuture = _loadUsersForMetrics();
-    final now = DateTime.now();
-    _dateRange = DateTimeRange(
-      start: DateTime(now.year, now.month, 1),
-      end: now,
-    );
-    _loadRateSettingsIntoForm();
+    _service = widget.repository ?? CreatorPartnerService();
+    _data = _service.load(null);
   }
 
   @override
   void dispose() {
-    _searchController.dispose();
-    _nameController.dispose();
-    _emailController.dispose();
-    _phoneController.dispose();
-    _countryController.dispose();
-    _payoutCurrencyController.dispose();
-    _defaultRateController.dispose();
-    _notesController.dispose();
-    _codeController.dispose();
-    _codeSellerIdController.dispose();
-    _globalRateController.dispose();
-    _fixedStarterPayoutController.dispose();
-    _fixedHarmony100PayoutController.dispose();
-    _countryRateController.dispose();
-    _countryRateCodeController.dispose();
-    _sellerListScroll.dispose();
-    _metricsScroll.dispose();
+    _pageScroll.dispose();
     super.dispose();
   }
 
-  String _normalizeCode(String raw) => raw.trim().toUpperCase();
+  DateTime? _date(Object? value) => value is Timestamp ? value.toDate() : partnerDate(value);
 
-  String _generateCode() {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    final rnd = Random();
-    final raw = String.fromCharCodes(
-      Iterable.generate(8, (_) => chars.codeUnitAt(rnd.nextInt(chars.length))),
-    );
-    return '${raw.substring(0, 4)}-${raw.substring(4, 8)}';
+  String _formatDate(Object? value) {
+    final date = _date(value);
+    return date == null ? 'Not available' : DateFormat('yyyy-MM-dd HH:mm').format(date.toLocal());
   }
 
-  double _parseRate(String raw, {double fallback = 0.10}) {
-    final parsed = double.tryParse(raw.trim());
-    if (parsed == null || parsed.isNaN || parsed.isInfinite) return fallback;
-    if (parsed < 0) return 0;
-    if (parsed > 1) return 1;
-    return parsed;
-  }
+  Object? _expiry(Map<String, dynamic> user) =>
+      user['expiresAt'] ?? user['subscriptionExpiresAt'] ?? user['renewalDate'];
 
-  double _parseMoney(String raw, {double fallback = 0}) {
-    final parsed = double.tryParse(raw.trim());
-    if (parsed == null || parsed.isNaN || parsed.isInfinite) return fallback;
-    if (parsed < 0) return 0;
-    return parsed;
-  }
+  Object? _lastSync(Map<String, dynamic> user) =>
+      user['subscriptionSyncSource'] == 'webhook' ? user['subscriptionLastSyncedAt'] :
+      user['subscriptionLastSyncedAt'] ?? user['lastSubscriptionSyncAt'] ??
+      user['subscriptionUpdatedAt'] ?? user['lastSyncAt'];
 
-  Future<void> _loadRateSettingsIntoForm() async {
-    setState(() => _loadingRateSettings = true);
-    try {
-      final globalSnap = await FirebaseFirestore.instance
-          .collection('seller_commission_settings')
-          .doc('global')
-          .get();
-      final data = globalSnap.data() ?? {};
-      if (!mounted) return;
-
-      setState(() {
-        _globalRateController.text =
-            ((data['defaultRate'] as num?)?.toDouble() ?? 0.10)
-                .toStringAsFixed(2);
-        _payoutMode =
-            (data['payoutMode'] as String?)?.trim().toLowerCase() ==
-                    'fixed_gbp_per_plan'
-                ? 'fixed_gbp_per_plan'
-                : 'percentage';
-        _fixedStarterPayoutController.text =
-            ((data['fixedStarterGbp'] as num?)?.toDouble() ?? 0.50)
-                .toStringAsFixed(2);
-        _fixedHarmony100PayoutController.text =
-            ((data['fixedHarmony100Gbp'] as num?)?.toDouble() ?? 0.80)
-                .toStringAsFixed(2);
-      });
-    } catch (_) {
-      // Leave defaults in place if settings are missing.
-    } finally {
-      if (mounted) setState(() => _loadingRateSettings = false);
-    }
-  }
-
-  Future<void> _saveSeller() async {
-    if (_nameController.text.trim().isEmpty) {
-      _snack('Seller name is required.', isError: true);
-      return;
-    }
-
-    setState(() => _savingSeller = true);
-    try {
-      final payload = {
-        'name': _nameController.text.trim(),
-        'email': _emailController.text.trim(),
-        'phone': _phoneController.text.trim(),
-        'country': _countryController.text.trim().toUpperCase(),
-        'payoutCurrency': _normalizedPayoutCurrency(),
-        'isActive': _isSellerActive,
-        'defaultRate': _parseRate(_defaultRateController.text),
-        'notes': _notesController.text.trim(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      };
-
-      if (_selectedSellerId == null) {
-        await FirebaseFirestore.instance.collection('sellers').add({
-          ...payload,
-          'createdAt': FieldValue.serverTimestamp(),
-          'status': 'active',
-        });
-      } else {
-        await FirebaseFirestore.instance
-            .collection('sellers')
-            .doc(_selectedSellerId)
-            .set(payload, SetOptions(merge: true));
-      }
-
-      _clearSellerForm();
-      _snack('Seller saved.');
-    } catch (e) {
-      _snack('Could not save seller: $e', isError: true);
-    } finally {
-      if (mounted) setState(() => _savingSeller = false);
-    }
-  }
-
-  Future<void> _setSellerActive(String sellerId, bool active) async {
-    await FirebaseFirestore.instance.collection('sellers').doc(sellerId).set({
-      'isActive': active,
-      'status': active ? 'active' : 'inactive',
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-  }
-
-  Future<void> _setAllSellersActive(bool active) async {
-    final sellers = await FirebaseFirestore.instance.collection('sellers').get();
-    final batch = FirebaseFirestore.instance.batch();
-    for (final doc in sellers.docs) {
-      batch.set(doc.reference, {
-        'isActive': active,
-        'status': active ? 'active' : 'inactive',
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    }
-    await batch.commit();
-    _snack(active ? 'All sellers activated.' : 'All sellers deactivated.');
-  }
-
-  Future<void> _deleteSeller(String sellerId) async {
-    await FirebaseFirestore.instance.collection('sellers').doc(sellerId).delete();
-
-    final codeDocs = await FirebaseFirestore.instance
-        .collection('seller_codes')
-        .where('sellerId', isEqualTo: sellerId)
-        .get();
-    final batch = FirebaseFirestore.instance.batch();
-    for (final codeDoc in codeDocs.docs) {
-      batch.delete(codeDoc.reference);
-    }
-    await batch.commit();
-  }
-
-  Future<void> _saveSellerCode() async {
-    final sellerId = _codeSellerIdController.text.trim();
-    if (sellerId.isEmpty) {
-      _snack('Select a seller first.', isError: true);
-      return;
-    }
-
-    setState(() => _savingCode = true);
-    try {
-      final raw = _codeController.text.trim();
-      final code = raw.isEmpty ? _generateCode() : _normalizeCode(raw);
-      final normalized = _normalizeCode(code);
-
-      final existing = await FirebaseFirestore.instance
-          .collection('seller_codes')
-          .where('normalizedCode', isEqualTo: normalized)
-          .limit(1)
-          .get();
-
-      if (existing.docs.isNotEmpty) {
-        _snack('Code already exists. Choose another code.', isError: true);
-        return;
-      }
-
-      await FirebaseFirestore.instance.collection('seller_codes').add({
-        'sellerId': sellerId,
-        'code': code,
-        'normalizedCode': normalized,
-        'isActive': true,
-        'status': 'active',
-        'createdAt': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
-
-      _codeController.clear();
-      await Clipboard.setData(ClipboardData(text: code));
-      _snack('Seller code created and copied: $code');
-    } catch (e) {
-      _snack('Could not save seller code: $e', isError: true);
-    } finally {
-      if (mounted) setState(() => _savingCode = false);
-    }
-  }
-
-  Future<void> _setSellerCodeActive(String codeId, bool active) async {
-    await FirebaseFirestore.instance.collection('seller_codes').doc(codeId).set({
-      'isActive': active,
-      'status': active ? 'active' : 'inactive',
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-  }
-
-  Future<void> _deleteSellerCode(String codeId) async {
-    await FirebaseFirestore.instance.collection('seller_codes').doc(codeId).delete();
-  }
-
-  Future<void> _saveGlobalRate() async {
-    setState(() => _savingRate = true);
-    try {
-      final rate = _parseRate(_globalRateController.text);
-      final fixedStarter = _parseMoney(_fixedStarterPayoutController.text);
-      final fixedHarmony100 =
-          _parseMoney(_fixedHarmony100PayoutController.text);
-      await FirebaseFirestore.instance
-          .collection('seller_commission_settings')
-          .doc('global')
-          .set({
-        'defaultRate': rate,
-        'payoutMode': _payoutMode,
-        'fixedStarterGbp': fixedStarter,
-        'fixedHarmony100Gbp': fixedHarmony100,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-      _rateConfigFuture = _loadRateConfig();
-      _snack('Global payout settings saved.');
-    } catch (e) {
-      _snack('Could not save global rate: $e', isError: true);
-    } finally {
-      if (mounted) setState(() => _savingRate = false);
-    }
-  }
-
-  Future<void> _saveCountryRate() async {
-    final code = _countryRateCodeController.text.trim().toUpperCase();
-    if (code.length < 2) {
-      _snack('Country code is required.', isError: true);
-      return;
-    }
-
-    setState(() => _savingRate = true);
-    try {
-      final rate = _parseRate(_countryRateController.text);
-      await FirebaseFirestore.instance
-          .collection('seller_country_rates')
-          .doc(code)
-          .set({
-        'countryCode': code,
-        'rate': rate,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-      _rateConfigFuture = _loadRateConfig();
-      _snack('Country rate saved for $code.');
-    } catch (e) {
-      _snack('Could not save country rate: $e', isError: true);
-    } finally {
-      if (mounted) setState(() => _savingRate = false);
-    }
-  }
-
-  void _loadSeller(Map<String, dynamic> data, String sellerId) {
-    _selectedSellerId = sellerId;
-    _nameController.text = (data['name'] ?? '').toString();
-    _emailController.text = (data['email'] ?? '').toString();
-    _phoneController.text = (data['phone'] ?? '').toString();
-    _countryController.text = (data['country'] ?? '').toString();
-    _payoutCurrencyController.text = _sellerCurrencyFromData(data);
-    final rate = (data['defaultRate'] as num?)?.toDouble() ?? 0.10;
-    _defaultRateController.text = rate.toStringAsFixed(2);
-    _notesController.text = (data['notes'] ?? '').toString();
-    _isSellerActive = data['isActive'] != false;
-    _codeSellerIdController.text = sellerId;
-    setState(() {});
-  }
-
-  void _clearSellerForm() {
-    _selectedSellerId = null;
-    _nameController.clear();
-    _emailController.clear();
-    _phoneController.clear();
-    _countryController.clear();
-    _payoutCurrencyController.text = 'GBP';
-    _defaultRateController.text = '0.10';
-    _notesController.clear();
-    _isSellerActive = true;
-    _codeSellerIdController.clear();
-    setState(() {});
-  }
-
-  void _snack(String message, {bool isError = false}) {
+  void _refresh() {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: isError ? Colors.red : Colors.green,
-      ),
-    );
+    final future = _service.load(_sellerId);
+    setState(() { _data = future; });
   }
 
-  Future<void> _pickDateRange() async {
-    final now = DateTime.now();
-    final picked = await showDateRangePicker(
-      context: context,
-      firstDate: DateTime(now.year - 5),
-      lastDate: DateTime(now.year + 2),
-      initialDateRange: _dateRange,
-    );
-    if (picked != null) {
-      setState(() => _dateRange = picked);
-    }
-  }
-
-  String _currentMonthKey() {
-    final now = DateTime.now().toUtc();
-    return '${now.year}-${now.month.toString().padLeft(2, '0')}';
-  }
-
-  String _normalizedPayoutCurrency() {
-    final normalized = _payoutCurrencyController.text.trim().toUpperCase();
-    if (normalized.length == 3) return normalized;
-    return 'GBP';
-  }
-
-  String _sellerCurrencyFromData(Map<String, dynamic> data) {
-    final explicit = (data['payoutCurrency'] ?? '').toString().trim().toUpperCase();
-    if (explicit.length == 3) return explicit;
-
-    final country = (data['country'] ?? '').toString().trim().toUpperCase();
-    return _countryToCurrency[country] ?? 'GBP';
-  }
-
-  Map<String, double> _extractRates(Map<String, dynamic>? docData) {
-    final rawRates = docData?['rates'];
-    if (rawRates is! Map) return const <String, double>{};
-    final rates = <String, double>{};
-    rawRates.forEach((key, value) {
-      final code = key.toString().trim().toUpperCase();
-      final parsed = value is num ? value.toDouble() : double.tryParse(value.toString());
-      if (code.isNotEmpty && parsed != null && parsed > 0) {
-        rates[code] = parsed;
-      }
-    });
-    rates['GBP'] = 1.0;
-    return rates;
-  }
-
-  double _gbpToCurrencyRate(
-    String currency,
-    Map<String, double> monthlyRates,
-    Map<String, double> liveRates,
-  ) {
-    final code = currency.trim().toUpperCase();
-    if (code.isEmpty || code == 'GBP') return 1.0;
-    if (monthlyRates.containsKey(code)) return monthlyRates[code]!;
-    if (liveRates.containsKey(code)) return liveRates[code]!;
-    return 1.0;
-  }
-
-  String _formatAmount(String currencyCode, num amount) {
-    return '${amount.toStringAsFixed(2)} $currencyCode';
-  }
-
-  String _formatShortStamp(DateTime? value) {
-    if (value == null) return 'Not set';
-    final local = value.toLocal();
-    final y = local.year.toString().padLeft(4, '0');
-    final m = local.month.toString().padLeft(2, '0');
-    final d = local.day.toString().padLeft(2, '0');
-    final hh = local.hour.toString().padLeft(2, '0');
-    final mm = local.minute.toString().padLeft(2, '0');
-    return '$y-$m-$d $hh:$mm';
-  }
-
-  Future<void> _refreshLiveFxRates() async {
-    setState(() => _refreshingFx = true);
-    try {
-      await FirebaseFunctions.instance
-          .httpsCallable('refreshLiveFxRates')
-          .call();
-      _snack('Live FX rates refreshed.');
-    } catch (e) {
-      _snack('Could not refresh FX rates: $e', isError: true);
-    } finally {
-      if (mounted) setState(() => _refreshingFx = false);
-    }
-  }
-
-  Future<void> _lockCurrentMonthFxSnapshot() async {
-    setState(() => _lockingFx = true);
-    try {
-      final month = _currentMonthKey();
-      await FirebaseFunctions.instance
-          .httpsCallable('lockCurrentMonthFxSnapshot')
-          .call({'month': month});
-      _snack('FX snapshot locked for $month.');
-    } catch (e) {
-      _snack('Could not lock FX snapshot: $e', isError: true);
-    } finally {
-      if (mounted) setState(() => _lockingFx = false);
-    }
-  }
-
-  Map<String, dynamic> _computeMetricsForSeller(
-    String sellerId,
-    List<Map<String, dynamic>> users,
-    _RateConfig rateConfig,
-    Map<String, dynamic> sellerData,
-  ) {
-    final start = _dateRange?.start;
-    final end = _dateRange?.end;
-    final sellerDefaultRate = (sellerData['defaultRate'] as num?)?.toDouble() ??
-        rateConfig.globalDefaultRate;
-
-    final sellerUsers = users.where((u) {
-      return (u['assignedSellerId'] ?? '').toString().trim() == sellerId;
-    }).toList();
-
-    int activeSubscribers = 0;
-    int willRenewCount = 0;
-    int paidMonthlyCount = 0;
-    double grossEstimate = 0;
-    double residualEstimate = 0;
-
-    for (final user in sellerUsers) {
-      final status = (user['status'] ?? '').toString().toLowerCase();
-      final isActive = status == 'active';
-      final willRenew = user['willRenew'] == true;
-      final plan = (user['subscriptionPlan'] ?? '').toString().toLowerCase();
-      final renewalDate = _asDate(user['renewalDate']);
-
-      if (isActive) activeSubscribers++;
-      if (willRenew) willRenewCount++;
-
-      final monthlyLike = plan.contains('starter') ||
-          plan.contains('harmony 100') ||
-          plan.contains('monthly');
-      if (monthlyLike && isActive) {
-        final monthlyValue = _planEstimate(plan);
-        if (monthlyValue <= 0) {
-          continue;
-        }
-
-        final countryCode = _resolveUserCountryCode(user);
-        final countryRate = rateConfig.countryRates[countryCode];
-        final appliedRate = countryRate ?? sellerDefaultRate;
-        final useFixedMode = rateConfig.payoutMode == 'fixed_gbp_per_plan';
-        final fixedPayout = _fixedPayoutForPlan(plan, rateConfig);
-
-        if (start == null || end == null) {
-          paidMonthlyCount++;
-          grossEstimate += monthlyValue;
-          residualEstimate += useFixedMode
-              ? fixedPayout
-              : (monthlyValue * appliedRate);
-        } else if (renewalDate != null) {
-          final inRange = !renewalDate.isBefore(start) &&
-              !renewalDate.isAfter(end.add(const Duration(days: 1)));
-          if (inRange) {
-            paidMonthlyCount++;
-            grossEstimate += monthlyValue;
-            residualEstimate += useFixedMode
-                ? fixedPayout
-                : (monthlyValue * appliedRate);
-          }
-        }
-      }
-    }
-
-    final rate = grossEstimate > 0
-        ? (residualEstimate / grossEstimate)
-        : sellerDefaultRate;
-
-    return {
-      'totalAttributedUsers': sellerUsers.length,
-      'activeSubscribers': activeSubscribers,
-      'willRenewCount': willRenewCount,
-      'paidMonthlyCount': paidMonthlyCount,
-      'grossEstimate': grossEstimate,
-      'rate': rate,
-      'residualEstimate': residualEstimate,
-      'payoutMode': rateConfig.payoutMode,
-    };
-  }
-
-  Future<_RateConfig> _loadRateConfig() async {
-    double globalDefaultRate = 0.10;
-    String payoutMode = 'percentage';
-    double fixedStarterGbp = 0.50;
-    double fixedHarmony100Gbp = 0.80;
-    final countryRates = <String, double>{};
-
-    try {
-      final globalSnap = await FirebaseFirestore.instance
-          .collection('seller_commission_settings')
-          .doc('global')
-          .get()
-          .timeout(const Duration(seconds: 10));
-      final globalData = globalSnap.data() ?? {};
-      globalDefaultRate =
-          (globalData['defaultRate'] as num?)?.toDouble() ?? 0.10;
-      payoutMode = (globalData['payoutMode'] as String?)
-                  ?.trim()
-                  .toLowerCase() ==
-              'fixed_gbp_per_plan'
-          ? 'fixed_gbp_per_plan'
-          : 'percentage';
-      fixedStarterGbp =
-          (globalData['fixedStarterGbp'] as num?)?.toDouble() ?? 0.50;
-      fixedHarmony100Gbp =
-          (globalData['fixedHarmony100Gbp'] as num?)?.toDouble() ?? 0.80;
-    } catch (_) {
-      // Fall back to defaults if this document is unavailable.
-    }
-
-    try {
-      final countrySnap = await FirebaseFirestore.instance
-          .collection('seller_country_rates')
-          .get()
-          .timeout(const Duration(seconds: 10));
-      for (final doc in countrySnap.docs) {
-        final data = doc.data();
-        final countryCode =
-            ((data['countryCode'] ?? doc.id).toString()).trim().toUpperCase();
-        final rate = (data['rate'] as num?)?.toDouble();
-        if (countryCode.isNotEmpty && rate != null && rate >= 0 && rate <= 1) {
-          countryRates[countryCode] = rate;
-        }
-      }
-    } catch (_) {
-      // Keep country rates empty if unavailable.
-    }
-
-    return _RateConfig(
-      globalDefaultRate: globalDefaultRate,
-      countryRates: countryRates,
-      payoutMode: payoutMode,
-      fixedStarterGbp: fixedStarterGbp,
-      fixedHarmony100Gbp: fixedHarmony100Gbp,
-    );
-  }
-
-  Future<List<Map<String, dynamic>>> _loadUsersForMetrics() async {
-    try {
-      final userSnap = await FirebaseFirestore.instance
-          .collection('users')
-          .get()
-          .timeout(const Duration(seconds: 12));
-      return userSnap.docs
-          .map((d) => <String, dynamic>{'id': d.id, ...d.data()})
-          .toList();
-    } catch (_) {
-      return const <Map<String, dynamic>>[];
-    }
-  }
-
-  void _refreshResidualMetricsData() {
+  void _selectSeller(String id) {
     setState(() {
-      _rateConfigFuture = _loadRateConfig();
-      _usersForMetricsFuture = _loadUsersForMetrics();
+      _sellerId = id;
+      _subscriberSearch = '';
+      _plan = _subscriptionStatus = _autoRenew = 'all';
+      _subscriberRange = _eventRange = null;
+      _eventSearch = '';
+      _eventType = 'all';
+      _data = _service.load(id);
     });
   }
 
-  double _fixedPayoutForPlan(String plan, _RateConfig config) {
-    if (plan.contains('harmony 100')) return config.fixedHarmony100Gbp;
-    if (plan.contains('starter')) return config.fixedStarterGbp;
-    return 0;
+  void _message(String text, {bool error = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(text), backgroundColor: error ? Colors.red.shade700 : null,
+    ));
   }
 
-  String _resolveUserCountryCode(Map<String, dynamic> userData) {
-    final cc = (userData['countryCode'] ?? userData['country'] ?? '').toString().trim().toUpperCase();
-    return cc.length >= 2 ? cc : 'GB';
-  }
-
-  DateTime? _asDate(dynamic value) {
-    if (value == null) return null;
-    if (value is Timestamp) return value.toDate();
-    if (value is DateTime) return value;
-    if (value is String) return DateTime.tryParse(value);
-    return null;
-  }
-
-  double _planEstimate(String plan) {
-    if (plan.contains('harmony 100')) return 4.99;
-    if (plan.contains('starter')) return 2.99;
-    return 0;
-  }
-
-  String _fmtMoney(num value) => value.toStringAsFixed(2);
-
-  String _fmtRate(num value) => '${(value * 100).toStringAsFixed(2)}%';
-
-  @override
-  Widget build(BuildContext context) {
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance.collection('sellers').snapshots(),
-      builder: (context, sellerSnapshot) {
-        final sellerDocs = sellerSnapshot.data?.docs ??
-            const <QueryDocumentSnapshot<Map<String, dynamic>>>[];
-
-        final countries = <String>{'ALL'};
-        for (final doc in sellerDocs) {
-          final code = (doc.data()['country'] ?? '').toString().trim().toUpperCase();
-          if (code.isNotEmpty) countries.add(code);
-        }
-
-        final normalizedSearch = _searchController.text.trim().toLowerCase();
-
-        final filtered = sellerDocs.where((doc) {
-          final data = doc.data();
-          final country = (data['country'] ?? '').toString().trim().toUpperCase();
-          if (_selectedCountryFilter != 'ALL' && country != _selectedCountryFilter) {
-            return false;
-          }
-
-          if (normalizedSearch.isEmpty) return true;
-
-          final name = (data['name'] ?? '').toString().toLowerCase();
-          final email = (data['email'] ?? '').toString().toLowerCase();
-          final phone = (data['phone'] ?? '').toString().toLowerCase();
-          return name.contains(normalizedSearch) ||
-              email.contains(normalizedSearch) ||
-              phone.contains(normalizedSearch);
-        }).toList()
-          ..sort((a, b) {
-            final aName = (a.data()['name'] ?? '').toString().toLowerCase();
-            final bName = (b.data()['name'] ?? '').toString().toLowerCase();
-            return aName.compareTo(bName);
-          });
-
-        final monthKey = _currentMonthKey();
-
-        return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-          stream: FirebaseFirestore.instance
-              .collection('fx_rates')
-              .doc('live_reference')
-              .snapshots(),
-          builder: (context, liveFxSnapshot) {
-            final liveFxData = liveFxSnapshot.data?.data();
-
-            return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-              stream: FirebaseFirestore.instance
-                  .collection('fx_rates_monthly')
-                  .doc(monthKey)
-                  .snapshots(),
-              builder: (context, monthFxSnapshot) {
-                final monthlyFxData = monthFxSnapshot.data?.data();
-
-                return Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            children: [
-              _buildHeader(
-                countries.toList()..sort(),
-                liveFxData,
-                monthlyFxData,
-                monthKey,
-              ),
-              const SizedBox(height: 12),
-              Expanded(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(flex: 3, child: _buildSellerList(filtered)),
-                    const SizedBox(width: 12),
-                    Expanded(flex: 4, child: _buildSellerEditor()),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      flex: 5,
-                      child: _buildMetricsPanel(
-                        filtered,
-                        liveFxData,
-                        monthlyFxData,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-                );
-              },
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Widget _buildHeader(
-    List<String> countries,
-    Map<String, dynamic>? liveFxData,
-    Map<String, dynamic>? monthlyFxData,
-    String monthKey,
-  ) {
-    final liveUpdated = _asDate(liveFxData?['updatedAt']);
-    final snapshotLocked = _asDate(monthlyFxData?['lockedAt']);
-    final hasSnapshot = snapshotLocked != null;
-    final hasLive = liveUpdated != null;
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Wrap(
-              runSpacing: 10,
-              spacing: 10,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                const Text(
-                  'Seller Management',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-                ),
-                SizedBox(
-                  width: 220,
-                  child: TextField(
-                    controller: _searchController,
-                    decoration: const InputDecoration(
-                      isDense: true,
-                      labelText: 'Search sellers',
-                      border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.search),
-                    ),
-                    onChanged: (_) => setState(() {}),
-                  ),
-                ),
-                SizedBox(
-                  width: 150,
-                  child: DropdownButtonFormField<String>(
-                    initialValue: countries.contains(_selectedCountryFilter)
-                        ? _selectedCountryFilter
-                        : 'ALL',
-                    items: countries
-                        .map(
-                          (c) => DropdownMenuItem(value: c, child: Text(c)),
-                        )
-                        .toList(),
-                    onChanged: (v) {
-                      if (v == null) return;
-                      setState(() => _selectedCountryFilter = v);
-                    },
-                    decoration: const InputDecoration(
-                      isDense: true,
-                      labelText: 'Country',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                ),
-                OutlinedButton.icon(
-                  onPressed: _pickDateRange,
-                  icon: const Icon(Icons.date_range),
-                  label: Text(
-                    _dateRange == null
-                        ? 'All Dates'
-                        : '${_dateRange!.start.year}-${_dateRange!.start.month.toString().padLeft(2, '0')}-${_dateRange!.start.day.toString().padLeft(2, '0')} to ${_dateRange!.end.year}-${_dateRange!.end.month.toString().padLeft(2, '0')}-${_dateRange!.end.day.toString().padLeft(2, '0')}',
-                  ),
-                ),
-                OutlinedButton(
-                  onPressed: () => _setAllSellersActive(true),
-                  child: const Text('Activate All'),
-                ),
-                OutlinedButton(
-                  onPressed: () => _setAllSellersActive(false),
-                  child: const Text('Deactivate All'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: _refreshingFx ? null : _refreshLiveFxRates,
-                  icon: const Icon(Icons.sync),
-                  label: Text(_refreshingFx ? 'Refreshing FX...' : 'Refresh Live FX'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: _lockingFx ? null : _lockCurrentMonthFxSnapshot,
-                  icon: const Icon(Icons.lock_clock),
-                  label: Text(_lockingFx ? 'Locking...' : 'Lock $monthKey Snapshot'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF6F8FC),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFFDCE3F0)),
-              ),
-              child: Wrap(
-                runSpacing: 10,
-                spacing: 16,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        hasLive ? Icons.check_circle : Icons.error_outline,
-                        color: hasLive ? Colors.green : Colors.orange,
-                        size: 20,
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        'Live FX Updated: ${_formatShortStamp(liveUpdated)}',
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                    ],
-                  ),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        hasSnapshot ? Icons.lock : Icons.warning_amber,
-                        color: hasSnapshot ? Colors.green : Colors.orange,
-                        size: 20,
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        '$monthKey Snapshot: ${hasSnapshot ? 'Locked' : 'Missing'}',
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                    ],
-                  ),
-                  Text(
-                    hasSnapshot
-                        ? 'Payout conversions use locked monthly rates first. GBP remains your canonical admin reference.'
-                        : 'No monthly lock yet. Conversions currently use live FX fallback. GBP remains your canonical admin reference.',
-                    style: const TextStyle(fontSize: 12, color: Colors.black54),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSellerList(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
-    return Card(
-      child: Column(
-        children: [
-          const ListTile(
-            dense: true,
-            title: Text('Sellers'),
-            subtitle: Text('Tap a seller to edit, inspect codes and metrics.'),
-          ),
-          const Divider(height: 1),
-          Expanded(
-            child: Scrollbar(
-              controller: _sellerListScroll,
-              thumbVisibility: true,
-              child: ListView.separated(
-                controller: _sellerListScroll,
-                itemCount: docs.length,
-                separatorBuilder: (_, __) => const Divider(height: 1),
-                itemBuilder: (context, index) {
-                  final doc = docs[index];
-                  final data = doc.data();
-                  final sellerId = doc.id;
-                  final active = data['isActive'] != false;
-                  final name = (data['name'] ?? '').toString();
-                  final email = (data['email'] ?? '').toString();
-                  final country = (data['country'] ?? '—').toString();
-
-                  return ListTile(
-                    selected: _selectedSellerId == sellerId,
-                    onTap: () => _loadSeller(data, sellerId),
-                    title: Text(name.isEmpty ? 'Unnamed seller' : name),
-                    subtitle: Text('$email • $country'),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Switch(
-                          value: active,
-                          onChanged: (v) => _setSellerActive(sellerId, v),
-                        ),
-                        IconButton(
-                          tooltip: 'Delete seller',
-                          icon: const Icon(Icons.delete_outline, color: Colors.red),
-                          onPressed: () async {
-                            final ok = await showDialog<bool>(
-                                  context: context,
-                                  builder: (ctx) => AlertDialog(
-                                    title: const Text('Delete seller?'),
-                                    content: const Text(
-                                      'This removes the seller and all mapped seller codes.',
-                                    ),
-                                    actions: [
-                                      TextButton(
-                                        onPressed: () => Navigator.pop(ctx, false),
-                                        child: const Text('Cancel'),
-                                      ),
-                                      ElevatedButton(
-                                        onPressed: () => Navigator.pop(ctx, true),
-                                        child: const Text('Delete'),
-                                      ),
-                                    ],
-                                  ),
-                                ) ??
-                                false;
-                            if (!ok) return;
-                            await _deleteSeller(sellerId);
-                            if (_selectedSellerId == sellerId) {
-                              _clearSellerForm();
-                            }
-                          },
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSellerEditor() {
-    return Card(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Seller Profile',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _nameController,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                labelText: 'Seller Name',
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _emailController,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                labelText: 'Email',
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _phoneController,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                labelText: 'Contact Number',
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _countryController,
-              textCapitalization: TextCapitalization.characters,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                labelText: 'Country Code',
-                hintText: 'GB',
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _payoutCurrencyController,
-              textCapitalization: TextCapitalization.characters,
-              inputFormatters: [LengthLimitingTextInputFormatter(3)],
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                labelText: 'Payout Currency (ISO)',
-                hintText: 'GBP',
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _defaultRateController,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                labelText: 'Default Seller Rate (0.00 to 1.00)',
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _notesController,
-              maxLines: 3,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                labelText: 'Notes',
-              ),
-            ),
-            const SizedBox(height: 8),
-            SwitchListTile(
-              value: _isSellerActive,
-              onChanged: (v) => setState(() => _isSellerActive = v),
-              title: const Text('Seller Active'),
-              contentPadding: EdgeInsets.zero,
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                ElevatedButton.icon(
-                  onPressed: _savingSeller ? null : _saveSeller,
-                  icon: const Icon(Icons.save),
-                  label: Text(_savingSeller ? 'Saving...' : 'Save Seller'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: _clearSellerForm,
-                  icon: const Icon(Icons.clear),
-                  label: const Text('Clear'),
-                ),
-              ],
-            ),
-            const Divider(height: 24),
-            const Text(
-              'Seller Codes',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _codeSellerIdController,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                labelText: 'Seller Doc ID',
-              ),
-              readOnly: true,
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _codeController,
-              textCapitalization: TextCapitalization.characters,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                labelText: 'Code (leave blank to auto-generate)',
-              ),
-            ),
-            const SizedBox(height: 8),
-            ElevatedButton.icon(
-              onPressed: _savingCode ? null : _saveSellerCode,
-              icon: const Icon(Icons.vpn_key),
-              label:
-                  Text(_savingCode ? 'Saving...' : 'Create / Attach Seller Code'),
-            ),
-            const SizedBox(height: 8),
-            _buildSellerCodeList(),
-            const Divider(height: 24),
-            const Text(
-              'Rates',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 8),
-            DropdownButtonFormField<String>(
-              initialValue: _payoutMode,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                labelText: 'Payout Mode',
-              ),
-              items: const [
-                DropdownMenuItem(
-                  value: 'percentage',
-                  child: Text('Percentage (default/country rates)'),
-                ),
-                DropdownMenuItem(
-                  value: 'fixed_gbp_per_plan',
-                  child: Text('Fixed GBP per plan (Starter/Harmony 100)'),
-                ),
-              ],
-              onChanged: (value) {
-                if (value == null) return;
-                setState(() => _payoutMode = value);
-              },
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _globalRateController,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                labelText: 'Global Default Rate (0.00 to 1.00)',
-              ),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _fixedStarterPayoutController,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      labelText: 'Fixed Starter GBP',
-                      hintText: '0.50',
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: TextField(
-                    controller: _fixedHarmony100PayoutController,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      labelText: 'Fixed Harmony 100 GBP',
-                      hintText: '0.80',
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Text(
-              _payoutMode == 'fixed_gbp_per_plan'
-                  ? 'Fixed mode active: country percentage rates are ignored for payouts. GBP fixed amounts are used per paid plan.'
-                  : 'Percentage mode active: global/country rates are used. Fixed GBP fields are saved but not applied.',
-              style: const TextStyle(fontSize: 12, color: Colors.black54),
-            ),
-            const SizedBox(height: 8),
-            ElevatedButton(
-              onPressed: _savingRate || _loadingRateSettings ? null : _saveGlobalRate,
-              child: Text(_savingRate ? 'Saving...' : 'Save Global Payout Settings'),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _countryRateCodeController,
-                    textCapitalization: TextCapitalization.characters,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      labelText: 'Country Code',
-                      hintText: 'US',
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: TextField(
-                    controller: _countryRateController,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      labelText: 'Country Rate',
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'Country Rate is a percentage override (for example 0.40 = 40%). FX conversion appears in totals, not in this field.',
-              style: TextStyle(fontSize: 12, color: Colors.black54),
-            ),
-            const SizedBox(height: 8),
-            ElevatedButton(
-              onPressed: _savingRate ? null : _saveCountryRate,
-              child: const Text('Save Country Rate'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSellerCodeList() {
-    final sellerId = _codeSellerIdController.text.trim();
-    if (sellerId.isEmpty) {
-      return const Text('Select a seller to view or manage codes.');
+  Future<void> _run(Future<void> Function() action) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await action();
+      _refresh();
+    } catch (error) {
+      _message('Operation failed: $error', error: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
+  }
 
-    return SizedBox(
-      height: 180,
-      child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: FirebaseFirestore.instance
-            .collection('seller_codes')
-            .where('sellerId', isEqualTo: sellerId)
-            .orderBy('createdAt', descending: true)
-            .snapshots(),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
+  Future<void> _editSeller({Map<String, dynamic>? seller}) async {
+    final values = <String, String>{
+      for (final field in ['name', 'email', 'phone', 'country', 'notes'])
+        field: partnerText(seller?[field]),
+    };
+    String status = seller == null ? 'active' : partnerStatus(seller);
+    final form = GlobalKey<FormState>();
+    final payload = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(builder: (context, update) => AlertDialog(
+        title: Text(seller == null ? 'New Creator Partner Seller' : 'Edit seller profile'),
+        content: SizedBox(width: 480, child: SingleChildScrollView(child: Form(
+          key: form,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            for (final field in values.keys)
+              Padding(padding: const EdgeInsets.only(bottom: 12), child: TextFormField(
+                initialValue: values[field], onChanged: (value) => values[field] = value,
+                decoration: InputDecoration(labelText: field[0].toUpperCase() + field.substring(1)),
+                maxLines: field == 'notes' ? 3 : 1,
+                validator: field == 'name' ? (value) =>
+                    (value ?? '').trim().isEmpty ? 'Name is required' : null : null,
+              )),
+            _dropdown('Status', status, const ['active', 'paused', 'archived'],
+                (value) => update(() => status = value)),
+            const SizedBox(height: 12),
+            const Text('Paused/archived sellers cannot issue usable referral codes. '
+                'Archiving keeps profiles, codes, attribution and payment history; nothing is deleted.'),
+          ]),
+        ))),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+          FilledButton(onPressed: () {
+            if (!form.currentState!.validate()) return;
+            Navigator.pop(dialogContext, <String, dynamic>{
+              for (final entry in values.entries) entry.key: entry.value.trim(),
+              'country': values['country']!.trim().toUpperCase(), 'status': status,
+            });
+          }, child: const Text('Save profile')),
+        ],
+      )),
+    );
+    if (payload == null || !mounted) return;
+    await _run(() async {
+      final id = await _service.saveSeller(seller == null ? null : partnerText(seller['id']), payload);
+      if (mounted) _selectSeller(id);
+      _message('Seller profile saved.');
+    });
+  }
 
-          final docs = snapshot.data!.docs;
-          if (docs.isEmpty) {
-            return const Center(child: Text('No seller codes yet.'));
-          }
+  Future<void> _createCode(Map<String, dynamic> seller, {Map<String, dynamic>? replaces}) async {
+    final sellerId = partnerText(seller['id']);
+    var enteredCode = _service.generateCode();
+    final form = GlobalKey<FormState>();
+    final raw = await showDialog<String>(context: context, builder: (context) => AlertDialog(
+      title: Text(replaces == null ? 'Create referral code' : 'Replace referral code'),
+      content: SizedBox(width: 420, child: Form(key: form, child: Column(
+        mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Seller: ${partnerText(seller['name'])}'),
+          if (replaces != null) Text('Old code ${partnerText(replaces['code'])} will be deactivated atomically. '
+              'Existing subscribers stay assigned to this seller.'),
+          const SizedBox(height: 12),
+          TextFormField(initialValue: enteredCode, onChanged: (value) => enteredCode = value,
+            decoration: const InputDecoration(labelText: 'Unique referral code'),
+            validator: (value) => validPartnerCode(value ?? '') ? null : 'Use 3–64 letters, numbers, - or _.'),
+          const SizedBox(height: 12),
+          const Text('Codes are trimmed and uppercased. Previously used codes cannot be reused.'),
+        ],
+      ))),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        FilledButton(onPressed: () {
+          if (form.currentState!.validate()) Navigator.pop(context, enteredCode);
+        }, child: const Text('Create code')),
+      ],
+    ));
+    if (raw == null || !mounted) return;
+    await _run(() async {
+      final code = await _service.createCode(sellerId, raw,
+          replacesId: replaces == null ? null : partnerText(replaces['id']));
+      _message('Referral code created: $code');
+    });
+  }
 
-          return ListView.separated(
-            itemCount: docs.length,
-            separatorBuilder: (_, __) => const Divider(height: 1),
-            itemBuilder: (context, index) {
-              final doc = docs[index];
-              final data = doc.data();
-              final code = (data['code'] ?? '').toString();
-              final active = data['isActive'] != false;
+  Future<void> _deactivateCode(Map<String, dynamic> code) async {
+    final confirmed = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
+      title: const Text('Deactivate referral code?'),
+      content: Text('${partnerText(code['code'])} will stop accepting new referrals. '
+          'Existing attribution and history are retained.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+        FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Deactivate')),
+      ],
+    ));
+    if (confirmed != true || !mounted) return;
+    await _run(() => _service.deactivateCode(partnerText(code['sellerId']), partnerText(code['id'])));
+  }
 
-              return ListTile(
-                dense: true,
-                title: Text(code),
-                subtitle: Text(active ? 'Active' : 'Inactive'),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Switch(
-                      value: active,
-                      onChanged: (v) => _setSellerCodeActive(doc.id, v),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.copy),
-                      onPressed: () async {
-                        await Clipboard.setData(ClipboardData(text: code));
-                        _snack('Copied: $code');
-                      },
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.delete_outline, color: Colors.red),
-                      onPressed: () => _deleteSellerCode(doc.id),
-                    ),
-                  ],
-                ),
-              );
-            },
+  Future<void> _recordSettlement(Map<String, dynamic> event) async {
+    if (!canRecordPartnerSettlement(event)) return;
+    var enteredReference = '';
+    final form = GlobalKey<FormState>();
+    final reference = await showDialog<String>(context: context, builder: (context) => AlertDialog(
+      title: const Text('Record manual settlement'),
+      content: SizedBox(width: 480, child: Form(key: form, child: Column(
+        mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Production ${partnerText(event['type'])}\nEvent: ${partnerText(event['eventId'])}\n'
+              'Transaction: ${partnerText(event['transactionId'])}'),
+          const SizedBox(height: 12),
+          const Text('Confirm this purchase/renewal has been checked and the partner settlement '
+              'has actually been paid. This records accounting evidence only; it does not send money.'),
+          const SizedBox(height: 12),
+          TextFormField(onChanged: (value) => enteredReference = value,
+            decoration: const InputDecoration(labelText: 'Accounting reference'),
+            validator: (value) {
+              final reference = (value ?? '').trim();
+              if (reference.isEmpty) return 'Accounting reference is required';
+              if (reference.length > 200 || RegExp(r'[\x00-\x1f\x7f]').hasMatch(reference)) {
+                return 'Use at most 200 characters without control characters';
+              }
+              return null;
+            }),
+        ],
+      ))),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        FilledButton(onPressed: () {
+          if (form.currentState!.validate()) Navigator.pop(context, enteredReference.trim());
+        }, child: const Text('Confirm paid and record')),
+      ],
+    ));
+    if (reference == null || !mounted) return;
+    await _run(() async {
+      await _service.recordSettlement(event, reference);
+      _message('Settlement recorded by the backend.');
+    });
+  }
+
+  Future<void> _pickRange(bool events) async {
+    final range = await showDateRangePicker(context: context, firstDate: DateTime(2000),
+      lastDate: DateTime(2100), initialDateRange: events ? _eventRange : _subscriberRange);
+    if (range != null && mounted) setState(() {
+      if (events) { _eventRange = range; } else { _subscriberRange = range; }
+    });
+  }
+
+  Widget _dropdown(String label, String value, List<String> options, ValueChanged<String> changed) {
+    final safeValue = options.contains(value) ? value : options.first;
+    return SizedBox(width: 190, child: DropdownButtonFormField<String>(
+      initialValue: safeValue, key: ValueKey('$label:$safeValue:${options.join(',')}'),
+      isExpanded: true,
+      decoration: InputDecoration(labelText: label, border: const OutlineInputBorder()),
+      items: options.map((option) => DropdownMenuItem(value: option,
+          child: Text(option == 'all' ? 'All' : option))).toList(),
+      onChanged: (value) { if (value != null) changed(value); },
+    ));
+  }
+
+  Widget _search(String label, String value, ValueChanged<String> changed) => SizedBox(
+    width: 280, child: TextFormField(key: ValueKey('$label:$_sellerId'), initialValue: value,
+      decoration: InputDecoration(labelText: label, prefixIcon: const Icon(Icons.search),
+          border: const OutlineInputBorder()), onChanged: changed,
+    ),
+  );
+
+  Widget _rangeControls(bool events) {
+    final range = events ? _eventRange : _subscriberRange;
+    return Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
+      OutlinedButton.icon(onPressed: () => _pickRange(events), icon: const Icon(Icons.date_range),
+        label: Text(range == null ? (events ? 'Purchase date range' : 'Snapshot date range')
+            : '${DateFormat('yyyy-MM-dd').format(range.start)} – ${DateFormat('yyyy-MM-dd').format(range.end)}')),
+      if (range != null) IconButton(tooltip: 'Clear date range', icon: const Icon(Icons.clear),
+        onPressed: () => setState(() { if (events) { _eventRange = null; } else { _subscriberRange = null; } })),
+    ]);
+  }
+
+  Widget _section(String title, Widget child, {Widget? action}) => Card(
+    margin: const EdgeInsets.only(bottom: 16),
+    child: Padding(padding: const EdgeInsets.all(20), child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Wrap(spacing: 16, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          Text(title, style: Theme.of(context).textTheme.titleLarge), if (action != null) action,
+        ]),
+        const SizedBox(height: 16), child,
+      ],
+    )),
+  );
+
+  Widget _sellerCards(CreatorPartnerData data) {
+    final sellers = data.sellers.where((seller) {
+      final haystack = ['name', 'email', 'phone', 'country', 'notes', 'id']
+          .map((key) => partnerText(seller[key])).join(' ').toLowerCase();
+      return haystack.contains(_sellerSearch.toLowerCase().trim()) &&
+          (_sellerStatus == 'all' || partnerStatus(seller) == _sellerStatus);
+    }).toList()..sort((a, b) => partnerText(a['name']).compareTo(partnerText(b['name'])));
+    return _section('Creator Partner Sellers', Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Wrap(spacing: 12, runSpacing: 12, children: [
+        _search('Search seller profiles', _sellerSearch, (value) => setState(() => _sellerSearch = value)),
+        _dropdown('Seller status', _sellerStatus, const ['all', 'active', 'paused', 'archived'],
+            (value) => setState(() => _sellerStatus = value)),
+      ]),
+      const SizedBox(height: 16),
+      if (sellers.isEmpty) const Text('No matching sellers. Create a profile or change filters.'),
+      SizedBox(height: sellers.isEmpty ? 0 : 280, child: ListView.builder(
+        itemCount: sellers.length,
+        itemBuilder: (context, index) {
+          final seller = sellers[index];
+          final selected = seller['id'] == _sellerId;
+          return Card(color: selected ? Theme.of(context).colorScheme.primaryContainer : null,
+            child: ListTile(selected: selected, leading: Icon(selected ? Icons.check_circle : Icons.badge_outlined),
+              title: Text('${partnerText(seller['name'])} • ${partnerStatus(seller)}'),
+              subtitle: Text('${partnerText(seller['email'])}  ${partnerText(seller['phone'])}\n'
+                  '${partnerText(seller['country'])} • ${partnerText(seller['notes'])}'),
+              isThreeLine: true, onTap: _busy ? null : () => _selectSeller(partnerText(seller['id'])),
+            ),
           );
         },
-      ),
-    );
+      )),
+    ]), action: FilledButton.icon(onPressed: _busy ? null : () => _editSeller(),
+        icon: const Icon(Icons.add), label: const Text('New seller')));
   }
 
-  Widget _buildMetricsPanel(
-    List<QueryDocumentSnapshot<Map<String, dynamic>>> sellers,
-    Map<String, dynamic>? liveFxData,
-    Map<String, dynamic>? monthlyFxData,
-  ) {
-    final liveRates = _extractRates(liveFxData);
-    final monthlyRates = _extractRates(monthlyFxData);
+  Widget _profile(Map<String, dynamic> seller) => _section('Selected seller profile',
+    Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      SelectableText('${partnerText(seller['name'])}\nEmail: ${partnerText(seller['email'])}\n'
+          'Phone: ${partnerText(seller['phone'])}\nCountry: ${partnerText(seller['country'])}\n'
+          'Status: ${partnerStatus(seller)}\nNotes: ${partnerText(seller['notes'])}\n'
+          'Seller reference: ${partnerText(seller['id'])}'),
+      if (partnerStatus(seller) != 'active') const Padding(padding: EdgeInsets.only(top: 12),
+        child: Text('Referral use is blocked while this seller is paused or archived. '
+            'Historical subscriber and payment records remain visible.')),
+    ]), action: OutlinedButton.icon(onPressed: _busy ? null : () => _editSeller(seller: seller),
+        icon: const Icon(Icons.edit_outlined), label: const Text('Edit / change status')));
 
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Residual Metrics',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'Live seller totals from users collection. Sterling is always shown, with local-currency conversion using monthly FX snapshot first and live FX as fallback.',
-            ),
-            const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton.icon(
-                onPressed: _refreshResidualMetricsData,
-                icon: const Icon(Icons.refresh),
-                label: const Text('Refresh Metrics Data'),
-              ),
-            ),
-            Expanded(
-              child: FutureBuilder<_RateConfig>(
-                future: _rateConfigFuture,
-                builder: (context, rateSnap) {
-                  if (rateSnap.hasError) {
-                    return const Center(
-                      child: Text(
-                        'Could not load payout settings. Using defaults failed.',
-                      ),
-                    );
-                  }
-                  if (!rateSnap.hasData) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-
-                  final rateConfig = rateSnap.data!;
-
-                  return FutureBuilder<List<Map<String, dynamic>>>(
-                    future: _usersForMetricsFuture,
-                    builder: (context, userSnap) {
-                      if (!userSnap.hasData) {
-                        return const Center(child: CircularProgressIndicator());
-                      }
-
-                      final users = userSnap.data!;
-                      if (users.isEmpty) {
-                        return const Center(
-                          child: Text(
-                            'No user data available for residual metrics yet. Tap Refresh Metrics Data to retry.',
-                          ),
-                        );
-                      }
-
-                      return Scrollbar(
-                        controller: _metricsScroll,
-                        thumbVisibility: true,
-                        child: ListView.builder(
-                          controller: _metricsScroll,
-                          itemCount: sellers.length,
-                          itemBuilder: (context, index) {
-                            final sellerDoc = sellers[index];
-                            final data = sellerDoc.data();
-                            final sellerId = sellerDoc.id;
-                            final sellerName = (data['name'] ?? 'Unnamed').toString();
-                            final sellerCurrency = _sellerCurrencyFromData(data);
-                            final rate = (data['defaultRate'] as num?)?.toDouble() ??
-                                rateConfig.globalDefaultRate;
-                            final metrics = _computeMetricsForSeller(
-                              sellerId,
-                              users,
-                              rateConfig,
-                              data,
-                            );
-
-                            final totalAttributed =
-                                (metrics['totalAttributedUsers'] as int?) ?? 0;
-                            final activeSubscribers =
-                                (metrics['activeSubscribers'] as int?) ?? 0;
-                            final willRenewCount =
-                                (metrics['willRenewCount'] as int?) ?? 0;
-                            final paidMonthlyCount =
-                                (metrics['paidMonthlyCount'] as int?) ?? 0;
-                            final grossEstimate =
-                                (metrics['grossEstimate'] as num?) ?? 0;
-                            final rateApplied =
-                                (metrics['rate'] as num?) ?? rate;
-                            final residualEstimate =
-                                (metrics['residualEstimate'] as num?) ?? 0;
-                            final payoutMode =
-                                (metrics['payoutMode'] as String?) ??
-                                    'percentage';
-                            final fxRate = _gbpToCurrencyRate(
-                              sellerCurrency,
-                              monthlyRates,
-                              liveRates,
-                            );
-                            final localGross = grossEstimate * fxRate;
-                            final localResidual = residualEstimate * fxRate;
-
-                            return Card(
-                              margin: const EdgeInsets.only(bottom: 8),
-                              child: Padding(
-                                padding: const EdgeInsets.all(10),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      sellerName,
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 15,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 6),
-                                    Wrap(
-                                      spacing: 8,
-                                      runSpacing: 8,
-                                      children: [
-                                        _chip('Attributed', '$totalAttributed'),
-                                        _chip('Active', '$activeSubscribers'),
-                                        _chip('Will Renew', '$willRenewCount'),
-                                        _chip('Paid Monthly', '$paidMonthlyCount'),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Text(
-                                      payoutMode == 'fixed_gbp_per_plan'
-                                          ? 'Effective Rate (from fixed GBP): ${_fmtRate(rateApplied)}'
-                                          : 'Rate: ${_fmtRate(rateApplied)}',
-                                      style: const TextStyle(fontWeight: FontWeight.w600),
-                                    ),
-                                    Text(
-                                      'Gross Estimate: £${_fmtMoney(grossEstimate)}',
-                                      style: const TextStyle(fontWeight: FontWeight.w600),
-                                    ),
-                                    Text(
-                                      'Residual Estimate: £${_fmtMoney(residualEstimate)}',
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.green,
-                                      ),
-                                    ),
-                                    if (sellerCurrency != 'GBP') ...[
-                                      Text(
-                                        'Gross Estimate (${sellerCurrency}): ${_formatAmount(sellerCurrency, localGross)}',
-                                        style: const TextStyle(fontWeight: FontWeight.w600),
-                                      ),
-                                      Text(
-                                        'Residual Estimate (${sellerCurrency}): ${_formatAmount(sellerCurrency, localResidual)}',
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.green,
-                                        ),
-                                      ),
-                                      Text(
-                                        'FX used: 1 GBP = ${fxRate.toStringAsFixed(4)} $sellerCurrency',
-                                        style: const TextStyle(fontSize: 12, color: Colors.black54),
-                                      ),
-                                    ],
-                                    const SizedBox(height: 8),
-                                    Row(
-                                      mainAxisAlignment: MainAxisAlignment.end,
-                                      children: [
-                                        TextButton.icon(
-                                          onPressed: () {
-                                            final report = {
-                                              'sellerId': sellerId,
-                                              'sellerName': sellerName,
-                                              'dateRange': _dateRange == null
-                                                  ? 'all'
-                                                  : '${_dateRange!.start.toIso8601String()}..${_dateRange!.end.toIso8601String()}',
-                                              'metrics': {
-                                                'totalAttributedUsers': totalAttributed,
-                                                'activeSubscribers': activeSubscribers,
-                                                'willRenewCount': willRenewCount,
-                                                'paidMonthlyCount': paidMonthlyCount,
-                                                'rateApplied': rateApplied,
-                                                'grossEstimate': grossEstimate,
-                                                'residualEstimate': residualEstimate,
-                                                'sellerCurrency': sellerCurrency,
-                                                'gbpToSellerCurrencyFx': fxRate,
-                                                'grossEstimateSellerCurrency': localGross,
-                                                'residualEstimateSellerCurrency': localResidual,
-                                              }
-                                            };
-                                            Clipboard.setData(
-                                              ClipboardData(
-                                                text: const JsonEncoder.withIndent('  ')
-                                                    .convert(report),
-                                              ),
-                                            );
-                                            _snack('Seller report JSON copied for export/print.');
-                                          },
-                                          icon: const Icon(Icons.copy),
-                                          label: const Text('Copy Report JSON'),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                      );
-                    },
-                  );
-                },
-              ),
-            ),
+  Widget _codes(CreatorPartnerData data, Map<String, dynamic> seller) {
+    final canCreate = !_busy && partnerStatus(seller) == 'active';
+    return _section('Referral codes', Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const Text('Copy or deactivate codes; replace with a new unique code for the same seller. '
+          'Codes and historical attribution are never deleted.'),
+      const SizedBox(height: 12),
+      if (data.codes.isEmpty) const Text('No referral codes for this seller.'),
+      for (final code in data.codes)
+        Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: Wrap(
+          spacing: 12, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+            SelectableText('${partnerText(code['code'])} • '
+                '${code['isActive'] == true && code['status'] == 'active' ? 'Active' : 'Inactive'}'),
+            OutlinedButton.icon(icon: const Icon(Icons.copy), label: const Text('Copy'), onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: partnerText(code['code'])));
+              _message('Code copied.');
+            }),
+            if (code['isActive'] == true)
+              TextButton(onPressed: _busy ? null : () => _deactivateCode(code), child: const Text('Deactivate')),
+            TextButton(onPressed: canCreate ? () => _createCode(seller, replaces: code) : null,
+                child: const Text('Replacement new code')),
           ],
-        ),
-      ),
+        )),
+    ]), action: FilledButton.icon(onPressed: canCreate ? () => _createCode(seller) : null,
+        icon: const Icon(Icons.add), label: const Text('Create code')));
+  }
+
+  List<String> _options(List<Map<String, dynamic>> rows, String field) =>
+      ['all', ...({...rows.map((row) => partnerText(row[field]))}..remove('')..remove('all')).toList()..sort()];
+
+  Widget _subscribers(CreatorPartnerData data) {
+    final rows = data.subscribers.where((user) => partnerSubscriberMatches(user,
+      search: _subscriberSearch, plan: _plan, status: _subscriptionStatus, autoRenew: _autoRenew,
+      date: _date(_dateField == 'expiry' ? _expiry(user) : _dateField == 'sync' ? _lastSync(user) : user['assignedSellerAt']),
+      start: _subscriberRange?.start, end: _subscriberRange?.end,
+    )).toList();
+    return _section('Selected-seller subscribers (${rows.length} / ${data.subscribers.length})',
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Snapshot status — NOT transaction proof. These are current user subscription '
+          'snapshots, not verified purchases or amounts due. Production webhook status is used when available; '
+          'otherwise the app snapshot is retained. Sandbox does not override production. '
+          'Only users assigned to this seller are queried.'),
+        const SizedBox(height: 16),
+        Wrap(spacing: 12, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          _search('Search username / account', _subscriberSearch, (value) => setState(() => _subscriberSearch = value)),
+          _dropdown('Plan', _plan, _options(data.subscribers, 'subscriptionPlan'), (value) => setState(() => _plan = value)),
+          _dropdown('Snapshot status', _subscriptionStatus, _options(data.subscribers, 'status'),
+              (value) => setState(() => _subscriptionStatus = value)),
+          _dropdown('Auto-renew', _autoRenew, const ['all', 'yes', 'no', 'unknown'], (value) => setState(() => _autoRenew = value)),
+          _dropdown('Date field', _dateField, const ['assignedSellerAt', 'expiry', 'sync'], (value) => setState(() => _dateField = value)),
+          _rangeControls(false),
+        ]),
+        const SizedBox(height: 16),
+        if (rows.isEmpty) const Text('No attributed subscribers match. Missing attribution is not inferred from a raw referral code.'),
+        if (rows.isNotEmpty) _table([
+          'Username', 'Account reference', 'Plan', 'Snapshot status', 'Will renew',
+          'Expiry date', 'Attribution date', 'Last subscription sync',
+        ], rows.map((user) => [
+          partnerUserName(user), partnerText(user['accountReference']).isEmpty ? partnerText(user['id'])
+              : '${partnerText(user['accountReference'])}\n${partnerText(user['id'])}',
+          partnerText(user['subscriptionPlan']), partnerText(user['status']),
+          user['willRenew'] == true ? 'Yes' : user['willRenew'] == false ? 'No' : 'Unknown',
+          _formatDate(_expiry(user)), _formatDate(user['assignedSellerAt']),
+          '${user['subscriptionSyncSource'] == 'webhook' ? 'Webhook' : 'App'} last sync: ${_formatDate(_lastSync(user))}',
+        ]).toList()),
+      ]),
     );
   }
 
-  Widget _chip(String label, String value) {
-    return Chip(
-      visualDensity: VisualDensity.compact,
-      label: Text('$label: $value'),
+  Widget _table(List<String> headings, List<List<String>> rows) => SizedBox(height: 340,
+    child: Scrollbar(child: SingleChildScrollView(primary: false,
+      child: SingleChildScrollView(scrollDirection: Axis.horizontal, primary: false,
+        child: DataTable(columns: headings.map((heading) => DataColumn(label: Text(heading))).toList(),
+          rows: rows.map((row) => DataRow(cells: row.map((value) => DataCell(
+              SelectableText(value.isEmpty ? 'Not available' : value))).toList())).toList()),
+      ),
+    )),
+  );
+
+  Widget _events(CreatorPartnerData data) {
+    final rows = data.events.where((event) {
+      final haystack = ['eventId', 'userId', 'transactionId', 'accountingReference', 'productId', 'plan']
+          .map((field) => partnerText(event[field])).join(' ').toLowerCase();
+      return (_environment == 'all' || partnerEnvironment(event) == _environment) &&
+          (_eventType == 'all' || partnerText(event['type']) == _eventType) &&
+          haystack.contains(_eventSearch.toLowerCase().trim()) &&
+          partnerDateInRange(_date(event['purchasedAt']), _eventRange?.start, _eventRange?.end);
+    }).toList()..sort((a, b) => (_date(b['receivedAt']) ?? DateTime(1970))
+        .compareTo(_date(a['receivedAt']) ?? DateTime(1970)));
+    return _section('Webhook payment history (${rows.length} / ${data.events.length})',
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Separate webhook event evidence. Cancellations, expirations, reversals and test '
+            'events are not payable purchases. No commission, FX or financial totals are calculated. '
+            'Settlement eligibility is rechecked by the authenticated backend.'),
+        const SizedBox(height: 16),
+        Wrap(spacing: 12, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          _dropdown('Environment', _environment, const ['production', 'test', 'unknown', 'all'],
+              (value) => setState(() => _environment = value)),
+          _dropdown('Event type', _eventType, _options(data.events, 'type'), (value) => setState(() => _eventType = value)),
+          _search('Search payment events', _eventSearch, (value) => setState(() => _eventSearch = value)),
+          _rangeControls(true),
+        ]),
+        const SizedBox(height: 16),
+        if (rows.isEmpty) const Text('No webhook events match. A user snapshot is not a substitute for webhook payment history.'),
+        if (rows.isNotEmpty) SizedBox(height: 440, child: ListView.builder(
+          itemCount: rows.length,
+          itemBuilder: (context, index) {
+            final event = rows[index];
+            final eligible = partnerSettlementEligible(event, data.events);
+            return Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Wrap(spacing: 12, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                  Text('${partnerText(event['type'])} • ${partnerEnvironment(event)}',
+                      style: Theme.of(context).textTheme.titleMedium),
+                  if (eligible) FilledButton.tonal(onPressed: _busy ? null : () => _recordSettlement(event),
+                      child: const Text('Record manual settlement')),
+                ]),
+                const SizedBox(height: 8),
+                SelectableText('Event: ${partnerText(event['eventId'])}\n'
+                    'User: ${partnerText(event['userId'])} • Seller: ${partnerText(event['sellerId'])}\n'
+                    'Product: ${partnerText(event['productId'])} • Plan: ${partnerText(event['plan'])}\n'
+                    'Store: ${partnerText(event['store'])} • Environment: ${partnerText(event['environment'])}\n'
+                    'Purchased: ${_formatDate(event['purchasedAt'])} • Expires: ${_formatDate(event['expiresAt'])}\n'
+                    'Received: ${_formatDate(event['receivedAt'])}\nTransaction: ${partnerText(event['transactionId'])}\n'
+                    '${event['amount'] == null ? '' : 'Reported amount (unmodified): ${partnerText(event['amount'])} ${partnerText(event['currency'])}\n'}'
+                    'Payout recorded: ${event['payoutRecorded'] == true ? 'Yes' : 'No'}\n'
+                    'Paid at: ${_formatDate(event['paidAt'])}\nAccounting reference: ${partnerText(event['accountingReference'])}'),
+                if (!eligible && event['payoutRecorded'] != true) const Padding(padding: EdgeInsets.only(top: 8),
+                  child: Text('Not eligible: requires an unreversed production purchase/renewal, '
+                      'event and transaction identity, purchase date and no prior settlement.')),
+              ],
+            )));
+          },
+        )),
+      ]),
     );
   }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<CreatorPartnerData>(future: _data,
+    builder: (context, snapshot) {
+      final loading = snapshot.connectionState != ConnectionState.done;
+      // Never show previous seller results during a new seller's load.
+      final data = loading || snapshot.hasError ? null : snapshot.data;
+      Map<String, dynamic>? seller;
+      if (data != null) {
+        for (final candidate in data.sellers) {
+          if (candidate['id'] == _sellerId) { seller = candidate; break; }
+        }
+      }
+      return Scrollbar(controller: _pageScroll, child: SingleChildScrollView(
+        controller: _pageScroll, padding: const EdgeInsets.all(24),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Wrap(spacing: 16, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
+            Text('Creator Partners', style: Theme.of(context).textTheme.headlineMedium),
+            OutlinedButton.icon(onPressed: _busy || loading ? null : _refresh,
+                icon: const Icon(Icons.refresh), label: const Text('Refresh Metrics Data')),
+          ]),
+          const SizedBox(height: 8),
+          const Text('Admin-only seller profiles, attribution snapshots and webhook payment evidence.'),
+          const SizedBox(height: 16),
+          if (_busy || loading) const LinearProgressIndicator(),
+          if (snapshot.hasError && !loading) _section('Data unavailable', Column(
+            crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Could not query creator-partner data: ${snapshot.error}'),
+              const Text('No missing data is presented as zero or as a confirmed payment.'),
+              TextButton(onPressed: _refresh, child: const Text('Retry')),
+            ],
+          )),
+          if (data != null) ...[
+            _section('RevenueCat webhook integration', Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Configured: ${data.integration['configured'] == true ? 'Yes' : 'No / not configured'}'),
+              Text('Last event received: ${_formatDate(data.integration['lastEventAt'])}'),
+              const Text('Configuration status is not proof of a specific payment. Refresh re-queries '
+                  'Firestore; it does not trigger billing or fabricate events.'),
+            ])),
+            _sellerCards(data),
+            if (seller == null) const Text('Select a seller card to view codes, subscribers and payment history.'),
+            if (seller != null) ...[_profile(seller), _codes(data, seller), _subscribers(data), _events(data)],
+          ],
+        ]),
+      ));
+    },
+  );
 }

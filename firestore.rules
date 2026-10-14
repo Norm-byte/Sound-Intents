@@ -377,7 +377,19 @@ service cloud.firestore {
     match /users/{userId} {
       // TEMPORARY: Allow public access because User App does not use Firebase Auth yet.
       // TODO: Implement Firebase Auth in User App and restrict this to owner only.
-      allow read, write: if true;
+      // Attribution is permanent and server-owned, including for admin clients.
+      // Preserve unrestricted legacy fields without a whitelist or billing changes.
+      allow read: if true;
+      allow create: if !request.resource.data.keys().hasAny([
+        'assignedSellerId', 'acceptedSellerCode', 'sellerAttributedAt'
+      ]);
+      allow update: if !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        'assignedSellerId', 'acceptedSellerCode', 'sellerAttributedAt'
+      ]);
+      // Prevent delete/recreate from erasing permanent attribution.
+      allow delete: if !resource.data.keys().hasAny([
+        'assignedSellerId', 'acceptedSellerCode', 'sellerAttributedAt'
+      ]);
 
       // My Harmony Vault images used by Common Room and Vault screen.
       match /vault_images/{imageId} {
@@ -566,6 +578,44 @@ service cloud.firestore {
       }
     }
     
+    // Seller administration remains active-admin only, never public write.
+    match /sellers/{sellerId} {
+      allow read, write: if isActiveAdmin();
+    }
+    match /seller_codes/{codeId} {
+      allow read, write: if isActiveAdmin();
+    }
+
+    // No overlapping recursive write grant: the fallback below is deny-only.
+    match /subscription_events/{eventId} {
+      allow read: if isActiveAdmin();
+      allow write: if false;
+    }
+    match /seller_subscription_events/{eventId} {
+      allow read: if isActiveAdmin();
+      allow write: if false;
+    }
+    match /seller_partner_settlements/{settlementId} {
+      allow read: if isActiveAdmin();
+      allow write: if false;
+    }
+    match /seller_integration_config/{configId} {
+      allow read: if isActiveAdmin();
+      allow write: if false;
+    }
+    match /partner_subscription_status/{statusId} {
+      allow read: if isActiveAdmin();
+      allow write: if false;
+    }
+    match /partner_subscription_risks/{riskId} {
+      allow read: if isActiveAdmin();
+      allow write: if false;
+    }
+    match /seller_subscription_transaction_reviews/{reviewId} {
+      allow read: if isActiveAdmin();
+      allow write: if false;
+    }
+
     // Default deny all other collections
     match /{document=**} {
       allow read, write: if false;
